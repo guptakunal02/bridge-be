@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { APP_FILTER } from '@nestjs/core';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { LoggerModule } from './common/logger/logger.module';
 import { validateEnv } from './config/env.validation';
+import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -12,9 +14,15 @@ import { PrismaModule } from './prisma/prisma.module';
       cache: true,
       validate: validateEnv,
     }),
+    LoggerModule,
     PrismaModule,
+    HealthModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    {
+      provide: APP_FILTER,
+      useClass: AllExceptionsFilter,
+    },
+  ],
 })
 export class AppModule {}

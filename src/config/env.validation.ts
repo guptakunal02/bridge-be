@@ -3,6 +3,7 @@ import {
   IsEnum,
   IsInt,
   IsString,
+  IsUrl,
   Max,
   Min,
   MinLength,
@@ -27,6 +28,9 @@ export class EnvVars {
   @IsString()
   @MinLength(1)
   DATABASE_URL!: string;
+
+  @IsUrl({ require_tld: false, require_protocol: true })
+  FRONTEND_ORIGIN!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {
