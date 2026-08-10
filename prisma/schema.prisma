@@ -33,8 +33,10 @@ model Agent {
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
-  refreshTokens     RefreshToken[]
-  sentInvitations   Invitation[]   @relation("InvitedBy")
+  refreshTokens       RefreshToken[]
+  sentInvitations     Invitation[]    @relation("InvitedBy")
+  channelAssignments  AgentChannel[]  @relation("ChannelMember")
+  assignedChannelsBy  AgentChannel[]  @relation("ChannelAssignedBy")
 
   @@index([role, deactivatedAt])
 }
@@ -69,4 +71,61 @@ model Invitation {
 
   @@index([email, acceptedAt, revokedAt])
   @@index([expiresAt])
+}
+
+enum ChannelType {
+  INSTAGRAM
+  WHATSAPP
+  EMAIL
+}
+
+enum ChannelStatus {
+  CONNECTED
+  DISCONNECTED
+}
+
+model Channel {
+  id                    String        @id @default(uuid()) @db.Uuid
+  type                  ChannelType
+  displayName           String
+  externalId            String?
+  credentialsEncrypted  String?
+  status                ChannelStatus @default(CONNECTED)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  contacts    Contact[]
+  assignments AgentChannel[]
+
+  @@unique([type, externalId])
+  @@index([type, status])
+}
+
+model Contact {
+  id         String   @id @default(uuid()) @db.Uuid
+  channel    Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId  String   @db.Uuid
+  externalId String
+  name       String?
+  avatarUrl  String?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([channelId, externalId])
+  @@index([channelId, updatedAt])
+}
+
+model AgentChannel {
+  agent            Agent    @relation("ChannelMember", fields: [agentId], references: [id], onDelete: Cascade)
+  agentId          String   @db.Uuid
+  channel          Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId        String   @db.Uuid
+  assignedBy       Agent    @relation("ChannelAssignedBy", fields: [assignedByAgentId], references: [id])
+  assignedByAgentId String  @db.Uuid
+  createdAt        DateTime @default(now())
+
+  @@id([agentId, channelId])
+  @@index([channelId])
+  @@index([agentId])
 }

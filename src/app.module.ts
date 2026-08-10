@@ -3,10 +3,12 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
 import { AgentsModule } from './agents/agents.module';
 import { AuthModule } from './auth/auth.module';
+import { ChannelsModule } from './channels/channels.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggerModule } from './common/logger/logger.module';
 import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
+import { ContactsModule } from './contacts/contacts.module';
 import { HealthModule } from './health/health.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -25,6 +27,8 @@ import { PrismaModule } from './prisma/prisma.module';
     AuthModule,
     AgentsModule,
     InvitationsModule,
+    ChannelsModule,
+    ContactsModule,
   ],
   providers: [
     {
