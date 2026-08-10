@@ -4,6 +4,7 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   ConversationStatus,
   Message,
@@ -21,7 +22,16 @@ import type {
 import { ChannelAdapterRegistry } from '../channels/adapters/channel-adapter.registry';
 import { ContactsService } from '../contacts/contacts.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  MessageCreatedEvent,
+  MessageUpdatedEvent,
+  REALTIME_EVENTS,
+} from '../realtime/events';
 import { ConversationsService } from './conversations.service';
+import {
+  CONVERSATION_INCLUDE,
+  toConversationResponse,
+} from './dto/conversation-response.dto';
 import type { ListMessagesDto } from './dto/list-messages.dto';
 import {
   MessageListResponse,
@@ -41,7 +51,28 @@ export class MessagesService {
     private readonly conversations: ConversationsService,
     private readonly adapters: ChannelAdapterRegistry,
     private readonly contacts: ContactsService,
+    private readonly events: EventEmitter2,
   ) {}
+
+  private emitCreated(conversationId: string, message: MessageResponse): void {
+    const payload: MessageCreatedEvent = { conversationId, message };
+    this.events.emit(REALTIME_EVENTS.MessageCreated, payload);
+  }
+
+  private emitUpdated(conversationId: string, message: MessageResponse): void {
+    const payload: MessageUpdatedEvent = { conversationId, message };
+    this.events.emit(REALTIME_EVENTS.MessageUpdated, payload);
+  }
+
+  private async emitConversationRefreshed(
+    conversationId: string,
+  ): Promise<void> {
+    const fresh = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: CONVERSATION_INCLUDE,
+    });
+    if (fresh) this.conversations.emitUpdated(toConversationResponse(fresh));
+  }
 
   async list(
     conversationId: string,
@@ -101,6 +132,7 @@ export class MessagesService {
         deliveryStatus: MessageDeliveryStatus.PENDING,
       },
     });
+    this.emitCreated(conversationId, toMessageResponse(message));
 
     const adapter = this.adapters.get(conv.channel.type);
     if (!adapter) {
@@ -141,12 +173,17 @@ export class MessagesService {
         }),
       ]);
 
-      return toMessageResponse(updated);
+      const response = toMessageResponse(updated);
+      this.emitUpdated(conversationId, response);
+      await this.emitConversationRefreshed(conversationId);
+      return response;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       this.logger.error({ err, conversationId }, 'Adapter sendMessage failed');
       const failed = await this.markFailed(message.id, reason);
-      return toMessageResponse(failed);
+      const response = toMessageResponse(failed);
+      this.emitUpdated(conversationId, response);
+      return response;
     }
   }
 
@@ -209,7 +246,10 @@ export class MessagesService {
           createdAt: event.occurredAt,
         },
       });
-      return toMessageResponse(created);
+      const response = toMessageResponse(created);
+      this.emitCreated(conversation.id, response);
+      await this.emitConversationRefreshed(conversation.id);
+      return response;
     } catch (err) {
       // Race: another worker inserted the same externalId first. Return existing.
       if (

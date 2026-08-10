@@ -13,14 +13,19 @@ import { AgentRole } from '@prisma/client';
 import { CurrentAgent } from '../auth/decorators/current-agent.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import { PresenceService } from '../presence/presence.service';
 import { AgentsService } from './agents.service';
 import { AgentResponse } from './dto/agent-response.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SetPresenceDto } from './dto/set-presence.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 
 @Controller('agents')
 export class AgentsController {
-  constructor(private readonly agents: AgentsService) {}
+  constructor(
+    private readonly agents: AgentsService,
+    private readonly presence: PresenceService,
+  ) {}
 
   @Get()
   @Roles(AgentRole.ADMIN)
@@ -35,6 +40,15 @@ export class AgentsController {
     @Body() dto: ChangePasswordDto,
   ): Promise<void> {
     await this.agents.changeMyPassword(actor.id, dto);
+  }
+
+  @Post('me/presence')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async setMyPresence(
+    @CurrentAgent() actor: AuthenticatedAgent,
+    @Body() dto: SetPresenceDto,
+  ): Promise<void> {
+    await this.presence.setStatus(actor.id, dto.status);
   }
 
   @Get(':id')

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AgentsModule } from './agents/agents.module';
 import { AuthModule } from './auth/auth.module';
 import { ChannelsModule } from './channels/channels.module';
@@ -12,7 +13,9 @@ import { ContactsModule } from './contacts/contacts.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { HealthModule } from './health/health.module';
 import { InvitationsModule } from './invitations/invitations.module';
+import { PresenceModule } from './presence/presence.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -23,7 +26,9 @@ import { PrismaModule } from './prisma/prisma.module';
     }),
     LoggerModule,
     ThrottlerModule,
+    EventEmitterModule.forRoot({ wildcard: false, maxListeners: 20 }),
     PrismaModule,
+    PresenceModule,
     HealthModule,
     AuthModule,
     AgentsModule,
@@ -31,6 +36,7 @@ import { PrismaModule } from './prisma/prisma.module';
     ChannelsModule,
     ContactsModule,
     ConversationsModule,
+    RealtimeModule,
   ],
   providers: [
     {

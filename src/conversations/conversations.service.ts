@@ -4,10 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AgentRole, ConversationStatus, Prisma } from '@prisma/client';
 import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
 import { ChannelsService } from '../channels/channels.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConversationUpdatedEvent, REALTIME_EVENTS } from '../realtime/events';
 import {
   CONVERSATION_INCLUDE,
   ConversationListResponse,
@@ -32,7 +34,13 @@ export class ConversationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly channels: ChannelsService,
+    private readonly events: EventEmitter2,
   ) {}
+
+  emitUpdated(conversation: ConversationResponse): void {
+    const payload: ConversationUpdatedEvent = { conversation };
+    this.events.emit(REALTIME_EVENTS.ConversationUpdated, payload);
+  }
 
   async list(
     actor: AuthenticatedAgent,
@@ -84,7 +92,9 @@ export class ConversationsService {
       data: { status },
       include: CONVERSATION_INCLUDE,
     });
-    return toConversationResponse(updated);
+    const response = toConversationResponse(updated);
+    this.emitUpdated(response);
+    return response;
   }
 
   async assign(
@@ -136,7 +146,9 @@ export class ConversationsService {
       data: { assignedAgentId: targetAgentId },
       include: CONVERSATION_INCLUDE,
     });
-    return toConversationResponse(updated);
+    const response = toConversationResponse(updated);
+    this.emitUpdated(response);
+    return response;
   }
 
   async markRead(
@@ -152,7 +164,9 @@ export class ConversationsService {
       data: { unreadCount: 0 },
       include: CONVERSATION_INCLUDE,
     });
-    return toConversationResponse(updated);
+    const response = toConversationResponse(updated);
+    this.emitUpdated(response);
+    return response;
   }
 
   /**
