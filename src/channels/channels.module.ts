@@ -9,6 +9,8 @@ import {
 import type { ChannelAdapter } from './adapters/channel-adapter.port';
 import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
+import { EmailAdapter } from './email/email.adapter';
+import { EmailCredentialsService } from './email/email-credentials.service';
 import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
 
 @Module({
@@ -17,22 +19,28 @@ import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
   providers: [
     ChannelsService,
     InstagramStubAdapter,
+    EmailAdapter,
+    EmailCredentialsService,
     {
       provide: CHANNEL_ADAPTERS,
       // In dev/test, register the Instagram stub so agent send + Phase-6 stub
       // webhook work end-to-end. In prod, register nothing here — the real
       // Meta adapter (Phase 7) will slot into this same array.
+      // Email adapter is real for all environments (no stub needed; SMTP is SMTP).
       useFactory: (
         config: ConfigService<EnvVars, true>,
         stub: InstagramStubAdapter,
+        email: EmailAdapter,
       ): ChannelAdapter[] => {
         const nodeEnv = config.get('NODE_ENV', { infer: true });
-        return nodeEnv === NodeEnv.Production ? [] : [stub];
+        const adapters: ChannelAdapter[] = [email];
+        if (nodeEnv !== NodeEnv.Production) adapters.push(stub);
+        return adapters;
       },
-      inject: [ConfigService, InstagramStubAdapter],
+      inject: [ConfigService, InstagramStubAdapter, EmailAdapter],
     },
     ChannelAdapterRegistry,
   ],
-  exports: [ChannelsService, ChannelAdapterRegistry],
+  exports: [ChannelsService, ChannelAdapterRegistry, EmailCredentialsService],
 })
 export class ChannelsModule {}

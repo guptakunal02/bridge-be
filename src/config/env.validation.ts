@@ -47,6 +47,11 @@ export class EnvVars {
   @IsString()
   @MinLength(1)
   JWT_REFRESH_TTL!: string;
+
+  // 32 bytes base64-encoded → ~44 chars. AES-256-GCM for at-rest channel creds.
+  @IsString()
+  @MinLength(40)
+  CHANNEL_ENCRYPTION_KEY!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

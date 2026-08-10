@@ -4,11 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AgentRole, Prisma } from '@prisma/client';
+import { AgentRole, ChannelType, Prisma } from '@prisma/client';
+import { ImapFlow } from 'imapflow';
+import nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
 import { ChannelAdapterRegistry } from './adapters/channel-adapter.registry';
+import { EmailCredentialsService } from './email/email-credentials.service';
 import type { CreateChannelDto } from './dto/create-channel.dto';
+import type { SetCredentialsDto } from './dto/set-credentials.dto';
 import type { UpdateChannelDto } from './dto/update-channel.dto';
 import {
   ChannelAssignmentResponse,
@@ -16,11 +20,17 @@ import {
   toChannelResponse,
 } from './dto/channel-response.dto';
 
+export interface CredentialsTestResult {
+  smtp: { ok: boolean; error?: string };
+  imap: { ok: boolean; error?: string };
+}
+
 @Injectable()
 export class ChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly adapters: ChannelAdapterRegistry,
+    private readonly emailCredentials: EmailCredentialsService,
   ) {}
 
   async list(actor: AuthenticatedAgent): Promise<ChannelResponse[]> {
@@ -205,5 +215,83 @@ export class ChannelsService {
     return this.prisma.agentChannel
       .findMany({ where: { agentId }, select: { channelId: true } })
       .then((rows) => rows.map((r) => r.channelId));
+  }
+
+  async setCredentials(
+    id: string,
+    dto: SetCredentialsDto,
+  ): Promise<ChannelResponse> {
+    const channel = await this.prisma.channel.findUnique({ where: { id } });
+    if (!channel) throw new NotFoundException('Channel not found');
+
+    if (channel.type === ChannelType.EMAIL) {
+      if (!dto.email) {
+        throw new BadRequestException(
+          'Email credentials required for EMAIL channel',
+        );
+      }
+      const envelope = this.emailCredentials.seal(dto.email);
+      const updated = await this.prisma.channel.update({
+        where: { id },
+        data: { credentialsEncrypted: envelope },
+      });
+      return toChannelResponse(updated);
+    }
+    throw new BadRequestException(
+      `Credentials management is not implemented for ${channel.type} channels`,
+    );
+  }
+
+  async testCredentials(id: string): Promise<CredentialsTestResult> {
+    const channel = await this.prisma.channel.findUnique({ where: { id } });
+    if (!channel) throw new NotFoundException('Channel not found');
+    if (channel.type !== ChannelType.EMAIL) {
+      throw new BadRequestException(
+        'Only EMAIL channels support credential testing',
+      );
+    }
+    if (!channel.credentialsEncrypted) {
+      throw new BadRequestException('No credentials saved on this channel yet');
+    }
+
+    const creds = this.emailCredentials.open(channel.credentialsEncrypted);
+    const result: CredentialsTestResult = {
+      smtp: { ok: false },
+      imap: { ok: false },
+    };
+
+    try {
+      const transporter = nodemailer.createTransport({
+        host: creds.smtp.host,
+        port: creds.smtp.port,
+        secure: creds.smtp.secure,
+        auth: { user: creds.smtp.username, pass: creds.smtp.password },
+        connectionTimeout: 8000,
+      });
+      await transporter.verify();
+      result.smtp.ok = true;
+    } catch (err) {
+      result.smtp.error = err instanceof Error ? err.message : String(err);
+    }
+
+    const imap = new ImapFlow({
+      host: creds.imap.host,
+      port: creds.imap.port,
+      secure: creds.imap.secure,
+      auth: { user: creds.imap.username, pass: creds.imap.password },
+      logger: false,
+    });
+    try {
+      await imap.connect();
+      const mailbox = await imap.mailboxOpen('INBOX');
+      await imap.mailboxClose();
+      result.imap.ok = Boolean(mailbox);
+    } catch (err) {
+      result.imap.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      await imap.logout().catch(() => undefined);
+    }
+
+    return result;
   }
 }

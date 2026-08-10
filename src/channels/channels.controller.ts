@@ -9,18 +9,20 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
 } from '@nestjs/common';
 import { AgentRole } from '@prisma/client';
 import { CurrentAgent } from '../auth/decorators/current-agent.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
-import { ChannelsService } from './channels.service';
+import { ChannelsService, CredentialsTestResult } from './channels.service';
 import { AssignAgentsDto } from './dto/assign-agents.dto';
 import {
   ChannelAssignmentResponse,
   ChannelResponse,
 } from './dto/channel-response.dto';
 import { CreateChannelDto } from './dto/create-channel.dto';
+import { SetCredentialsDto } from './dto/set-credentials.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
 
 @Controller('channels')
@@ -88,5 +90,23 @@ export class ChannelsController {
     @Param('agentId', ParseUUIDPipe) agentId: string,
   ): Promise<void> {
     await this.channels.unassignAgent(id, agentId);
+  }
+
+  @Put(':id/credentials')
+  @Roles(AgentRole.ADMIN)
+  setCredentials(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetCredentialsDto,
+  ): Promise<ChannelResponse> {
+    return this.channels.setCredentials(id, dto);
+  }
+
+  @Post(':id/credentials/test')
+  @Roles(AgentRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  testCredentials(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<CredentialsTestResult> {
+    return this.channels.testCredentials(id);
   }
 }
