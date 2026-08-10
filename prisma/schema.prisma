@@ -8,3 +8,65 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+enum AgentRole {
+  AGENT
+  ADMIN
+}
+
+enum AgentStatus {
+  ONLINE
+  AWAY
+  OFFLINE
+}
+
+model Agent {
+  id           String      @id @default(uuid()) @db.Uuid
+  email        String      @unique
+  passwordHash String
+  name         String
+  avatarUrl    String?
+  role         AgentRole   @default(AGENT)
+  status       AgentStatus @default(OFFLINE)
+  lastSeenAt   DateTime?
+  deactivatedAt DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  refreshTokens     RefreshToken[]
+  sentInvitations   Invitation[]   @relation("InvitedBy")
+
+  @@index([role, deactivatedAt])
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  agent        Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentId      String    @db.Uuid
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?   @db.Uuid
+  createdByIp  String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+
+  @@index([agentId, revokedAt])
+  @@index([expiresAt])
+}
+
+model Invitation {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String
+  role        AgentRole @default(AGENT)
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  invitedBy   Agent     @relation("InvitedBy", fields: [invitedById], references: [id])
+  invitedById String    @db.Uuid
+  createdAt   DateTime  @default(now())
+
+  @@index([email, acceptedAt, revokedAt])
+  @@index([expiresAt])
+}

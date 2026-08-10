@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
+import { AgentsModule } from './agents/agents.module';
+import { AuthModule } from './auth/auth.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggerModule } from './common/logger/logger.module';
+import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
 import { HealthModule } from './health/health.module';
+import { InvitationsModule } from './invitations/invitations.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -15,8 +19,12 @@ import { PrismaModule } from './prisma/prisma.module';
       validate: validateEnv,
     }),
     LoggerModule,
+    ThrottlerModule,
     PrismaModule,
     HealthModule,
+    AuthModule,
+    AgentsModule,
+    InvitationsModule,
   ],
   providers: [
     {

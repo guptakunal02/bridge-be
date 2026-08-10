@@ -31,6 +31,22 @@ export class EnvVars {
 
   @IsUrl({ require_tld: false, require_protocol: true })
   FRONTEND_ORIGIN!: string;
+
+  @IsString()
+  @MinLength(32)
+  JWT_ACCESS_SECRET!: string;
+
+  @IsString()
+  @MinLength(32)
+  JWT_REFRESH_SECRET!: string;
+
+  @IsString()
+  @MinLength(1)
+  JWT_ACCESS_TTL!: string;
+
+  @IsString()
+  @MinLength(1)
+  JWT_REFRESH_TTL!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {
