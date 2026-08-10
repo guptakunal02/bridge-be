@@ -2,7 +2,10 @@ import type { CookieOptions, Response } from 'express';
 import { NodeEnv } from '../config/env.validation';
 
 export const REFRESH_COOKIE_NAME = 'bridge_refresh';
-const REFRESH_COOKIE_PATH = '/auth';
+// Path='/' so the cookie flows whether the frontend calls the BE directly or
+// through a proxy at a different path (e.g., Next.js /api/* rewrites). Safety
+// is still enforced via HttpOnly + SameSite + Secure-in-prod.
+const REFRESH_COOKIE_PATH = '/';
 
 export function buildRefreshCookieOptions(
   nodeEnv: NodeEnv,
