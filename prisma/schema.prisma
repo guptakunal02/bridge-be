@@ -210,6 +210,9 @@ model Message {
   replyToMessageId  String?               @db.Uuid
   deliveryStatus    MessageDeliveryStatus @default(SENT)
   errorReason       String?
+  // Server-internal per-message extras (email subject, provider ids, etc.).
+  // Not exposed in MessageResponse; used only by adapters/services.
+  metadata          Json                  @default("{}")
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 

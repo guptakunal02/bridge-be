@@ -1,4 +1,4 @@
-import type { Channel, ChannelType, Contact } from '@prisma/client';
+import type { Channel, ChannelType, Contact, Prisma } from '@prisma/client';
 
 /**
  * Port interface every channel adapter must implement. Concrete adapters
@@ -54,6 +54,9 @@ export interface InboundMessageEvent {
   externalMessageId: string;
   occurredAt: Date;
   message: InboundMessageContent;
+  // Server-internal extras persisted on Message.metadata (e.g. email subject).
+  // Never surfaced via MessageResponse.
+  metadata?: Prisma.InputJsonValue;
 }
 
 export type InboundMessageContent =

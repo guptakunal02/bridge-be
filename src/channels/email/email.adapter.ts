@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChannelType, MessageDirection } from '@prisma/client';
+import { convert as htmlToText } from 'html-to-text';
 import type { ParsedMail } from 'mailparser';
 import nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -9,19 +10,31 @@ import type {
   SendMessageInput,
   SendMessageResult,
 } from '../adapters/channel-adapter.port';
+import { normalizeEmailAddress } from './email-address';
 import { EmailCredentialsService } from './email-credentials.service';
 
 const SUBJECT_FALLBACK = 'Support reply';
+const RE_PREFIX = /^\s*re\s*:/i;
+
+interface EmailMessageMetadata {
+  subject?: string;
+}
 
 /**
  * Real Email adapter. Talks SMTP (via nodemailer) for outbound and expects
- * mailparser ParsedMail objects for inbound (fed by EmailInboxManager in 8b).
+ * mailparser ParsedMail objects for inbound (fed by EmailInboxManager).
  *
- * Threading strategy (V1):
+ * Threading strategy:
  *   - Outbound sets In-Reply-To to the last INBOUND message's Message-ID
  *     (stored as Message.externalId).
- *   - Inbound events land in the conversation for the same contact address.
- *     Message.externalId = incoming Message-ID (so future outbound can thread).
+ *   - Outbound Subject reuses the original inbound Subject (from
+ *     Message.metadata.subject), preserving the user's own "Re:" if already
+ *     present. Falls back to a truncated preview of the body, then a generic
+ *     fallback.
+ *   - Inbound events use a normalised (trim + lowercase) From address as the
+ *     stable Contact identifier. Message.externalId = incoming Message-ID.
+ *   - HTML-only inbound is converted to plain text via html-to-text so agents
+ *     always have readable context.
  */
 @Injectable()
 export class EmailAdapter implements ChannelAdapter {
@@ -53,7 +66,7 @@ export class EmailAdapter implements ChannelAdapter {
         direction: MessageDirection.INBOUND,
       },
       orderBy: { createdAt: 'desc' },
-      select: { externalId: true, text: true },
+      select: { externalId: true, text: true, metadata: true },
     });
 
     const transporter = nodemailer.createTransport({
@@ -63,7 +76,7 @@ export class EmailAdapter implements ChannelAdapter {
       auth: { user: creds.smtp.username, pass: creds.smtp.password },
     });
 
-    const subject = this.deriveSubject(lastInbound?.text ?? null);
+    const subject = this.deriveSubject(lastInbound);
 
     const info = await transporter.sendMail({
       from: `"${input.channel.displayName}" <${creds.address}>`,
@@ -106,28 +119,67 @@ export class EmailAdapter implements ChannelAdapter {
     const channelId = (rawPayload as { __channelId?: unknown }).__channelId;
     if (typeof channelId !== 'string') return Promise.resolve([]);
 
-    const text =
-      (mail.text ?? '').trim() || (mail.html ? '(HTML message)' : '');
+    const text = this.extractText(mail);
     if (!text) return Promise.resolve([]);
+
+    const metadata: Record<string, string> = {};
+    if (mail.subject && mail.subject.trim().length > 0) {
+      metadata.subject = mail.subject.trim();
+    }
 
     return Promise.resolve([
       {
         kind: 'MESSAGE',
         channelId,
-        externalContactId: from.address.toLowerCase(),
+        externalContactId: normalizeEmailAddress(from.address),
         externalContactName: from.name?.trim() || undefined,
         externalMessageId: mail.messageId,
         occurredAt: mail.date ?? new Date(),
         message: { type: 'TEXT', text },
+        metadata,
       },
     ]);
   }
 
-  private deriveSubject(lastInboundText: string | null): string {
-    if (!lastInboundText) return SUBJECT_FALLBACK;
-    // Naive: strip newlines, trim, cap to 60 chars, prefix Re:
-    const cleaned = lastInboundText.replace(/\s+/g, ' ').trim().slice(0, 60);
-    return cleaned ? `Re: ${cleaned}` : SUBJECT_FALLBACK;
+  private extractText(mail: ParsedMail): string {
+    const plain = (mail.text ?? '').trim();
+    if (plain) return plain;
+    if (mail.html) {
+      const converted = htmlToText(mail.html, {
+        wordwrap: 100,
+        selectors: [
+          { selector: 'img', format: 'skip' },
+          { selector: 'a', options: { hideLinkHrefIfSameAsText: true } },
+        ],
+      }).trim();
+      if (converted) return converted;
+    }
+    return '';
+  }
+
+  private deriveSubject(
+    last: { text: string | null; metadata: unknown } | null,
+  ): string {
+    // Prefer the persisted Subject header from the customer's original message.
+    const meta = this.readMetadata(last?.metadata);
+    if (meta.subject) {
+      return RE_PREFIX.test(meta.subject)
+        ? meta.subject
+        : `Re: ${meta.subject}`;
+    }
+    // Fallback: truncated preview of the customer's message body.
+    if (last?.text) {
+      const cleaned = last.text.replace(/\s+/g, ' ').trim().slice(0, 60);
+      if (cleaned) return `Re: ${cleaned}`;
+    }
+    return SUBJECT_FALLBACK;
+  }
+
+  private readMetadata(raw: unknown): EmailMessageMetadata {
+    if (typeof raw !== 'object' || raw === null) return {};
+    const obj = raw as Record<string, unknown>;
+    const subject = obj.subject;
+    return { subject: typeof subject === 'string' ? subject : undefined };
   }
 
   private isParsedMail(value: unknown): value is ParsedMail {

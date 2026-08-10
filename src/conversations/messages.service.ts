@@ -244,6 +244,7 @@ export class MessagesService {
           mediaUrl: 'mediaUrl' in content ? content.mediaUrl : null,
           deliveryStatus: MessageDeliveryStatus.DELIVERED,
           createdAt: event.occurredAt,
+          metadata: event.metadata ?? {},
         },
       });
       const response = toMessageResponse(created);
