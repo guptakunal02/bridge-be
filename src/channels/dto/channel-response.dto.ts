@@ -6,6 +6,7 @@ export interface ChannelResponse {
   displayName: string;
   externalId: string | null;
   status: ChannelStatus;
+  hasCredentials: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -17,6 +18,7 @@ export function toChannelResponse(channel: Channel): ChannelResponse {
     displayName: channel.displayName,
     externalId: channel.externalId,
     status: channel.status,
+    hasCredentials: channel.credentialsEncrypted !== null,
     createdAt: channel.createdAt.toISOString(),
     updatedAt: channel.updatedAt.toISOString(),
   };
