@@ -37,6 +37,8 @@ model Agent {
   sentInvitations     Invitation[]    @relation("InvitedBy")
   channelAssignments  AgentChannel[]  @relation("ChannelMember")
   assignedChannelsBy  AgentChannel[]  @relation("ChannelAssignedBy")
+  assignedConversations Conversation[] @relation("ConversationAssignee")
+  sentMessages        Message[]       @relation("MessageAuthor")
 
   @@index([role, deactivatedAt])
 }
@@ -94,8 +96,9 @@ model Channel {
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
-  contacts    Contact[]
-  assignments AgentChannel[]
+  contacts      Contact[]
+  assignments   AgentChannel[]
+  conversations Conversation[]
 
   @@unique([type, externalId])
   @@index([type, status])
@@ -111,6 +114,8 @@ model Contact {
   metadata   Json     @default("{}")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  conversations Conversation[]
 
   @@unique([channelId, externalId])
   @@index([channelId, updatedAt])
@@ -128,4 +133,86 @@ model AgentChannel {
   @@id([agentId, channelId])
   @@index([channelId])
   @@index([agentId])
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  SNOOZED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageAuthorType {
+  CUSTOMER
+  AGENT
+  SYSTEM
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  FILE
+  STORY_REPLY
+  REACTION
+}
+
+enum MessageDeliveryStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model Conversation {
+  id                    String             @id @default(uuid()) @db.Uuid
+  channel               Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId             String             @db.Uuid
+  contact               Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId             String             @db.Uuid
+  status                ConversationStatus @default(OPEN)
+  assignedAgent         Agent?             @relation("ConversationAssignee", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  assignedAgentId       String?            @db.Uuid
+  lastMessageAt         DateTime           @default(now())
+  lastCustomerMessageAt DateTime?
+  unreadCount           Int                @default(0)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  messages Message[]
+
+  @@unique([channelId, contactId])
+  @@index([status, lastMessageAt])
+  @@index([assignedAgentId, status, lastMessageAt])
+  @@index([channelId, lastMessageAt])
+}
+
+model Message {
+  id                String                @id @default(uuid()) @db.Uuid
+  conversation      Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId    String                @db.Uuid
+  direction         MessageDirection
+  authorType        MessageAuthorType
+  authorAgent       Agent?                @relation("MessageAuthor", fields: [authorAgentId], references: [id], onDelete: SetNull)
+  authorAgentId     String?               @db.Uuid
+  externalId        String?               @unique
+  type              MessageType           @default(TEXT)
+  text              String?
+  mediaUrl          String?
+  mediaMimeType     String?
+  replyToMessageId  String?               @db.Uuid
+  deliveryStatus    MessageDeliveryStatus @default(SENT)
+  errorReason       String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([conversationId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([conversationId, direction, createdAt])
 }

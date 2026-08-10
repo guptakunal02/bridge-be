@@ -9,6 +9,7 @@ import { LoggerModule } from './common/logger/logger.module';
 import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
 import { ContactsModule } from './contacts/contacts.module';
+import { ConversationsModule } from './conversations/conversations.module';
 import { HealthModule } from './health/health.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -29,6 +30,7 @@ import { PrismaModule } from './prisma/prisma.module';
     InvitationsModule,
     ChannelsModule,
     ContactsModule,
+    ConversationsModule,
   ],
   providers: [
     {
