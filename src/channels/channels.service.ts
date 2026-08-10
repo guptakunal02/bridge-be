@@ -4,12 +4,18 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AgentRole, ChannelType, Prisma } from '@prisma/client';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
 import { ChannelAdapterRegistry } from './adapters/channel-adapter.registry';
+import {
+  CHANNEL_EVENTS,
+  ChannelDeletedEvent,
+  ChannelSavedEvent,
+} from './channel-events';
 import { EmailCredentialsService } from './email/email-credentials.service';
 import type { CreateChannelDto } from './dto/create-channel.dto';
 import type { SetCredentialsDto } from './dto/set-credentials.dto';
@@ -31,7 +37,18 @@ export class ChannelsService {
     private readonly prisma: PrismaService,
     private readonly adapters: ChannelAdapterRegistry,
     private readonly emailCredentials: EmailCredentialsService,
+    private readonly events: EventEmitter2,
   ) {}
+
+  private emitSaved(channelId: string): void {
+    const payload: ChannelSavedEvent = { channelId };
+    this.events.emit(CHANNEL_EVENTS.Saved, payload);
+  }
+
+  private emitDeleted(channelId: string): void {
+    const payload: ChannelDeletedEvent = { channelId };
+    this.events.emit(CHANNEL_EVENTS.Deleted, payload);
+  }
 
   async list(actor: AuthenticatedAgent): Promise<ChannelResponse[]> {
     const where =
@@ -81,6 +98,7 @@ export class ChannelsService {
           externalId: dto.externalId ?? null,
         },
       });
+      this.emitSaved(created.id);
       return toChannelResponse(created);
     } catch (err) {
       if (
@@ -110,6 +128,7 @@ export class ChannelsService {
           status: dto.status,
         },
       });
+      this.emitSaved(updated.id);
       return toChannelResponse(updated);
     } catch (err) {
       if (
@@ -125,6 +144,7 @@ export class ChannelsService {
   async remove(id: string): Promise<void> {
     try {
       await this.prisma.channel.delete({ where: { id } });
+      this.emitDeleted(id);
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
@@ -235,6 +255,7 @@ export class ChannelsService {
         where: { id },
         data: { credentialsEncrypted: envelope },
       });
+      this.emitSaved(updated.id);
       return toChannelResponse(updated);
     }
     throw new BadRequestException(

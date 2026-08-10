@@ -41,6 +41,11 @@ import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
     },
     ChannelAdapterRegistry,
   ],
-  exports: [ChannelsService, ChannelAdapterRegistry, EmailCredentialsService],
+  exports: [
+    ChannelsService,
+    ChannelAdapterRegistry,
+    EmailCredentialsService,
+    EmailAdapter,
+  ],
 })
 export class ChannelsModule {}

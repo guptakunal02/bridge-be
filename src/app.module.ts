@@ -12,6 +12,7 @@ import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
 import { ContactsModule } from './contacts/contacts.module';
 import { ConversationsModule } from './conversations/conversations.module';
+import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { PresenceModule } from './presence/presence.module';
@@ -41,6 +42,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     AssignmentModule,
     RealtimeModule,
     WebhooksModule,
+    EmailInboxModule,
   ],
   providers: [
     {
