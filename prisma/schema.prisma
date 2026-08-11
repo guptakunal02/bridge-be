@@ -69,6 +69,9 @@ model Invitation {
   revokedAt   DateTime?
   invitedBy   Agent     @relation("InvitedBy", fields: [invitedById], references: [id])
   invitedById String    @db.Uuid
+  // Channels the invitee will be added to on accept. Stale ids (deleted
+  // channels) are silently skipped at accept time.
+  channelIds  String[]  @default([]) @db.Uuid
   createdAt   DateTime  @default(now())
 
   @@index([email, acceptedAt, revokedAt])

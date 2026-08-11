@@ -12,6 +12,7 @@ import {
   IssuedSession,
   RequestContext,
 } from '../auth/auth.service';
+import { SystemMailer } from '../channels/email/system-mailer.service';
 import { generateOpaqueToken, hashToken } from '../common/crypto/tokens';
 import type { EnvVars } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +31,7 @@ export class InvitationsService {
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
     private readonly config: ConfigService<EnvVars, true>,
+    private readonly mailer: SystemMailer,
   ) {}
 
   async create(
@@ -51,6 +53,21 @@ export class InvitationsService {
       data: { revokedAt: new Date() },
     });
 
+    // Validate channel ids up front so admin gets an immediate error rather
+    // than a surprise-empty membership on accept.
+    const channelIds = dto.channelIds ?? [];
+    if (channelIds.length > 0) {
+      const existing = await this.prisma.channel.findMany({
+        where: { id: { in: channelIds } },
+        select: { id: true },
+      });
+      if (existing.length !== channelIds.length) {
+        throw new BadRequestException(
+          'One or more channelIds refer to channels that no longer exist',
+        );
+      }
+    }
+
     const rawToken = generateOpaqueToken();
     const invitation = await this.prisma.invitation.create({
       data: {
@@ -59,12 +76,33 @@ export class InvitationsService {
         tokenHash: hashToken(rawToken),
         expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
         invitedById,
+        channelIds,
       },
     });
 
+    const acceptUrl = this.buildAcceptUrl(rawToken);
+
+    // Best-effort: send the invitation via the system mailer (first CONNECTED
+    // EMAIL channel). Response always includes acceptUrl so admin can copy
+    // it manually as a fallback.
+    const invitedBy = await this.prisma.agent.findUnique({
+      where: { id: invitedById },
+      select: { name: true, email: true },
+    });
+    let emailSent = false;
+    if (invitedBy) {
+      const result = await this.mailer.sendInvite({
+        to: email,
+        acceptUrl,
+        invitedBy,
+      });
+      emailSent = result.ok;
+    }
+
     return {
       ...toInvitationResponse(invitation),
-      acceptUrl: this.buildAcceptUrl(rawToken),
+      acceptUrl,
+      emailSent,
     };
   }
 
@@ -123,6 +161,24 @@ export class InvitationsService {
           role: invitation.role,
         },
       });
+
+      // Grant AgentChannel membership for whichever channels still exist.
+      if (invitation.channelIds.length > 0) {
+        const stillExisting = await tx.channel.findMany({
+          where: { id: { in: invitation.channelIds } },
+          select: { id: true },
+        });
+        if (stillExisting.length > 0) {
+          await tx.agentChannel.createMany({
+            data: stillExisting.map((c) => ({
+              agentId: agent.id,
+              channelId: c.id,
+              assignedByAgentId: invitation.invitedById,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
 
       await tx.invitation.update({
         where: { id: invitation.id },

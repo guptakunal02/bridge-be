@@ -11,6 +11,7 @@ import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
 import { EmailAdapter } from './email/email.adapter';
 import { EmailCredentialsService } from './email/email-credentials.service';
+import { SystemMailer } from './email/system-mailer.service';
 import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
 
 @Module({
@@ -21,6 +22,7 @@ import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
     InstagramStubAdapter,
     EmailAdapter,
     EmailCredentialsService,
+    SystemMailer,
     {
       provide: CHANNEL_ADAPTERS,
       // In dev/test, register the Instagram stub so agent send + Phase-6 stub
@@ -46,6 +48,7 @@ import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
     ChannelAdapterRegistry,
     EmailCredentialsService,
     EmailAdapter,
+    SystemMailer,
   ],
 })
 export class ChannelsModule {}

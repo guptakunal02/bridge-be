@@ -1,5 +1,13 @@
 import { AgentRole } from '@prisma/client';
-import { IsEmail, IsEnum, IsOptional, MaxLength } from 'class-validator';
+import {
+  ArrayUnique,
+  IsArray,
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateInvitationDto {
   @IsEmail()
@@ -9,4 +17,10 @@ export class CreateInvitationDto {
   @IsOptional()
   @IsEnum(AgentRole)
   role?: AgentRole;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  channelIds?: string[];
 }
