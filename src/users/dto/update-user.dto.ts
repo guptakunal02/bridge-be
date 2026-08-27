@@ -1,4 +1,4 @@
-import { AgentRole } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import {
   IsEnum,
   IsOptional,
@@ -8,7 +8,7 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class UpdateAgentDto {
+export class UpdateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
@@ -18,10 +18,10 @@ export class UpdateAgentDto {
   @IsOptional()
   @IsUrl({ require_tld: false, require_protocol: true })
   @MaxLength(500)
-  avatarUrl?: string;
+  photoUrl?: string;
 
   // Admin-only field; enforced in the service, not by the DTO.
   @IsOptional()
-  @IsEnum(AgentRole)
-  role?: AgentRole;
+  @IsEnum(UserRole)
+  role?: UserRole;
 }

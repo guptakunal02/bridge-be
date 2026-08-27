@@ -8,8 +8,8 @@ export class UpdateConversationDto {
 }
 
 export class AssignConversationDto {
-  // null unassigns; string agentId assigns to that agent (admin can pick anyone
-  // on the channel; agents can only self-assign).
+  // null unassigns; string userId assigns to that user (admin can pick anyone
+  // on the channel; users can only self-assign).
   @IsOptional()
-  agentId?: string | null;
+  userId?: string | null;
 }

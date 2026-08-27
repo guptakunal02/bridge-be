@@ -1,7 +1,6 @@
 import 'dotenv/config';
-import { AgentRole, PrismaClient } from '@prisma/client';
+import { PrismaClient, UserRole } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import argon2 from 'argon2';
 
 function requireEnv(key: string): string {
   const value = process.env[key];
@@ -16,7 +15,7 @@ function requireEnv(key: string): string {
 async function main(): Promise<void> {
   const databaseUrl = requireEnv('DATABASE_URL');
   const email = requireEnv('SEED_ADMIN_EMAIL').toLowerCase();
-  const password = requireEnv('SEED_ADMIN_PASSWORD');
+  const googleSub = requireEnv('SEED_ADMIN_GOOGLE_SUB');
   const name = process.env.SEED_ADMIN_NAME ?? 'Admin';
 
   const prisma = new PrismaClient({
@@ -24,19 +23,19 @@ async function main(): Promise<void> {
   });
 
   try {
-    const existing = await prisma.agent.findUnique({ where: { email } });
+    const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
-      console.log(`[seed] Admin already exists (${email}); leaving password untouched.`);
+      console.log(`[seed] Admin already exists (${email}); leaving untouched.`);
       return;
     }
 
-    const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
-    const admin = await prisma.agent.create({
+    const admin = await prisma.user.create({
       data: {
         email,
+        googleSub,
         name,
-        passwordHash,
-        role: AgentRole.ADMIN,
+        role: UserRole.ADMIN,
+        isApproved: true,
       },
     });
     console.log(`[seed] Created admin ${admin.email} (id=${admin.id})`);

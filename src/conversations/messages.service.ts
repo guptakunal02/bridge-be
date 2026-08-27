@@ -14,7 +14,7 @@ import {
   MessageType,
   Prisma,
 } from '@prisma/client';
-import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import type {
   InboundMessageEvent,
   OutboundPayload,
@@ -76,7 +76,7 @@ export class MessagesService {
 
   async list(
     conversationId: string,
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
     query: ListMessagesDto,
   ): Promise<MessageListResponse> {
     await this.conversations.loadWithAccess(conversationId, actor);
@@ -104,7 +104,7 @@ export class MessagesService {
 
   async send(
     conversationId: string,
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
     dto: SendMessageDto,
   ): Promise<MessageResponse> {
     const conv = await this.conversations.loadWithAccess(conversationId, actor);
@@ -125,7 +125,7 @@ export class MessagesService {
         conversationId,
         direction: MessageDirection.OUTBOUND,
         authorType: MessageAuthorType.AGENT,
-        authorAgentId: actor.id,
+        authorUserId: actor.id,
         type: this.messageTypeFor(payload),
         text: payload.kind === 'TEXT' ? payload.text : null,
         mediaUrl: payload.kind !== 'TEXT' ? payload.mediaUrl : null,

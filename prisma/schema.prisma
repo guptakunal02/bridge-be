@@ -9,44 +9,50 @@ datasource db {
   provider = "postgresql"
 }
 
-enum AgentRole {
-  AGENT
+enum UserRole {
+  MEMBER
   ADMIN
 }
 
-enum AgentStatus {
+enum UserStatus {
   ONLINE
   AWAY
   OFFLINE
 }
 
-model Agent {
-  id           String      @id @default(uuid()) @db.Uuid
-  email        String      @unique
-  passwordHash String
-  name         String
-  avatarUrl    String?
-  role         AgentRole   @default(AGENT)
-  status       AgentStatus @default(OFFLINE)
-  lastSeenAt   DateTime?
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  // Stable Google-issued user id (`sub` in the ID token). Preferred key
+  // for lookup / linking; email can change but `sub` never does.
+  googleSub     String     @unique
+  email         String     @unique
+  name          String
+  phone         String?
+  photoUrl      String?
+  role          UserRole   @default(MEMBER)
+  status        UserStatus @default(OFFLINE)
+  // Every user is created unapproved on first Google sign-in. An admin
+  // must flip this to true (via DB or a future admin console) before the
+  // account can access anything past /access-restricted.
+  isApproved    Boolean    @default(false)
+  lastSeenAt    DateTime?
   deactivatedAt DateTime?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  refreshTokens       RefreshToken[]
-  sentInvitations     Invitation[]    @relation("InvitedBy")
-  channelAssignments  AgentChannel[]  @relation("ChannelMember")
-  assignedChannelsBy  AgentChannel[]  @relation("ChannelAssignedBy")
+  refreshTokens         RefreshToken[]
+  channelAssignments    UserChannel[]  @relation("ChannelMember")
+  assignedChannelsBy    UserChannel[]  @relation("ChannelAssignedBy")
   assignedConversations Conversation[] @relation("ConversationAssignee")
-  sentMessages        Message[]       @relation("MessageAuthor")
+  sentMessages          Message[]      @relation("MessageAuthor")
 
-  @@index([role, deactivatedAt])
+  @@index([role, isApproved, deactivatedAt])
 }
 
 model RefreshToken {
   id           String    @id @default(uuid()) @db.Uuid
-  agent        Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  agentId      String    @db.Uuid
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String    @db.Uuid
   tokenHash    String    @unique
   expiresAt    DateTime
   revokedAt    DateTime?
@@ -55,26 +61,7 @@ model RefreshToken {
   userAgent    String?
   createdAt    DateTime  @default(now())
 
-  @@index([agentId, revokedAt])
-  @@index([expiresAt])
-}
-
-model Invitation {
-  id          String    @id @default(uuid()) @db.Uuid
-  email       String
-  role        AgentRole @default(AGENT)
-  tokenHash   String    @unique
-  expiresAt   DateTime
-  acceptedAt  DateTime?
-  revokedAt   DateTime?
-  invitedBy   Agent     @relation("InvitedBy", fields: [invitedById], references: [id])
-  invitedById String    @db.Uuid
-  // Channels the invitee will be added to on accept. Stale ids (deleted
-  // channels) are silently skipped at accept time.
-  channelIds  String[]  @default([]) @db.Uuid
-  createdAt   DateTime  @default(now())
-
-  @@index([email, acceptedAt, revokedAt])
+  @@index([userId, revokedAt])
   @@index([expiresAt])
 }
 
@@ -100,7 +87,7 @@ model Channel {
   updatedAt             DateTime      @updatedAt
 
   contacts      Contact[]
-  assignments   AgentChannel[]
+  assignments   UserChannel[]
   conversations Conversation[]
 
   @@unique([type, externalId])
@@ -124,18 +111,18 @@ model Contact {
   @@index([channelId, updatedAt])
 }
 
-model AgentChannel {
-  agent            Agent    @relation("ChannelMember", fields: [agentId], references: [id], onDelete: Cascade)
-  agentId          String   @db.Uuid
+model UserChannel {
+  user             User     @relation("ChannelMember", fields: [userId], references: [id], onDelete: Cascade)
+  userId           String   @db.Uuid
   channel          Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
   channelId        String   @db.Uuid
-  assignedBy       Agent    @relation("ChannelAssignedBy", fields: [assignedByAgentId], references: [id])
-  assignedByAgentId String  @db.Uuid
+  assignedBy       User     @relation("ChannelAssignedBy", fields: [assignedByUserId], references: [id])
+  assignedByUserId String   @db.Uuid
   createdAt        DateTime @default(now())
 
-  @@id([agentId, channelId])
+  @@id([userId, channelId])
   @@index([channelId])
-  @@index([agentId])
+  @@index([userId])
 }
 
 enum ConversationStatus {
@@ -181,8 +168,8 @@ model Conversation {
   contact               Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
   contactId             String             @db.Uuid
   status                ConversationStatus @default(OPEN)
-  assignedAgent         Agent?             @relation("ConversationAssignee", fields: [assignedAgentId], references: [id], onDelete: SetNull)
-  assignedAgentId       String?            @db.Uuid
+  assignedUser          User?              @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedUserId        String?            @db.Uuid
   lastMessageAt         DateTime           @default(now())
   lastCustomerMessageAt DateTime?
   unreadCount           Int                @default(0)
@@ -193,7 +180,7 @@ model Conversation {
 
   @@unique([channelId, contactId])
   @@index([status, lastMessageAt])
-  @@index([assignedAgentId, status, lastMessageAt])
+  @@index([assignedUserId, status, lastMessageAt])
   @@index([channelId, lastMessageAt])
 }
 
@@ -203,8 +190,8 @@ model Message {
   conversationId    String                @db.Uuid
   direction         MessageDirection
   authorType        MessageAuthorType
-  authorAgent       Agent?                @relation("MessageAuthor", fields: [authorAgentId], references: [id], onDelete: SetNull)
-  authorAgentId     String?               @db.Uuid
+  authorUser        User?                 @relation("MessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  authorUserId      String?               @db.Uuid
   externalId        String?               @unique
   type              MessageType           @default(TEXT)
   text              String?

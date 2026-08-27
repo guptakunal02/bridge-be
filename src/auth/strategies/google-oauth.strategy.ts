@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
-import type { Agent } from '@prisma/client';
+import type { User } from '@prisma/client';
 import {
   Profile,
   Strategy,
@@ -16,8 +16,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 // GOOGLE_OAUTH_CALLBACK_URL with a `code` param, Passport exchanges it
 // server-to-server for tokens and the verified user profile.
 //
-// Invite-only: unknown / deactivated emails resolve to `false`, which the
-// GoogleOAuthCallbackGuard translates into a redirect to /access-restricted.
+// First-time sign-ins auto-create a User row with `isApproved = false`
+// (a Bridge admin flips the flag before the account gets past
+// /access-restricted). Deactivated users fail auth entirely.
 @Injectable()
 export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
   constructor(
@@ -39,23 +40,57 @@ export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
     profile: Profile,
     done: VerifyCallback,
   ): Promise<void> {
-    const primary = profile.emails?.[0];
-    const email = primary?.value?.toLowerCase();
-
-    // `verified` is undefined on some providers; treat that as trusted since
-    // Google only ever hands us its own users. Explicit `false` still blocks.
-    const verified = primary?.verified !== false;
-    if (!email || !verified) {
+    const claim = extractProfile(profile);
+    if (!claim) {
       done(null, false);
       return;
     }
 
-    const agent = await this.prisma.agent.findUnique({ where: { email } });
-    if (!agent || agent.deactivatedAt !== null) {
+    const user = await this.prisma.user.upsert({
+      where: { googleSub: claim.googleSub },
+      create: {
+        googleSub: claim.googleSub,
+        email: claim.email,
+        name: claim.name,
+        photoUrl: claim.photoUrl,
+      },
+      // Only refresh mutable fields Google is authoritative for. Email
+      // stays pinned to whatever we captured first — changing it here
+      // could collide with the unique index.
+      update: {
+        name: claim.name,
+        photoUrl: claim.photoUrl,
+      },
+    });
+
+    if (user.deactivatedAt !== null) {
       done(null, false);
       return;
     }
 
-    done(null, agent as unknown as Express.User);
+    done(null, user as unknown as Express.User);
   }
+}
+
+interface GoogleClaim {
+  googleSub: string;
+  email: string;
+  name: string;
+  photoUrl: string | null;
+}
+
+// Google always includes an id (`sub`) and — with the `email` scope — a
+// verified primary email. Missing either means the token was malformed;
+// treat as auth failure.
+function extractProfile(profile: Profile): GoogleClaim | null {
+  const primary = profile.emails?.[0];
+  const email = primary?.value?.toLowerCase();
+  const verified = primary?.verified !== false;
+  if (!profile.id || !email || !verified) return null;
+  return {
+    googleSub: profile.id,
+    email,
+    name: profile.displayName || email,
+    photoUrl: profile.photos?.[0]?.value ?? null,
+  };
 }

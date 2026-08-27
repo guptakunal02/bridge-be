@@ -5,11 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { AgentRole, ChannelType, Prisma } from '@prisma/client';
+import { ChannelType, Prisma, UserRole } from '@prisma/client';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service';
-import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ChannelAdapterRegistry } from './adapters/channel-adapter.registry';
 import {
   CHANNEL_EVENTS,
@@ -50,11 +50,11 @@ export class ChannelsService {
     this.events.emit(CHANNEL_EVENTS.Deleted, payload);
   }
 
-  async list(actor: AuthenticatedAgent): Promise<ChannelResponse[]> {
+  async list(actor: AuthenticatedUser): Promise<ChannelResponse[]> {
     const where =
-      actor.role === AgentRole.ADMIN
+      actor.role === UserRole.ADMIN
         ? {}
-        : { assignments: { some: { agentId: actor.id } } };
+        : { assignments: { some: { userId: actor.id } } };
 
     const rows = await this.prisma.channel.findMany({
       where,
@@ -63,24 +63,24 @@ export class ChannelsService {
     return rows.map(toChannelResponse);
   }
 
-  async get(id: string, actor: AuthenticatedAgent): Promise<ChannelResponse> {
+  async get(id: string, actor: AuthenticatedUser): Promise<ChannelResponse> {
     const channel = await this.prisma.channel.findUnique({
       where: { id },
       include:
-        actor.role === AgentRole.ADMIN
+        actor.role === UserRole.ADMIN
           ? undefined
           : {
               assignments: {
-                where: { agentId: actor.id },
-                select: { agentId: true },
+                where: { userId: actor.id },
+                select: { userId: true },
               },
             },
     });
     if (!channel) throw new NotFoundException('Channel not found');
 
-    if (actor.role !== AgentRole.ADMIN) {
+    if (actor.role !== UserRole.ADMIN) {
       const withAssignments = channel as typeof channel & {
-        assignments: { agentId: string }[];
+        assignments: { userId: string }[];
       };
       if (withAssignments.assignments.length === 0) {
         throw new NotFoundException('Channel not found');
@@ -163,22 +163,22 @@ export class ChannelsService {
     });
     if (!channel) throw new NotFoundException('Channel not found');
 
-    const rows = await this.prisma.agentChannel.findMany({
+    const rows = await this.prisma.userChannel.findMany({
       where: { channelId: id },
       orderBy: { createdAt: 'asc' },
     });
     return rows.map((r) => ({
-      agentId: r.agentId,
+      userId: r.userId,
       channelId: r.channelId,
-      assignedByAgentId: r.assignedByAgentId,
+      assignedByUserId: r.assignedByUserId,
       createdAt: r.createdAt.toISOString(),
     }));
   }
 
-  async assignAgents(
+  async assignUsers(
     channelId: string,
-    agentIds: string[],
-    assignedBy: AuthenticatedAgent,
+    userIds: string[],
+    assignedBy: AuthenticatedUser,
   ): Promise<ChannelAssignmentResponse[]> {
     const channel = await this.prisma.channel.findUnique({
       where: { id: channelId },
@@ -186,26 +186,26 @@ export class ChannelsService {
     });
     if (!channel) throw new NotFoundException('Channel not found');
 
-    const agents = await this.prisma.agent.findMany({
-      where: { id: { in: agentIds } },
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: userIds } },
       select: { id: true, deactivatedAt: true },
     });
-    if (agents.length !== agentIds.length) {
-      throw new BadRequestException('One or more agents not found');
+    if (users.length !== userIds.length) {
+      throw new BadRequestException('One or more users not found');
     }
-    const inactive = agents.filter((a) => a.deactivatedAt !== null);
+    const inactive = users.filter((u) => u.deactivatedAt !== null);
     if (inactive.length > 0) {
       throw new BadRequestException(
-        `Cannot assign deactivated agents: ${inactive.map((a) => a.id).join(', ')}`,
+        `Cannot assign deactivated users: ${inactive.map((u) => u.id).join(', ')}`,
       );
     }
 
     await this.prisma.$transaction(
-      agentIds.map((agentId) =>
-        this.prisma.agentChannel.upsert({
-          where: { agentId_channelId: { agentId, channelId } },
+      userIds.map((userId) =>
+        this.prisma.userChannel.upsert({
+          where: { userId_channelId: { userId, channelId } },
           update: {},
-          create: { agentId, channelId, assignedByAgentId: assignedBy.id },
+          create: { userId, channelId, assignedByUserId: assignedBy.id },
         }),
       ),
     );
@@ -213,17 +213,17 @@ export class ChannelsService {
     return this.listAssignments(channelId);
   }
 
-  async unassignAgent(channelId: string, agentId: string): Promise<void> {
+  async unassignUser(channelId: string, userId: string): Promise<void> {
     try {
-      await this.prisma.agentChannel.delete({
-        where: { agentId_channelId: { agentId, channelId } },
+      await this.prisma.userChannel.delete({
+        where: { userId_channelId: { userId, channelId } },
       });
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2025'
       ) {
-        throw new NotFoundException('Agent is not assigned to this channel');
+        throw new NotFoundException('User is not assigned to this channel');
       }
       throw err;
     }
@@ -231,9 +231,9 @@ export class ChannelsService {
 
   // Used internally by other modules (Phase 5 assignment engine, Phase 3
   // conversation scoping). Not exposed over HTTP.
-  getChannelIdsForAgent(agentId: string): Promise<string[]> {
-    return this.prisma.agentChannel
-      .findMany({ where: { agentId }, select: { channelId: true } })
+  getChannelIdsForUser(userId: string): Promise<string[]> {
+    return this.prisma.userChannel
+      .findMany({ where: { userId }, select: { channelId: true } })
       .then((rows) => rows.map((r) => r.channelId));
   }
 

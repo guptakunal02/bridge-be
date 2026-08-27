@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
-  AgentRole,
-  AgentStatus,
   ConversationStatus,
   MessageDirection,
   Prisma,
+  UserRole,
+  UserStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceService } from '../presence/presence.service';
@@ -21,25 +21,25 @@ import type {
 import { REALTIME_EVENTS } from '../realtime/events';
 
 interface AutoAssignOutcome {
-  agentId: string | null;
+  userId: string | null;
   changed: boolean;
 }
 
 /**
- * Auto-routes conversations to an available agent based on:
+ * Auto-routes conversations to an available user based on:
  *   1. If already assigned and assignee is ONLINE → keep (no reassignment on
  *      every message).
- *   2. Else pick the ONLINE agent with fewest open (OPEN|PENDING) conversations
- *      who has AgentChannel access to this channel. Tie-break by agent id for
+ *   2. Else pick the ONLINE user with fewest open (OPEN|PENDING) conversations
+ *      who has UserChannel access to this channel. Tie-break by user id for
  *      determinism.
- *   3. If no ONLINE agents → set status = PENDING, sit in the queue.
+ *   3. If no ONLINE users → set status = PENDING, sit in the queue.
  *
  * Concurrency: wrapped in a transaction with SELECT ... FOR UPDATE on the
  * target conversation row so two parallel inbound messages for the same
  * conversation can't produce a double-assignment.
  *
  * Explicit product rule (from user): going OFFLINE never reassigns existing
- * conversations away from the agent. Only NEW inbound messages consider
+ * conversations away from the user. Only NEW inbound messages consider
  * candidates fresh.
  */
 @Injectable()
@@ -60,14 +60,14 @@ export class AssignmentService {
           {
             id: string;
             channelId: string;
-            assignedAgentId: string | null;
+            assignedUserId: string | null;
             status: ConversationStatus;
           }[]
-        >`SELECT id, "channelId", "assignedAgentId", status
+        >`SELECT id, "channelId", "assignedUserId", status
         FROM "Conversation"
         WHERE id = ${conversationId}::uuid
         FOR UPDATE`;
-        if (!row) return { agentId: null, changed: false };
+        if (!row) return { userId: null, changed: false };
 
         // Serialize assignment DECISIONS per channel so parallel inbounds
         // read a consistent load snapshot. Advisory lock is xact-scoped and
@@ -75,40 +75,40 @@ export class AssignmentService {
         // parallel; same channel forms a queue.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${row.channelId}))`;
 
-        if (row.assignedAgentId) {
-          const assignee = await tx.agent.findUnique({
-            where: { id: row.assignedAgentId },
+        if (row.assignedUserId) {
+          const assignee = await tx.user.findUnique({
+            where: { id: row.assignedUserId },
             select: { status: true, deactivatedAt: true },
           });
           if (
             assignee &&
             assignee.deactivatedAt === null &&
-            assignee.status === AgentStatus.ONLINE
+            assignee.status === UserStatus.ONLINE
           ) {
-            return { agentId: row.assignedAgentId, changed: false };
+            return { userId: row.assignedUserId, changed: false };
           }
         }
 
         const pick = await this.pickLeastLoaded(tx, row.channelId);
         if (!pick) {
           if (row.status === ConversationStatus.PENDING) {
-            return { agentId: null, changed: false };
+            return { userId: null, changed: false };
           }
           await tx.conversation.update({
             where: { id: row.id },
             data: { status: ConversationStatus.PENDING },
           });
-          return { agentId: null, changed: true };
+          return { userId: null, changed: true };
         }
 
-        if (pick === row.assignedAgentId) {
-          return { agentId: pick, changed: false };
+        if (pick === row.assignedUserId) {
+          return { userId: pick, changed: false };
         }
 
         await tx.conversation.update({
           where: { id: row.id },
           data: {
-            assignedAgentId: pick,
+            assignedUserId: pick,
             status:
               row.status === ConversationStatus.PENDING
                 ? ConversationStatus.OPEN
@@ -118,12 +118,12 @@ export class AssignmentService {
         this.logger.log(
           {
             conversationId: row.id,
-            agentId: pick,
-            previous: row.assignedAgentId,
+            userId: pick,
+            previous: row.assignedUserId,
           },
           'auto-assigned',
         );
-        return { agentId: pick, changed: true };
+        return { userId: pick, changed: true };
       },
     );
 
@@ -132,17 +132,17 @@ export class AssignmentService {
     if (outcome.changed) {
       await this.emitFreshUpdate(conversationId);
     }
-    return outcome.agentId;
+    return outcome.userId;
   }
 
   /**
-   * When an agent goes ONLINE, drain up to `drainSoftCap` PENDING conversations
+   * When a user goes ONLINE, drain up to `drainSoftCap` PENDING conversations
    * from channels they have access to onto them (via the normal picker, so
    * least-loaded still wins).
    */
-  async drainForAgent(agentId: string): Promise<void> {
-    const membership = await this.prisma.agentChannel.findMany({
-      where: { agentId },
+  async drainForUser(userId: string): Promise<void> {
+    const membership = await this.prisma.userChannel.findMany({
+      where: { userId },
       select: { channelId: true },
     });
     if (membership.length === 0) return;
@@ -184,11 +184,11 @@ export class AssignmentService {
 
   @OnEvent(REALTIME_EVENTS.PresenceUpdated)
   async onPresenceUpdated(payload: PresenceUpdatedEvent): Promise<void> {
-    if (payload.status !== AgentStatus.ONLINE) return;
+    if (payload.status !== UserStatus.ONLINE) return;
     try {
-      await this.drainForAgent(payload.agentId);
+      await this.drainForUser(payload.userId);
     } catch (err) {
-      this.logger.error({ err, agentId: payload.agentId }, 'drain failed');
+      this.logger.error({ err, userId: payload.userId }, 'drain failed');
     }
   }
 
@@ -198,24 +198,24 @@ export class AssignmentService {
     tx: Prisma.TransactionClient,
     channelId: string,
   ): Promise<string | null> {
-    const rows = await tx.$queryRaw<{ agent_id: string; open_count: bigint }[]>`
-      SELECT a.id AS agent_id,
+    const rows = await tx.$queryRaw<{ user_id: string; open_count: bigint }[]>`
+      SELECT u.id AS user_id,
              COUNT(c.id) AS open_count
-      FROM "Agent" a
-      INNER JOIN "AgentChannel" ac ON ac."agentId" = a.id
+      FROM "User" u
+      INNER JOIN "UserChannel" uc ON uc."userId" = u.id
       LEFT JOIN "Conversation" c
-        ON c."assignedAgentId" = a.id
+        ON c."assignedUserId" = u.id
        AND c.status IN (${ConversationStatus.OPEN}::"ConversationStatus",
                         ${ConversationStatus.PENDING}::"ConversationStatus")
-      WHERE ac."channelId" = ${channelId}::uuid
-        AND a.status = ${AgentStatus.ONLINE}::"AgentStatus"
-        AND a."deactivatedAt" IS NULL
-        AND a.role IN (${AgentRole.AGENT}::"AgentRole",
-                       ${AgentRole.ADMIN}::"AgentRole")
-      GROUP BY a.id
-      ORDER BY open_count ASC, a.id ASC
+      WHERE uc."channelId" = ${channelId}::uuid
+        AND u.status = ${UserStatus.ONLINE}::"UserStatus"
+        AND u."deactivatedAt" IS NULL
+        AND u.role IN (${UserRole.MEMBER}::"UserRole",
+                       ${UserRole.ADMIN}::"UserRole")
+      GROUP BY u.id
+      ORDER BY open_count ASC, u.id ASC
       LIMIT 1`;
-    return rows[0]?.agent_id ?? null;
+    return rows[0]?.user_id ?? null;
   }
 
   private async emitFreshUpdate(conversationId: string): Promise<void> {

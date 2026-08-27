@@ -1,17 +1,16 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import type { Agent } from '@prisma/client';
-import argon2 from 'argon2';
+import type { User } from '@prisma/client';
 import ms, { StringValue } from 'ms';
 import { generateOpaqueToken, hashToken } from '../common/crypto/tokens';
 import type { EnvVars } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
-  SessionAgentResponse,
   SessionResponse,
+  SessionUserResponse,
 } from './dto/session-response.dto';
-import type { AccessTokenPayload } from './types/authenticated-agent';
+import type { AccessTokenPayload } from './types/authenticated-user';
 
 export interface IssuedSession extends SessionResponse {
   refreshToken: string;
@@ -37,35 +36,11 @@ export class AuthService {
     this.refreshTtl = config.get('JWT_REFRESH_TTL', { infer: true });
   }
 
-  async validateCredentials(email: string, password: string): Promise<Agent> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { email: email.toLowerCase() },
-    });
-
-    if (!agent || agent.deactivatedAt !== null) {
-      // Constant-time-ish: still run a verify to reduce timing side channels
-      await argon2
-        .verify(
-          '$argon2id$v=19$m=65536,t=3,p=4$dummydummydummy$dummydummydummydummydummydummydummydummydummydu',
-          password,
-        )
-        .catch(() => false);
-      throw new UnauthorizedException('Invalid email or password');
-    }
-
-    const ok = await argon2.verify(agent.passwordHash, password);
-    if (!ok) {
-      throw new UnauthorizedException('Invalid email or password');
-    }
-
-    return agent;
-  }
-
   async issueSession(
-    agent: Agent,
+    user: User,
     ctx: RequestContext,
   ): Promise<IssuedSession> {
-    const accessToken = await this.signAccessToken(agent);
+    const accessToken = await this.signAccessToken(user);
     const accessTokenExpiresAt = new Date(Date.now() + ms(this.accessTtl));
 
     const rawRefresh = generateOpaqueToken();
@@ -73,7 +48,7 @@ export class AuthService {
 
     await this.prisma.refreshToken.create({
       data: {
-        agentId: agent.id,
+        userId: user.id,
         tokenHash: hashToken(rawRefresh),
         expiresAt: refreshTokenExpiresAt,
         createdByIp: ctx.ip,
@@ -84,7 +59,7 @@ export class AuthService {
     return {
       accessToken,
       accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
-      agent: this.toSessionAgent(agent),
+      user: this.toSessionUser(user),
       refreshToken: rawRefresh,
       refreshTokenExpiresAt,
     };
@@ -99,14 +74,14 @@ export class AuthService {
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.refreshToken.findUnique({
         where: { tokenHash },
-        include: { agent: true },
+        include: { user: true },
       });
 
       if (
         !row ||
         row.revokedAt !== null ||
         row.expiresAt.getTime() <= Date.now() ||
-        row.agent.deactivatedAt !== null
+        row.user.deactivatedAt !== null
       ) {
         throw new UnauthorizedException('Refresh token is invalid or expired');
       }
@@ -115,7 +90,7 @@ export class AuthService {
       const newExpiresAt = new Date(Date.now() + ms(this.refreshTtl));
       const newRow = await tx.refreshToken.create({
         data: {
-          agentId: row.agentId,
+          userId: row.userId,
           tokenHash: hashToken(rawNew),
           expiresAt: newExpiresAt,
           createdByIp: ctx.ip,
@@ -128,13 +103,13 @@ export class AuthService {
         data: { revokedAt: new Date(), replacedById: newRow.id },
       });
 
-      const accessToken = await this.signAccessToken(row.agent);
+      const accessToken = await this.signAccessToken(row.user);
       const accessTokenExpiresAt = new Date(Date.now() + ms(this.accessTtl));
 
       return {
         accessToken,
         accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
-        agent: this.toSessionAgent(row.agent),
+        user: this.toSessionUser(row.user),
         refreshToken: rawNew,
         refreshTokenExpiresAt: newExpiresAt,
       };
@@ -149,48 +124,56 @@ export class AuthService {
     });
   }
 
-  async findSessionAgent(agentId: string): Promise<SessionAgentResponse> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
+  async findSessionUser(userId: string): Promise<SessionUserResponse> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
       select: {
         id: true,
         email: true,
         name: true,
+        phone: true,
+        photoUrl: true,
         role: true,
-        avatarUrl: true,
+        isApproved: true,
         deactivatedAt: true,
       },
     });
-    if (!agent || agent.deactivatedAt !== null) {
+    if (!user || user.deactivatedAt !== null) {
       throw new UnauthorizedException('Account is not active');
     }
-    return {
-      id: agent.id,
-      email: agent.email,
-      name: agent.name,
-      role: agent.role,
-      avatarUrl: agent.avatarUrl,
-    };
+    return toSessionUser(user);
   }
 
-  private toSessionAgent(agent: Agent): SessionAgentResponse {
-    return {
-      id: agent.id,
-      email: agent.email,
-      name: agent.name,
-      role: agent.role,
-      avatarUrl: agent.avatarUrl,
-    };
+  private toSessionUser(user: User): SessionUserResponse {
+    return toSessionUser(user);
   }
 
   private signAccessToken(
-    agent: Pick<Agent, 'id' | 'email' | 'role'>,
+    user: Pick<User, 'id' | 'email' | 'role' | 'isApproved'>,
   ): Promise<string> {
     const payload: AccessTokenPayload = {
-      sub: agent.id,
-      email: agent.email,
-      role: agent.role,
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      isApproved: user.isApproved,
     };
     return this.jwt.signAsync(payload, { expiresIn: this.accessTtl });
   }
+}
+
+function toSessionUser(
+  user: Pick<
+    User,
+    'id' | 'email' | 'name' | 'phone' | 'photoUrl' | 'role' | 'isApproved'
+  >,
+): SessionUserResponse {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    phone: user.phone,
+    photoUrl: user.photoUrl,
+    role: user.role,
+    isApproved: user.isApproved,
+  };
 }

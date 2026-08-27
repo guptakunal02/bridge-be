@@ -6,6 +6,8 @@ import { PassportModule } from '@nestjs/passport';
 import type { EnvVars } from '../config/env.validation';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AdminGuard } from './guards/admin.guard';
+import { ApprovedGuard } from './guards/approved.guard';
 import { GoogleOAuthCallbackGuard } from './guards/google-oauth-callback.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -29,7 +31,11 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     JwtStrategy,
     GoogleOAuthStrategy,
     GoogleOAuthCallbackGuard,
+    AdminGuard,
+    // Guard order (globals): JwtAuthGuard → ApprovedGuard → RolesGuard.
+    // Nest runs global guards in registration order.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: ApprovedGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
   exports: [AuthService, JwtModule],

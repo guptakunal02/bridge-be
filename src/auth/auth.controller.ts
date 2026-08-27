@@ -1,10 +1,9 @@
 import {
-  Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
-  Get,
   Req,
   Res,
   UnauthorizedException,
@@ -13,28 +12,25 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
-import type { Agent } from '@prisma/client';
+import type { User } from '@prisma/client';
 import type { Request, Response } from 'express';
-import {
-  AUTH_LOGIN_THROTTLE,
-  AUTH_REFRESH_THROTTLE,
-} from '../common/throttler/throttler.module';
+import { AUTH_REFRESH_THROTTLE } from '../common/throttler/throttler.module';
 import type { EnvVars } from '../config/env.validation';
 import { AuthService, IssuedSession } from './auth.service';
-import { CurrentAgent } from './decorators/current-agent.decorator';
+import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
-import { LoginDto } from './dto/login.dto';
-import { GoogleOAuthCallbackGuard } from './guards/google-oauth-callback.guard';
+import { UnapprovedAllowed } from './decorators/unapproved-allowed.decorator';
 import type {
-  SessionAgentResponse,
   SessionResponse,
+  SessionUserResponse,
 } from './dto/session-response.dto';
+import { GoogleOAuthCallbackGuard } from './guards/google-oauth-callback.guard';
 import {
   REFRESH_COOKIE_NAME,
   clearRefreshCookie,
   setRefreshCookie,
 } from './refresh-cookie';
-import type { AuthenticatedAgent } from './types/authenticated-agent';
+import type { AuthenticatedUser } from './types/authenticated-user';
 
 @Controller('auth')
 export class AuthController {
@@ -42,21 +38,6 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly config: ConfigService<EnvVars, true>,
   ) {}
-
-  @Public()
-  @Throttle(AUTH_LOGIN_THROTTLE)
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  async login(
-    @Body() dto: LoginDto,
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<SessionResponse> {
-    const agent = await this.auth.validateCredentials(dto.email, dto.password);
-    const session = await this.auth.issueSession(agent, this.readContext(req));
-    this.applyRefreshCookie(res, session);
-    return this.toSessionResponse(session);
-  }
 
   // Initiates the OAuth 2.0 authorization-code flow. Passport's AuthGuard
   // for the 'google' strategy short-circuits the request into a 302 that
@@ -69,7 +50,7 @@ export class AuthController {
   }
 
   // Google redirects the browser back here with `?code=...`. Passport
-  // exchanges the code server-to-server, resolves the Agent, and either
+  // exchanges the code server-to-server, resolves the User, and either
   // issues a Bridge session + redirects to /inbox on success, or (via the
   // custom guard) redirects to /access-restricted on failure.
   @Public()
@@ -79,15 +60,18 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    const agent = req.user as Agent | undefined;
+    const user = req.user as User | undefined;
     const origin = this.config.get('FRONTEND_ORIGIN', { infer: true });
-    if (!agent) {
+    if (!user) {
       // GoogleOAuthCallbackGuard already redirected — defensive branch.
       return;
     }
-    const session = await this.auth.issueSession(agent, this.readContext(req));
+    const session = await this.auth.issueSession(user, this.readContext(req));
     this.applyRefreshCookie(res, session);
-    res.redirect(`${origin}/inbox`);
+    // Approved users land inside the app; unapproved users get parked on
+    // /access-restricted where session-context can hit /auth/me + /logout.
+    const landing = user.isApproved ? '/inbox' : '/access-restricted';
+    res.redirect(`${origin}${landing}`);
   }
 
   @Public()
@@ -121,9 +105,12 @@ export class AuthController {
     clearRefreshCookie(res, this.config.get('NODE_ENV', { infer: true }));
   }
 
+  // Reachable by unapproved users so the frontend can inspect `isApproved`
+  // from the /access-restricted screen without being kicked to 403.
+  @UnapprovedAllowed()
   @Get('me')
-  me(@CurrentAgent() agent: AuthenticatedAgent): Promise<SessionAgentResponse> {
-    return this.auth.findSessionAgent(agent.id);
+  me(@CurrentUser() user: AuthenticatedUser): Promise<SessionUserResponse> {
+    return this.auth.findSessionUser(user.id);
   }
 
   private readRefreshCookie(req: Request): string | null {
@@ -162,7 +149,7 @@ export class AuthController {
     return {
       accessToken: session.accessToken,
       accessTokenExpiresAt: session.accessTokenExpiresAt,
-      agent: session.agent,
+      user: session.user,
     };
   }
 }

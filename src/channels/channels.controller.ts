@@ -11,12 +11,12 @@ import {
   Post,
   Put,
 } from '@nestjs/common';
-import { AgentRole } from '@prisma/client';
-import { CurrentAgent } from '../auth/decorators/current-agent.decorator';
+import { UserRole } from '@prisma/client';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
-import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ChannelsService, CredentialsTestResult } from './channels.service';
-import { AssignAgentsDto } from './dto/assign-agents.dto';
+import { AssignUsersDto } from './dto/assign-users.dto';
 import {
   ChannelAssignmentResponse,
   ChannelResponse,
@@ -30,12 +30,12 @@ export class ChannelsController {
   constructor(private readonly channels: ChannelsService) {}
 
   @Get()
-  list(@CurrentAgent() actor: AuthenticatedAgent): Promise<ChannelResponse[]> {
+  list(@CurrentUser() actor: AuthenticatedUser): Promise<ChannelResponse[]> {
     return this.channels.list(actor);
   }
 
   @Post()
-  @Roles(AgentRole.ADMIN)
+  @Roles(UserRole.ADMIN)
   create(@Body() dto: CreateChannelDto): Promise<ChannelResponse> {
     return this.channels.create(dto);
   }
@@ -43,13 +43,13 @@ export class ChannelsController {
   @Get(':id')
   get(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ChannelResponse> {
     return this.channels.get(id, actor);
   }
 
   @Patch(':id')
-  @Roles(AgentRole.ADMIN)
+  @Roles(UserRole.ADMIN)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateChannelDto,
@@ -58,42 +58,42 @@ export class ChannelsController {
   }
 
   @Delete(':id')
-  @Roles(AgentRole.ADMIN)
+  @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.channels.remove(id);
   }
 
-  @Get(':id/agents')
-  @Roles(AgentRole.ADMIN)
+  @Get(':id/users')
+  @Roles(UserRole.ADMIN)
   listAssignments(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ChannelAssignmentResponse[]> {
     return this.channels.listAssignments(id);
   }
 
-  @Post(':id/agents')
-  @Roles(AgentRole.ADMIN)
-  assignAgents(
+  @Post(':id/users')
+  @Roles(UserRole.ADMIN)
+  assignUsers(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: AssignAgentsDto,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @Body() dto: AssignUsersDto,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ChannelAssignmentResponse[]> {
-    return this.channels.assignAgents(id, dto.agentIds, actor);
+    return this.channels.assignUsers(id, dto.userIds, actor);
   }
 
-  @Delete(':id/agents/:agentId')
-  @Roles(AgentRole.ADMIN)
+  @Delete(':id/users/:userId')
+  @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
-  async unassignAgent(
+  async unassignUser(
     @Param('id', ParseUUIDPipe) id: string,
-    @Param('agentId', ParseUUIDPipe) agentId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
   ): Promise<void> {
-    await this.channels.unassignAgent(id, agentId);
+    await this.channels.unassignUser(id, userId);
   }
 
   @Put(':id/credentials')
-  @Roles(AgentRole.ADMIN)
+  @Roles(UserRole.ADMIN)
   setCredentials(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetCredentialsDto,
@@ -102,7 +102,7 @@ export class ChannelsController {
   }
 
   @Post(':id/credentials/test')
-  @Roles(AgentRole.ADMIN)
+  @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   testCredentials(
     @Param('id', ParseUUIDPipe) id: string,

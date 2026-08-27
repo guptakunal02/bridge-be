@@ -25,8 +25,8 @@ export function toChannelResponse(channel: Channel): ChannelResponse {
 }
 
 export interface ChannelAssignmentResponse {
-  agentId: string;
+  userId: string;
   channelId: string;
-  assignedByAgentId: string;
+  assignedByUserId: string;
   createdAt: string;
 }

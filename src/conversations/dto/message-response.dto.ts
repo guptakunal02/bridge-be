@@ -11,7 +11,7 @@ export interface MessageResponse {
   conversationId: string;
   direction: MessageDirection;
   authorType: MessageAuthorType;
-  authorAgentId: string | null;
+  authorUserId: string | null;
   externalId: string | null;
   type: MessageType;
   text: string | null;
@@ -35,7 +35,7 @@ export function toMessageResponse(m: Message): MessageResponse {
     conversationId: m.conversationId,
     direction: m.direction,
     authorType: m.authorType,
-    authorAgentId: m.authorAgentId,
+    authorUserId: m.authorUserId,
     externalId: m.externalId,
     type: m.type,
     text: m.text,

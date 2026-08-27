@@ -1,15 +1,17 @@
-import { AgentRole } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 
-export interface SessionAgentResponse {
+export interface SessionUserResponse {
   id: string;
   email: string;
   name: string;
-  role: AgentRole;
-  avatarUrl: string | null;
+  phone: string | null;
+  photoUrl: string | null;
+  role: UserRole;
+  isApproved: boolean;
 }
 
 export interface SessionResponse {
   accessToken: string;
   accessTokenExpiresAt: string;
-  agent: SessionAgentResponse;
+  user: SessionUserResponse;
 }

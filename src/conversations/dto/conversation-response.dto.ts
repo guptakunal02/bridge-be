@@ -1,15 +1,15 @@
 import {
-  Agent,
   ChannelType,
   Contact,
   ConversationStatus,
   Prisma,
+  User,
 } from '@prisma/client';
 
 export const CONVERSATION_INCLUDE = {
   channel: { select: { id: true, type: true, displayName: true } },
   contact: true,
-  assignedAgent: true,
+  assignedUser: true,
 } as const satisfies Prisma.ConversationInclude;
 
 export type ConversationWithRelations = Prisma.ConversationGetPayload<{
@@ -23,11 +23,11 @@ export interface ContactSummary {
   avatarUrl: string | null;
 }
 
-export interface AgentSummary {
+export interface UserSummary {
   id: string;
   name: string;
   email: string;
-  avatarUrl: string | null;
+  photoUrl: string | null;
 }
 
 export interface ChannelSummary {
@@ -41,7 +41,7 @@ export interface ConversationResponse {
   status: ConversationStatus;
   channel: ChannelSummary;
   contact: ContactSummary;
-  assignedAgent: AgentSummary | null;
+  assignedUser: UserSummary | null;
   lastMessageAt: string;
   lastCustomerMessageAt: string | null;
   unreadCount: number;
@@ -63,13 +63,13 @@ export function toContactSummary(contact: Contact): ContactSummary {
   };
 }
 
-export function toAgentSummary(agent: Agent | null): AgentSummary | null {
-  if (!agent) return null;
+export function toUserSummary(user: User | null): UserSummary | null {
+  if (!user) return null;
   return {
-    id: agent.id,
-    name: agent.name,
-    email: agent.email,
-    avatarUrl: agent.avatarUrl,
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    photoUrl: user.photoUrl,
   };
 }
 
@@ -81,7 +81,7 @@ export function toConversationResponse(
     status: conv.status,
     channel: conv.channel,
     contact: toContactSummary(conv.contact),
-    assignedAgent: toAgentSummary(conv.assignedAgent),
+    assignedUser: toUserSummary(conv.assignedUser),
     lastMessageAt: conv.lastMessageAt.toISOString(),
     lastCustomerMessageAt: conv.lastCustomerMessageAt?.toISOString() ?? null,
     unreadCount: conv.unreadCount,

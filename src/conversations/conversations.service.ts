@@ -5,8 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { AgentRole, ConversationStatus, Prisma } from '@prisma/client';
-import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import { ConversationStatus, Prisma, UserRole } from '@prisma/client';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ChannelsService } from '../channels/channels.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConversationUpdatedEvent, REALTIME_EVENTS } from '../realtime/events';
@@ -24,7 +24,7 @@ import type {
 
 const DEFAULT_LIMIT = 25;
 
-const AGENT_VISIBLE_STATUSES: ConversationStatus[] = [
+const USER_VISIBLE_STATUSES: ConversationStatus[] = [
   ConversationStatus.OPEN,
   ConversationStatus.PENDING,
 ];
@@ -43,7 +43,7 @@ export class ConversationsService {
   }
 
   async list(
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
     query: ListConversationsDto,
   ): Promise<ConversationListResponse> {
     const limit = query.limit ?? DEFAULT_LIMIT;
@@ -72,7 +72,7 @@ export class ConversationsService {
 
   async get(
     id: string,
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     const conv = await this.loadWithAccess(id, actor);
     return toConversationResponse(conv);
@@ -81,7 +81,7 @@ export class ConversationsService {
   async updateStatus(
     id: string,
     status: ConversationStatus,
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     const existing = await this.loadWithAccess(id, actor);
     if (existing.status === status) {
@@ -99,51 +99,51 @@ export class ConversationsService {
 
   async assign(
     id: string,
-    targetAgentId: string | null,
-    actor: AuthenticatedAgent,
+    targetUserId: string | null,
+    actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     const conv = await this.loadWithAccess(id, actor);
-    const isAdmin = actor.role === AgentRole.ADMIN;
+    const isAdmin = actor.role === UserRole.ADMIN;
 
-    if (targetAgentId === null) {
-      // Unassign — admin can always; agent can only unassign themselves.
-      if (!isAdmin && conv.assignedAgentId !== actor.id) {
-        throw new ForbiddenException('Agents can only unassign themselves');
+    if (targetUserId === null) {
+      // Unassign — admin can always; member can only unassign themselves.
+      if (!isAdmin && conv.assignedUserId !== actor.id) {
+        throw new ForbiddenException('Members can only unassign themselves');
       }
-    } else if (targetAgentId === actor.id) {
+    } else if (targetUserId === actor.id) {
       // Self-assign — allowed for any authorised viewer.
     } else if (!isAdmin) {
       throw new ForbiddenException(
-        'Only admins can assign conversations to other agents',
+        'Only admins can assign conversations to other users',
       );
     } else {
       // Admin assigning to someone else: they must be on this channel.
-      const hasAccess = await this.prisma.agentChannel.findUnique({
+      const hasAccess = await this.prisma.userChannel.findUnique({
         where: {
-          agentId_channelId: {
-            agentId: targetAgentId,
+          userId_channelId: {
+            userId: targetUserId,
             channelId: conv.channelId,
           },
         },
-        select: { agentId: true },
+        select: { userId: true },
       });
       if (!hasAccess) {
         throw new BadRequestException(
-          'Target agent is not assigned to this channel; grant channel access first',
+          'Target user is not assigned to this channel; grant channel access first',
         );
       }
-      const agent = await this.prisma.agent.findUnique({
-        where: { id: targetAgentId },
+      const user = await this.prisma.user.findUnique({
+        where: { id: targetUserId },
         select: { deactivatedAt: true },
       });
-      if (!agent || agent.deactivatedAt !== null) {
-        throw new BadRequestException('Target agent is not active');
+      if (!user || user.deactivatedAt !== null) {
+        throw new BadRequestException('Target user is not active');
       }
     }
 
     const updated = await this.prisma.conversation.update({
       where: { id },
-      data: { assignedAgentId: targetAgentId },
+      data: { assignedUserId: targetUserId },
       include: CONVERSATION_INCLUDE,
     });
     const response = toConversationResponse(updated);
@@ -153,7 +153,7 @@ export class ConversationsService {
 
   async markRead(
     id: string,
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     const conv = await this.loadWithAccess(id, actor);
     if (conv.unreadCount === 0) {
@@ -175,7 +175,7 @@ export class ConversationsService {
    */
   async loadWithAccess(
     id: string,
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
   ): Promise<ConversationWithRelations> {
     const conv = await this.prisma.conversation.findUnique({
       where: { id },
@@ -184,12 +184,12 @@ export class ConversationsService {
 
     if (!conv) throw new NotFoundException('Conversation not found');
 
-    if (actor.role !== AgentRole.ADMIN) {
-      const membership = await this.prisma.agentChannel.findUnique({
+    if (actor.role !== UserRole.ADMIN) {
+      const membership = await this.prisma.userChannel.findUnique({
         where: {
-          agentId_channelId: { agentId: actor.id, channelId: conv.channelId },
+          userId_channelId: { userId: actor.id, channelId: conv.channelId },
         },
-        select: { agentId: true },
+        select: { userId: true },
       });
       if (!membership) {
         throw new NotFoundException('Conversation not found');
@@ -200,12 +200,12 @@ export class ConversationsService {
   }
 
   private async buildListWhere(
-    actor: AuthenticatedAgent,
+    actor: AuthenticatedUser,
     query: ListConversationsDto,
   ): Promise<Prisma.ConversationWhereInput> {
-    const isAdmin = actor.role === AgentRole.ADMIN;
+    const isAdmin = actor.role === UserRole.ADMIN;
     const assignee: AssigneeFilter = query.assignee ?? (isAdmin ? 'all' : 'me');
-    const status = query.status ?? AGENT_VISIBLE_STATUSES;
+    const status = query.status ?? USER_VISIBLE_STATUSES;
 
     const where: Prisma.ConversationWhereInput = {
       status: { in: status },
@@ -216,9 +216,9 @@ export class ConversationsService {
     }
 
     if (!isAdmin) {
-      const channelIds = await this.channels.getChannelIdsForAgent(actor.id);
+      const channelIds = await this.channels.getChannelIdsForUser(actor.id);
       if (channelIds.length === 0) {
-        // Agent has no channel access — an impossible filter returns nothing.
+        // Member has no channel access — an impossible filter returns nothing.
         return { id: { in: [] } };
       }
       if (query.channelId && !channelIds.includes(query.channelId)) {
@@ -228,9 +228,9 @@ export class ConversationsService {
     }
 
     if (assignee === 'me') {
-      where.assignedAgentId = actor.id;
+      where.assignedUserId = actor.id;
     } else if (assignee === 'unassigned') {
-      where.assignedAgentId = null;
+      where.assignedUserId = null;
     }
     // assignee === 'all' → no assignee filter
 

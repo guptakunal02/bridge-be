@@ -1,8 +1,8 @@
 // Domain events emitted onto @nestjs/event-emitter and picked up by the
-// AgentGateway to broadcast over Socket.IO. Everything a client can observe
+// UserGateway to broadcast over Socket.IO. Everything a client can observe
 // flows through one of these events — services never call the gateway directly.
 
-import type { AgentStatus } from '@prisma/client';
+import type { UserStatus } from '@prisma/client';
 import type { ConversationResponse } from '../conversations/dto/conversation-response.dto';
 import type { MessageResponse } from '../conversations/dto/message-response.dto';
 
@@ -28,7 +28,7 @@ export interface ConversationUpdatedEvent {
 }
 
 export interface PresenceUpdatedEvent {
-  agentId: string;
-  status: AgentStatus;
+  userId: string;
+  status: UserStatus;
   lastSeenAt: string | null;
 }

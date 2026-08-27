@@ -10,8 +10,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { CurrentAgent } from '../auth/decorators/current-agent.decorator';
-import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ConversationsService } from './conversations.service';
 import type {
   ConversationListResponse,
@@ -29,7 +29,7 @@ export class ConversationsController {
 
   @Get()
   list(
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
     @Query() query: ListConversationsDto,
   ): Promise<ConversationListResponse> {
     return this.conversations.list(actor, query);
@@ -38,7 +38,7 @@ export class ConversationsController {
   @Get(':id')
   get(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     return this.conversations.get(id, actor);
   }
@@ -47,7 +47,7 @@ export class ConversationsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateConversationDto,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     if (dto.status === undefined) {
       // Nothing to change; return current.
@@ -60,9 +60,9 @@ export class ConversationsController {
   assign(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignConversationDto,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
-    const target = dto.agentId === undefined ? null : dto.agentId;
+    const target = dto.userId === undefined ? null : dto.userId;
     return this.conversations.assign(id, target, actor);
   }
 
@@ -70,7 +70,7 @@ export class ConversationsController {
   @HttpCode(HttpStatus.OK)
   markRead(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ConversationResponse> {
     return this.conversations.markRead(id, actor);
   }

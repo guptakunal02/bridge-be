@@ -11,9 +11,9 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { AgentRole, AgentStatus } from '@prisma/client';
+import { UserRole, UserStatus } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
-import type { AccessTokenPayload } from '../auth/types/authenticated-agent';
+import type { AccessTokenPayload } from '../auth/types/authenticated-user';
 import type { EnvVars } from '../config/env.validation';
 import { ConversationsService } from '../conversations/conversations.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -28,10 +28,10 @@ import { REALTIME_EVENTS } from './events';
 import { WsExceptionsFilter } from './ws-exceptions.filter';
 
 interface AuthedSocket extends Socket {
-  data: { agentId: string; role: AgentRole };
+  data: { userId: string; role: UserRole };
 }
 
-const AGENT_ROOM = (id: string): string => `agent:${id}`;
+const USER_ROOM = (id: string): string => `user:${id}`;
 const CONVERSATION_ROOM = (id: string): string => `conversation:${id}`;
 
 @UseFilters(WsExceptionsFilter)
@@ -42,8 +42,8 @@ const CONVERSATION_ROOM = (id: string): string => `conversation:${id}`;
     credentials: true,
   },
 })
-export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  private readonly logger = new Logger(AgentGateway.name);
+export class UserGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  private readonly logger = new Logger(UserGateway.name);
 
   @WebSocketServer()
   server!: Server;
@@ -65,19 +65,31 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
         secret: this.config.get('JWT_ACCESS_SECRET', { infer: true }),
       });
 
-      const agent = await this.prisma.agent.findUnique({
+      const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, role: true, deactivatedAt: true },
+        select: {
+          id: true,
+          role: true,
+          isApproved: true,
+          deactivatedAt: true,
+        },
       });
-      if (!agent || agent.deactivatedAt !== null) {
+      if (!user || user.deactivatedAt !== null) {
         throw new Error('Account is not active');
       }
+      if (!user.isApproved) {
+        throw new Error('Account is awaiting admin approval');
+      }
 
-      socket.data = { agentId: agent.id, role: agent.role };
-      await socket.join(AGENT_ROOM(agent.id));
-      await this.presence.onSocketConnect(agent.id, socket.id);
+      socket.data = {
+        userId: user.id,
+        role: user.role,
+        isApproved: user.isApproved,
+      };
+      await socket.join(USER_ROOM(user.id));
+      await this.presence.onSocketConnect(user.id, socket.id);
       this.logger.debug(
-        { agentId: agent.id, socketId: socket.id },
+        { userId: user.id, socketId: socket.id },
         'ws connected',
       );
     } catch (err) {
@@ -89,10 +101,10 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect(socket: Socket): void {
-    const agentId = (socket.data as { agentId?: string } | undefined)?.agentId;
-    if (!agentId) return;
-    this.presence.onSocketDisconnect(agentId, socket.id);
-    this.logger.debug({ agentId, socketId: socket.id }, 'ws disconnected');
+    const userId = (socket.data as { userId?: string } | undefined)?.userId;
+    if (!userId) return;
+    this.presence.onSocketDisconnect(userId, socket.id);
+    this.logger.debug({ userId, socketId: socket.id }, 'ws disconnected');
   }
 
   @SubscribeMessage('conversation.subscribe')
@@ -105,9 +117,10 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     try {
       await this.conversations.loadWithAccess(conversationId, {
-        id: socket.data.agentId,
+        id: socket.data.userId,
         email: '',
         role: socket.data.role,
+        isApproved: true,
       });
       await socket.join(CONVERSATION_ROOM(conversationId));
       return { ok: true };
@@ -135,7 +148,7 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     const status = this.readStatus(body.status);
     if (!status) return { ok: false, error: 'invalid status' };
-    await this.presence.setStatus(socket.data.agentId, status);
+    await this.presence.setStatus(socket.data.userId, status);
     return { ok: true };
   }
 
@@ -161,18 +174,18 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // private room. Socket.IO deduplicates delivery when a socket is in
     // both rooms.
     const rooms = [CONVERSATION_ROOM(payload.conversation.id)];
-    if (payload.conversation.assignedAgent) {
-      rooms.push(AGENT_ROOM(payload.conversation.assignedAgent.id));
+    if (payload.conversation.assignedUser) {
+      rooms.push(USER_ROOM(payload.conversation.assignedUser.id));
     }
     this.server.to(rooms).emit('conversation.updated', payload);
   }
 
   @OnEvent(REALTIME_EVENTS.PresenceUpdated)
   onPresenceUpdated(payload: PresenceUpdatedEvent): void {
-    // Fan out to the affected agent so their own header updates and to a
+    // Fan out to the affected user so their own header updates and to a
     // shared 'presence' channel that admins can subscribe to later.
     this.server
-      .to(AGENT_ROOM(payload.agentId))
+      .to(USER_ROOM(payload.userId))
       .emit('presence.updated', payload);
   }
 
@@ -196,11 +209,11 @@ export class AgentGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return value;
   }
 
-  private readStatus(value: unknown): AgentStatus | null {
+  private readStatus(value: unknown): UserStatus | null {
     if (
-      value === AgentStatus.ONLINE ||
-      value === AgentStatus.AWAY ||
-      value === AgentStatus.OFFLINE
+      value === UserStatus.ONLINE ||
+      value === UserStatus.AWAY ||
+      value === UserStatus.OFFLINE
     ) {
       return value;
     }

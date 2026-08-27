@@ -6,8 +6,8 @@ import type { EnvVars } from '../../config/env.validation';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   AccessTokenPayload,
-  AuthenticatedAgent,
-} from '../types/authenticated-agent';
+  AuthenticatedUser,
+} from '../types/authenticated-user';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
@@ -22,16 +22,27 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     });
   }
 
-  async validate(payload: AccessTokenPayload): Promise<AuthenticatedAgent> {
-    const agent = await this.prisma.agent.findUnique({
+  async validate(payload: AccessTokenPayload): Promise<AuthenticatedUser> {
+    const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, role: true, deactivatedAt: true },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isApproved: true,
+        deactivatedAt: true,
+      },
     });
 
-    if (!agent || agent.deactivatedAt !== null) {
+    if (!user || user.deactivatedAt !== null) {
       throw new UnauthorizedException('Account is not active');
     }
 
-    return { id: agent.id, email: agent.email, role: agent.role };
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      isApproved: user.isApproved,
+    };
   }
 }

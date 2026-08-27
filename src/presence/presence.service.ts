@@ -1,17 +1,17 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { AgentStatus } from '@prisma/client';
+import { UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceUpdatedEvent, REALTIME_EVENTS } from '../realtime/events';
 
 const DISCONNECT_GRACE_MS = 15_000;
 
 /**
- * Tracks live Socket.IO connections per agent so we can drive Agent.status
+ * Tracks live Socket.IO connections per user so we can drive User.status
  * transitions. Rules (see plan for rationale):
  *
- *   - First socket connects for an agent whose status is OFFLINE → ONLINE.
- *     If the agent explicitly set AWAY, we leave AWAY in place across
+ *   - First socket connects for a user whose status is OFFLINE → ONLINE.
+ *     If the user explicitly set AWAY, we leave AWAY in place across
  *     reconnects (a page refresh must not silently flip them back).
  *   - Last socket disconnects → 15s grace → OFFLINE. Explicit AWAY loses to
  *     an actual disconnect: if they're gone, they're gone.
@@ -37,93 +37,93 @@ export class PresenceService implements OnModuleDestroy {
     this.liveSockets.clear();
   }
 
-  async onSocketConnect(agentId: string, socketId: string): Promise<void> {
-    const pending = this.pendingOffline.get(agentId);
+  async onSocketConnect(userId: string, socketId: string): Promise<void> {
+    const pending = this.pendingOffline.get(userId);
     if (pending) {
       clearTimeout(pending);
-      this.pendingOffline.delete(agentId);
+      this.pendingOffline.delete(userId);
     }
 
-    let sockets = this.liveSockets.get(agentId);
+    let sockets = this.liveSockets.get(userId);
     if (!sockets) {
       sockets = new Set();
-      this.liveSockets.set(agentId, sockets);
+      this.liveSockets.set(userId, sockets);
     }
     const wasEmpty = sockets.size === 0;
     sockets.add(socketId);
 
     if (wasEmpty) {
-      const current = await this.prisma.agent.findUnique({
-        where: { id: agentId },
+      const current = await this.prisma.user.findUnique({
+        where: { id: userId },
         select: { status: true },
       });
-      if (current?.status === AgentStatus.OFFLINE) {
-        await this.applyStatus(agentId, AgentStatus.ONLINE);
+      if (current?.status === UserStatus.OFFLINE) {
+        await this.applyStatus(userId, UserStatus.ONLINE);
       } else {
         // Even without a status flip, bump lastSeenAt.
-        await this.bumpLastSeen(agentId);
+        await this.bumpLastSeen(userId);
       }
     }
   }
 
-  onSocketDisconnect(agentId: string, socketId: string): void {
-    const sockets = this.liveSockets.get(agentId);
+  onSocketDisconnect(userId: string, socketId: string): void {
+    const sockets = this.liveSockets.get(userId);
     if (!sockets) return;
     sockets.delete(socketId);
     if (sockets.size > 0) return;
 
-    this.liveSockets.delete(agentId);
+    this.liveSockets.delete(userId);
     const timer = setTimeout(() => {
-      this.pendingOffline.delete(agentId);
+      this.pendingOffline.delete(userId);
       // If they reconnected inside the window, this map won't have them.
-      if (this.liveSockets.has(agentId)) return;
-      void this.applyStatus(agentId, AgentStatus.OFFLINE).catch(
+      if (this.liveSockets.has(userId)) return;
+      void this.applyStatus(userId, UserStatus.OFFLINE).catch(
         (err: unknown) => {
           this.logger.error(
-            { err, agentId },
-            'Failed to mark agent OFFLINE after grace',
+            { err, userId },
+            'Failed to mark user OFFLINE after grace',
           );
         },
       );
     }, DISCONNECT_GRACE_MS);
-    this.pendingOffline.set(agentId, timer);
+    this.pendingOffline.set(userId, timer);
   }
 
-  setStatus(agentId: string, status: AgentStatus): Promise<void> {
+  setStatus(userId: string, status: UserStatus): Promise<void> {
     // Explicit set overrides any pending offline transition.
-    const pending = this.pendingOffline.get(agentId);
+    const pending = this.pendingOffline.get(userId);
     if (pending) {
       clearTimeout(pending);
-      this.pendingOffline.delete(agentId);
+      this.pendingOffline.delete(userId);
     }
-    return this.applyStatus(agentId, status);
+    return this.applyStatus(userId, status);
   }
 
-  isTrackedOnline(agentId: string): boolean {
-    return (this.liveSockets.get(agentId)?.size ?? 0) > 0;
+  isTrackedOnline(userId: string): boolean {
+    return (this.liveSockets.get(userId)?.size ?? 0) > 0;
   }
 
   private async applyStatus(
-    agentId: string,
-    status: AgentStatus,
+    userId: string,
+    status: UserStatus,
   ): Promise<void> {
     const now = new Date();
-    const updated = await this.prisma.agent.update({
-      where: { id: agentId },
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
       data: { status, lastSeenAt: now },
       select: { id: true, status: true, lastSeenAt: true },
     });
     const event: PresenceUpdatedEvent = {
-      agentId: updated.id,
+      userId: updated.id,
       status: updated.status,
       lastSeenAt: updated.lastSeenAt?.toISOString() ?? null,
     };
     this.events.emit(REALTIME_EVENTS.PresenceUpdated, event);
   }
 
-  private async bumpLastSeen(agentId: string): Promise<void> {
-    await this.prisma.agent.update({
-      where: { id: agentId },
+  private async bumpLastSeen(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
       data: { lastSeenAt: new Date() },
     });
   }

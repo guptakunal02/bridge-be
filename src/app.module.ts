@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { AgentsModule } from './agents/agents.module';
 import { AssignmentModule } from './assignment/assignment.module';
 import { AuthModule } from './auth/auth.module';
 import { ChannelsModule } from './channels/channels.module';
@@ -13,10 +12,10 @@ import { ContactsModule } from './contacts/contacts.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
-import { InvitationsModule } from './invitations/invitations.module';
 import { PresenceModule } from './presence/presence.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { UsersModule } from './users/users.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 
 @Module({
@@ -34,8 +33,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     PresenceModule,
     HealthModule,
     AuthModule,
-    AgentsModule,
-    InvitationsModule,
+    UsersModule,
     ChannelsModule,
     ContactsModule,
     ConversationsModule,

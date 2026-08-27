@@ -7,8 +7,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { CurrentAgent } from '../auth/decorators/current-agent.decorator';
-import type { AuthenticatedAgent } from '../auth/types/authenticated-agent';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ListMessagesDto } from './dto/list-messages.dto';
 import type {
   MessageListResponse,
@@ -24,7 +24,7 @@ export class MessagesController {
   @Get()
   list(
     @Param('conversationId', ParseUUIDPipe) conversationId: string,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
     @Query() query: ListMessagesDto,
   ): Promise<MessageListResponse> {
     return this.messages.list(conversationId, actor, query);
@@ -33,7 +33,7 @@ export class MessagesController {
   @Post()
   send(
     @Param('conversationId', ParseUUIDPipe) conversationId: string,
-    @CurrentAgent() actor: AuthenticatedAgent,
+    @CurrentUser() actor: AuthenticatedUser,
     @Body() dto: SendMessageDto,
   ): Promise<MessageResponse> {
     return this.messages.send(conversationId, actor, dto);
