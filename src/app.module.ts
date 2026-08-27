@@ -1,12 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_FILTER } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AgentsModule } from './agents/agents.module';
 import { AssignmentModule } from './assignment/assignment.module';
 import { AuthModule } from './auth/auth.module';
 import { ChannelsModule } from './channels/channels.module';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { HttpModule } from './common/http/http.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
@@ -28,6 +27,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
       validate: validateEnv,
     }),
     LoggerModule,
+    HttpModule,
     ThrottlerModule,
     EventEmitterModule.forRoot({ wildcard: false, maxListeners: 20 }),
     PrismaModule,
@@ -43,12 +43,6 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     RealtimeModule,
     WebhooksModule,
     EmailInboxModule,
-  ],
-  providers: [
-    {
-      provide: APP_FILTER,
-      useClass: AllExceptionsFilter,
-    },
   ],
 })
 export class AppModule {}
