@@ -53,10 +53,20 @@ export class EnvVars {
   @MinLength(40)
   CHANNEL_ENCRYPTION_KEY!: string;
 
-  // Google OAuth 2.0 web client ID — audience the GIS-issued ID token must match.
+  // Google OAuth 2.0 web client ID (public).
   @IsString()
   @MinLength(1)
   GOOGLE_WEB_CLIENT_ID!: string;
+
+  // Google OAuth 2.0 client secret — used server-side to exchange the auth code.
+  @IsString()
+  @MinLength(1)
+  GOOGLE_CLIENT_SECRET!: string;
+
+  // Absolute URL Google redirects back to after user consent. Must match
+  // an Authorized redirect URI registered in the Google Cloud OAuth client.
+  @IsUrl({ require_tld: false, require_protocol: true })
+  GOOGLE_OAUTH_CALLBACK_URL!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

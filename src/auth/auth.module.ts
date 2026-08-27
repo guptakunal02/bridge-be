@@ -6,9 +6,10 @@ import { PassportModule } from '@nestjs/passport';
 import type { EnvVars } from '../config/env.validation';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { GoogleOAuthCallbackGuard } from './guards/google-oauth-callback.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
-import { GoogleTokenStrategy } from './strategies/google-token.strategy';
+import { GoogleOAuthStrategy } from './strategies/google-oauth.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -26,7 +27,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   providers: [
     AuthService,
     JwtStrategy,
-    GoogleTokenStrategy,
+    GoogleOAuthStrategy,
+    GoogleOAuthCallbackGuard,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

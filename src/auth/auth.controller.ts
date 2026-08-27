@@ -24,6 +24,7 @@ import { AuthService, IssuedSession } from './auth.service';
 import { CurrentAgent } from './decorators/current-agent.decorator';
 import { Public } from './decorators/public.decorator';
 import { LoginDto } from './dto/login.dto';
+import { GoogleOAuthCallbackGuard } from './guards/google-oauth-callback.guard';
 import type {
   SessionAgentResponse,
   SessionResponse,
@@ -57,21 +58,36 @@ export class AuthController {
     return this.toSessionResponse(session);
   }
 
+  // Initiates the OAuth 2.0 authorization-code flow. Passport's AuthGuard
+  // for the 'google' strategy short-circuits the request into a 302 that
+  // sends the browser to accounts.google.com — the handler body never runs.
   @Public()
-  @Throttle(AUTH_LOGIN_THROTTLE)
-  @UseGuards(AuthGuard('google-token'))
-  @Post('google')
-  @HttpCode(HttpStatus.OK)
-  async google(
+  @UseGuards(AuthGuard('google'))
+  @Get('google')
+  googleAuth(): void {
+    // Intentionally empty: guard redirects to Google.
+  }
+
+  // Google redirects the browser back here with `?code=...`. Passport
+  // exchanges the code server-to-server, resolves the Agent, and either
+  // issues a Bridge session + redirects to /inbox on success, or (via the
+  // custom guard) redirects to /access-restricted on failure.
+  @Public()
+  @UseGuards(GoogleOAuthCallbackGuard)
+  @Get('google/callback')
+  async googleCallback(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): Promise<SessionResponse> {
-    // GoogleTokenStrategy.validate() populated req.user with the Agent row
-    // (or already threw 401/403). From here it's identical to password login.
-    const agent = req.user as Agent;
+  ): Promise<void> {
+    const agent = req.user as Agent | undefined;
+    const origin = this.config.get('FRONTEND_ORIGIN', { infer: true });
+    if (!agent) {
+      // GoogleOAuthCallbackGuard already redirected — defensive branch.
+      return;
+    }
     const session = await this.auth.issueSession(agent, this.readContext(req));
     this.applyRefreshCookie(res, session);
-    return this.toSessionResponse(session);
+    res.redirect(`${origin}/inbox`);
   }
 
   @Public()
