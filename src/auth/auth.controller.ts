@@ -8,9 +8,12 @@ import {
   Req,
   Res,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
+import type { Agent } from '@prisma/client';
 import type { Request, Response } from 'express';
 import {
   AUTH_LOGIN_THROTTLE,
@@ -49,6 +52,23 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<SessionResponse> {
     const agent = await this.auth.validateCredentials(dto.email, dto.password);
+    const session = await this.auth.issueSession(agent, this.readContext(req));
+    this.applyRefreshCookie(res, session);
+    return this.toSessionResponse(session);
+  }
+
+  @Public()
+  @Throttle(AUTH_LOGIN_THROTTLE)
+  @UseGuards(AuthGuard('google-token'))
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  async google(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionResponse> {
+    // GoogleTokenStrategy.validate() populated req.user with the Agent row
+    // (or already threw 401/403). From here it's identical to password login.
+    const agent = req.user as Agent;
     const session = await this.auth.issueSession(agent, this.readContext(req));
     this.applyRefreshCookie(res, session);
     return this.toSessionResponse(session);
