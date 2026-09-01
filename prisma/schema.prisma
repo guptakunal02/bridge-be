@@ -79,7 +79,10 @@ enum ChannelStatus {
 model Channel {
   id                    String        @id @default(uuid()) @db.Uuid
   type                  ChannelType
-  displayName           String
+  // Display name is what admins see everywhere in the app. Enforced
+  // globally unique so two channels can't share a label regardless of
+  // their type (Instagram vs Email vs WhatsApp).
+  displayName           String        @unique
   externalId            String?
   credentialsEncrypted  String?
   status                ChannelStatus @default(CONNECTED)

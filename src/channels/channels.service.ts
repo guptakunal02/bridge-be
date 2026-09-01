@@ -101,15 +101,7 @@ export class ChannelsService {
       this.emitSaved(created.id);
       return toChannelResponse(created);
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          'A channel of this type with the same externalId already exists',
-        );
-      }
-      throw err;
+      throw translateChannelUniqueError(err);
     }
   }
 
@@ -137,7 +129,7 @@ export class ChannelsService {
       ) {
         throw new NotFoundException('Channel not found');
       }
-      throw err;
+      throw translateChannelUniqueError(err);
     }
   }
 
@@ -315,4 +307,28 @@ export class ChannelsService {
 
     return result;
   }
+}
+
+/**
+ * Convert Prisma's P2002 unique-constraint error on Channel into a
+ * user-friendly ConflictException. `err.meta.target` names the failing
+ * index so we can differentiate displayName vs (type, externalId).
+ */
+function translateChannelUniqueError(err: unknown): Error {
+  if (
+    !(err instanceof Prisma.PrismaClientKnownRequestError) ||
+    err.code !== 'P2002'
+  ) {
+    return err as Error;
+  }
+  const target = err.meta?.target;
+  const fields = Array.isArray(target) ? target : typeof target === 'string' ? [target] : [];
+  if (fields.some((f) => f.toLowerCase().includes('displayname'))) {
+    return new ConflictException(
+      'An inbox with this display name already exists. Pick a different name.',
+    );
+  }
+  return new ConflictException(
+    'A channel of this type with the same externalId already exists.',
+  );
 }
