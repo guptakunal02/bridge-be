@@ -7,6 +7,8 @@ export interface ChannelResponse {
   externalId: string | null;
   status: ChannelStatus;
   hasCredentials: boolean;
+  /** SMTP/username-side address for EMAIL channels; null otherwise. */
+  mailboxAddress: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -19,6 +21,7 @@ export function toChannelResponse(channel: Channel): ChannelResponse {
     externalId: channel.externalId,
     status: channel.status,
     hasCredentials: channel.credentialsEncrypted !== null,
+    mailboxAddress: channel.mailboxAddress,
     createdAt: channel.createdAt.toISOString(),
     updatedAt: channel.updatedAt.toISOString(),
   };

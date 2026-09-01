@@ -245,7 +245,10 @@ export class ChannelsService {
       const envelope = this.emailCredentials.seal(dto.email);
       const updated = await this.prisma.channel.update({
         where: { id },
-        data: { credentialsEncrypted: envelope },
+        data: {
+          credentialsEncrypted: envelope,
+          mailboxAddress: dto.email.smtp.username,
+        },
       });
       this.emitSaved(updated.id);
       return toChannelResponse(updated);

@@ -85,6 +85,11 @@ model Channel {
   displayName           String        @unique
   externalId            String?
   credentialsEncrypted  String?
+  // Non-secret, human-readable identifier for the connected account.
+  // For EMAIL channels this is the SMTP username. Displayed in the
+  // "connection summary" view so admins can see which mailbox is wired
+  // up without exposing the encrypted credentials blob.
+  mailboxAddress        String?
   status                ChannelStatus @default(CONNECTED)
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
