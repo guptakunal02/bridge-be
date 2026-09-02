@@ -97,9 +97,29 @@ model Channel {
   contacts      Contact[]
   assignments   UserChannel[]
   conversations Conversation[]
+  otpChallenges EmailChallenge[]
 
   @@unique([type, externalId])
   @@index([type, status])
+}
+
+// One-time-password challenge used by the "Test connection" flow: the
+// backend sends an OTP FROM the connected mailbox TO the admin's Bridge
+// email, and the admin pastes the received code back to prove SMTP
+// delivery works end-to-end. Codes are stored hashed and expire fast.
+model EmailChallenge {
+  id          String    @id @default(uuid()) @db.Uuid
+  channel     Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId   String    @db.Uuid
+  sentToEmail String
+  codeHash    String
+  attempts    Int       @default(0)
+  expiresAt   DateTime
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([channelId, verifiedAt])
+  @@index([expiresAt])
 }
 
 model Contact {

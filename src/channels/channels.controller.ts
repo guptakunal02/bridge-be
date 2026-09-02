@@ -22,12 +22,21 @@ import {
   ChannelResponse,
 } from './dto/channel-response.dto';
 import { CreateChannelDto } from './dto/create-channel.dto';
+import {
+  StartCredentialsOtpResponse,
+  VerifyCredentialsOtpDto,
+  VerifyCredentialsOtpResponse,
+} from './dto/credentials-otp.dto';
 import { SetCredentialsDto } from './dto/set-credentials.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
+import { ChannelOtpService } from './email/otp.service';
 
 @Controller('channels')
 export class ChannelsController {
-  constructor(private readonly channels: ChannelsService) {}
+  constructor(
+    private readonly channels: ChannelsService,
+    private readonly otp: ChannelOtpService,
+  ) {}
 
   @Get()
   list(@CurrentUser() actor: AuthenticatedUser): Promise<ChannelResponse[]> {
@@ -101,6 +110,11 @@ export class ChannelsController {
     return this.channels.setCredentials(id, dto);
   }
 
+  /**
+   * Legacy SMTP+IMAP handshake test. Kept for the IMAP loop's own
+   * startup check and admins who want a quick TCP-level probe, but the
+   * user-facing "Test connection" button now uses the OTP flow below.
+   */
   @Post(':id/credentials/test')
   @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -108,5 +122,30 @@ export class ChannelsController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CredentialsTestResult> {
     return this.channels.testCredentials(id);
+  }
+
+  /**
+   * Send a 6-digit OTP FROM the connected mailbox TO the current admin's
+   * Bridge email. Proves outbound SMTP works end-to-end (not just that
+   * TCP + login succeed). Follow-up: POST /credentials/test-otp/verify.
+   */
+  @Post(':id/credentials/test-otp/start')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  startCredentialsOtp(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<StartCredentialsOtpResponse> {
+    return this.otp.start(id, actor.email);
+  }
+
+  @Post(':id/credentials/test-otp/verify')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  verifyCredentialsOtp(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: VerifyCredentialsOtpDto,
+  ): Promise<VerifyCredentialsOtpResponse> {
+    return this.otp.verify(id, dto.challengeId, dto.code);
   }
 }

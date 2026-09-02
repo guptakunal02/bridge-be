@@ -11,6 +11,7 @@ import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
 import { EmailAdapter } from './email/email.adapter';
 import { EmailCredentialsService } from './email/email-credentials.service';
+import { ChannelOtpService } from './email/otp.service';
 import { SystemMailer } from './email/system-mailer.service';
 import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
 
@@ -22,6 +23,7 @@ import { InstagramStubAdapter } from './instagram/instagram-stub.adapter';
     InstagramStubAdapter,
     EmailAdapter,
     EmailCredentialsService,
+    ChannelOtpService,
     SystemMailer,
     {
       provide: CHANNEL_ADAPTERS,
