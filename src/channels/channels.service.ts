@@ -248,6 +248,9 @@ export class ChannelsService {
         data: {
           credentialsEncrypted: envelope,
           mailboxAddress: dto.email.smtp.username,
+          // Rotating creds invalidates any prior OTP verification — the
+          // frontend should surface the Test button again.
+          credentialsVerifiedAt: null,
         },
       });
       this.emitSaved(updated.id);

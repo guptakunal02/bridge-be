@@ -90,6 +90,10 @@ model Channel {
   // "connection summary" view so admins can see which mailbox is wired
   // up without exposing the encrypted credentials blob.
   mailboxAddress        String?
+  // Timestamp of the most recent successful OTP verification. Powers
+  // the "Last verified X ago" indicator; null means never (or the
+  // channel's credentials were rotated since the last verify).
+  credentialsVerifiedAt DateTime?
   status                ChannelStatus @default(CONNECTED)
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt

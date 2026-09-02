@@ -1,4 +1,5 @@
 import { IsString, Length, Matches } from 'class-validator';
+import type { ChannelResponse } from './channel-response.dto';
 
 export class VerifyCredentialsOtpDto {
   @IsString()
@@ -17,4 +18,6 @@ export interface StartCredentialsOtpResponse {
 
 export interface VerifyCredentialsOtpResponse {
   ok: true;
+  /** Post-verify snapshot of the channel (status flipped, verifiedAt set). */
+  channel: ChannelResponse;
 }

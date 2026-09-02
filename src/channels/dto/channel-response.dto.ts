@@ -9,6 +9,8 @@ export interface ChannelResponse {
   hasCredentials: boolean;
   /** SMTP/username-side address for EMAIL channels; null otherwise. */
   mailboxAddress: string | null;
+  /** ISO timestamp of the most recent successful OTP verification, or null. */
+  credentialsVerifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -22,6 +24,7 @@ export function toChannelResponse(channel: Channel): ChannelResponse {
     status: channel.status,
     hasCredentials: channel.credentialsEncrypted !== null,
     mailboxAddress: channel.mailboxAddress,
+    credentialsVerifiedAt: channel.credentialsVerifiedAt?.toISOString() ?? null,
     createdAt: channel.createdAt.toISOString(),
     updatedAt: channel.updatedAt.toISOString(),
   };

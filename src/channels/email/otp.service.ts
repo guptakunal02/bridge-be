@@ -9,6 +9,10 @@ import {
 import { ChannelStatus, ChannelType } from '@prisma/client';
 import nodemailer from 'nodemailer';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  ChannelResponse,
+  toChannelResponse,
+} from '../dto/channel-response.dto';
 import { EmailCredentialsService } from './email-credentials.service';
 
 export interface OtpStartResult {
@@ -19,6 +23,7 @@ export interface OtpStartResult {
 
 export interface OtpVerifyResult {
   ok: true;
+  channel: ChannelResponse;
 }
 
 const OTP_TTL_MS = 10 * 60 * 1000;
@@ -93,18 +98,19 @@ export class ChannelOtpService {
       throw new BadRequestException('Incorrect code');
     }
 
-    await this.prisma.$transaction([
+    const now = new Date();
+    const [, updatedChannel] = await this.prisma.$transaction([
       this.prisma.emailChallenge.update({
         where: { id: challengeId },
-        data: { verifiedAt: new Date() },
+        data: { verifiedAt: now },
       }),
       this.prisma.channel.update({
         where: { id: channelId },
-        data: { status: ChannelStatus.CONNECTED },
+        data: { status: ChannelStatus.CONNECTED, credentialsVerifiedAt: now },
       }),
     ]);
 
-    return { ok: true };
+    return { ok: true, channel: toChannelResponse(updatedChannel) };
   }
 
   private async loadEmailChannelWithCreds(channelId: string) {
