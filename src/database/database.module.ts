@@ -26,7 +26,10 @@ import { User } from './entities/user.entity';
           type: 'postgres',
           url: config.get('DATABASE_URL', { infer: true }),
           entities: [User, Channel, Ticket, EmailMessage, TicketActivityLog],
-          synchronize: !isProd,
+          // Schema is owned by TypeORM migrations. Run `pnpm migration:run`
+          // to apply pending migrations (both dev and prod).
+          synchronize: false,
+          migrationsRun: false,
           logging: false,
           ssl: isProd ? { rejectUnauthorized: false } : false,
         };
