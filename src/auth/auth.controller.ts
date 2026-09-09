@@ -11,10 +11,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuthGuard } from '@nestjs/passport';
-import { Throttle } from '@nestjs/throttler';
 import type { User } from '@prisma/client';
 import type { Request, Response } from 'express';
-import { AUTH_REFRESH_THROTTLE } from '../common/throttler/throttler.module';
 import type { EnvVars } from '../config/env.validation';
 import { AuthService, IssuedSession } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -49,10 +47,9 @@ export class AuthController {
     // Intentionally empty: guard redirects to Google.
   }
 
-  // Google redirects the browser back here with `?code=...`. Passport
-  // exchanges the code server-to-server, resolves the User, and either
-  // issues a Bridge session + redirects to /inbox on success, or (via the
-  // custom guard) redirects to /access-restricted on failure.
+  // Google redirects back with ?code=... — Passport exchanges the code
+  // server-to-server, resolves the User (auto-creates if new), and we
+  // issue a session + set the refresh cookie before redirecting.
   @Public()
   @UseGuards(GoogleOAuthCallbackGuard)
   @Get('google/callback')
@@ -66,7 +63,7 @@ export class AuthController {
       // GoogleOAuthCallbackGuard already redirected — defensive branch.
       return;
     }
-    const session = await this.auth.issueSession(user, this.readContext(req));
+    const session = await this.auth.issueSession(user);
     this.applyRefreshCookie(res, session);
     // Approved users land inside the app; unapproved users get parked on
     // /access-restricted where session-context can hit /auth/me + /logout.
@@ -75,7 +72,6 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle(AUTH_REFRESH_THROTTLE)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(
@@ -86,7 +82,7 @@ export class AuthController {
     if (!token) {
       throw new UnauthorizedException('Missing refresh token');
     }
-    const session = await this.auth.rotateRefresh(token, this.readContext(req));
+    const session = await this.auth.rotateRefresh(token);
     this.applyRefreshCookie(res, session);
     return this.toSessionResponse(session);
   }
@@ -118,22 +114,6 @@ export class AuthController {
       .cookies;
     const value = cookies?.[REFRESH_COOKIE_NAME];
     return typeof value === 'string' && value.length > 0 ? value : null;
-  }
-
-  private readContext(req: Request): {
-    ip: string | null;
-    userAgent: string | null;
-  } {
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip =
-      (typeof forwarded === 'string'
-        ? forwarded.split(',')[0]?.trim()
-        : undefined) ??
-      req.ip ??
-      null;
-    const uaHeader = req.headers['user-agent'];
-    const userAgent = typeof uaHeader === 'string' ? uaHeader : null;
-    return { ip, userAgent };
   }
 
   private applyRefreshCookie(res: Response, session: IssuedSession): void {

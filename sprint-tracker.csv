@@ -1,0 +1,69 @@
+ID,Phase,Task,Status,Assignee,ETA,Notes
+1,0. Infrastructure,EC2 provisioned + Ubuntu setup,Done,Both,2026-08-26,Ubuntu 26.04 with pnpm + Node 20
+2,0. Infrastructure,Backend deployed on bridge-be.teev.shop with Nginx + Let's Encrypt,Done,Both,2026-08-27,PM2 + reverse proxy
+3,0. Infrastructure,Frontend on Vercel with custom domain bridge.teev.shop,Done,Both,2026-08-27,DNS via teev.shop
+4,0. Infrastructure,RDS Postgres 18 connected via TLS,Done,Both,2026-08-26,ap-south-1 surma-common-ops
+5,0. Infrastructure,Prisma migrations flow (dev + deploy),Done,Claude,2026-08-27,Migration graph tracked
+6,1. Auth,Google OAuth 2.0 code flow with passport-google-oauth20,Done,Claude,2026-08-27,Backend redirects to Google
+7,1. Auth,User auto-create on first Google sign-in (isApproved=false),Done,Claude,2026-08-31,Post-callback redirects to /access-restricted
+8,1. Auth,JWT access token + rotating refresh cookie,Done,Claude,2026-08-27,15m access / 7d refresh
+9,1. Auth,ApprovedGuard + @UnapprovedAllowed decorator,Done,Claude,2026-08-31,Global guard chain
+10,1. Auth,AdminGuard + @AdminOnly() decorator,Done,Claude,2026-08-31,Per-route enforcement
+11,1. Auth,/auth/me exposes role + isApproved,Done,Claude,2026-08-31,Feeds frontend session context
+12,1. Auth,Access-restricted screen (sign out only),Done,Claude,2026-08-31,No contact-admin flow
+13,1. Auth,Sidebar hides admin modules for MEMBER role,Done,Claude,2026-08-31,Client-side
+14,2. Users,User model with role/status/isApproved/googleSub,Done,Claude,2026-08-31,Agent → User rename complete
+15,2. Users,GET /users list (admin only),Done,Claude,2026-08-31,Sorted by createdAt
+16,2. Users,Deactivate/reactivate users,Done,Claude,2026-08-31,Soft-delete via deactivatedAt
+17,2. Users,Team page UI,Done,Claude,2026-08-31,Approve = manual DB flip for now
+18,3. Response envelope,Global exception filter emitting FailureEnvelope,Done,Claude,2026-08-27,Discriminated union
+19,3. Response envelope,Global response interceptor wrapping in SuccessEnvelope,Done,Claude,2026-08-27,Skips redirects + 204
+20,3. Response envelope,Frontend apiFetch unwraps + throws typed ApiError,Done,Claude,2026-08-27,All callers preserved
+21,4. Channels foundation,Channel model with encrypted credentials at rest,Done,Claude,2026-08-26,AES-256-GCM
+22,4. Channels foundation,displayName globally unique + inline duplicate check,Done,Claude,2026-09-01,Prisma P2002 normalization
+23,4. Channels foundation,Add inbox flow with pre-fill Gmail defaults,Done,Claude,2026-09-01,SMTP + IMAP
+24,4. Channels foundation,3-step Gmail onboarding wizard (2FA → App Pw → creds),Done,Claude,2026-09-01,With external links
+25,4. Channels foundation,Connected as X summary view post-save,Done,Claude,2026-09-02,mailboxAddress column
+26,4. Channels foundation,Test connection via OTP (SMTP send test),Done,Claude,2026-09-02,EmailChallenge table
+27,4. Channels foundation,Last verified X ago chip + re-test link,Done,Claude,2026-09-02,credentialsVerifiedAt column
+28,4. Channels foundation,Assign users to channel,Done,Claude,2026-08-31,UserChannel join table
+29,5. Email inbox v1,SMTP outbound via nodemailer,Done,Claude,2026-08-25,Uses channel credentials
+30,5. Email inbox v1,IMAP IDLE background loop (push-based),Done,Claude,2026-08-25,Per-channel worker
+31,5. Email inbox v1,mailparser → conversation/message ingest,Done,Claude,2026-08-25,Idempotent on externalId
+32,5. Email inbox v1,System mailer for outbound (uses first CONNECTED channel),Done,Claude,2026-08-25,Fallback flow
+33,6. Email inbox v2,Finalize schema design in dbdiagram.io,In progress,Kunal,2026-09-08,Review + refine by EOD Tue
+34,6. Email inbox v2,AWS S3 bucket + IAM setup (share creds when ready),Pending,Kunal,2026-09-08,ap-south-1 bucket + public read policy + IAM PutObject
+35,6. Email inbox v2,Port finalized schema to schema.prisma + migration,Pending,Claude,2026-09-09,After task 33
+36,6. Email inbox v2,Email adapter: extract threadKey from References/In-Reply-To,Pending,Claude,2026-09-09,Fallback to Message-ID
+37,6. Email inbox v2,Ingest: upsert Conversation by (channelId threadKey),Pending,Claude,2026-09-10,Replaces (channelId contactId)
+38,6. Email inbox v2,ticketNumber auto-increment sequence + expose in response DTO,Pending,Claude,2026-09-10,Postgres SERIAL
+39,6. Email inbox v2,Frontend: display #123 in conversation list + detail,Pending,Claude,2026-09-11,Zero-pad or plain
+40,6. Email inbox v2,Drop MessageType enum + drop mediaUrl/mediaMimeType/replyToMessageId,Pending,Claude,2026-09-11,Cascading refactor
+41,6. Email inbox v2,MessageAttachment table + Prisma relations,Pending,Claude,2026-09-11,url mimeType filename sizeBytes
+42,6. Email inbox v2,Backend S3 upload service (aws-sdk v3 client),Pending,Claude,2026-09-14,Blocked by task 34
+43,6. Email inbox v2,IMAP worker: download attachments → upload to S3 → create MessageAttachment rows,Pending,Claude,2026-09-14,Inbound flow
+44,6. Email inbox v2,SMTP send: fetch from S3 + attach via nodemailer,Pending,Claude,2026-09-15,Outbound flow
+45,6. Email inbox v2,Frontend: render inline images + download chips for other files,Pending,Claude,2026-09-16,Preview logic based on mimeType
+46,6. Email inbox v2,E2E test: receive email with mixed attachments → reply from Bridge with attachments,Pending,Claude,2026-09-16,Manual QA gate
+47,7. WhatsApp inbox,Meta Business Manager + WABA + phone number registration,Pending,Kunal,2026-09-15,Share 5 config values when ready (App ID Phone# ID WABA ID Access Token Verify Token)
+48,7. WhatsApp inbox,Add WhatsApp channel form + credentials shape,Pending,Claude,2026-09-17,phoneNumberId + accessToken + verifyToken (encrypted at rest)
+49,7. WhatsApp inbox,GET/POST /webhooks/whatsapp (Meta verify + receive messages),Pending,Claude,2026-09-17,Signature check via app secret
+50,7. WhatsApp inbox,WhatsApp adapter: send text via Graph API,Pending,Claude,2026-09-18,Cloud API
+51,7. WhatsApp inbox,WhatsApp adapter: translate inbound → InboundMessageEvent,Pending,Claude,2026-09-18,Reuse threadKey = contact wa_id
+52,7. WhatsApp inbox,WA media: fetch from Meta CDN → upload to S3,Pending,Claude,2026-09-21,Same S3 as email
+53,7. WhatsApp inbox,WA media: send outbound media via Graph API,Pending,Claude,2026-09-22,Upload to Meta media endpoint first
+54,7. WhatsApp inbox,E2E test: receive WhatsApp message → reply from Bridge → verify delivery,Pending,Claude,2026-09-23,
+55,8. Realtime polish,Socket.IO auth handshake works over Vercel rewrites,Partial,Claude,2026-09-23,Currently falls back to long-poll
+56,8. Realtime polish,Message.created + Conversation.updated + Presence events,Done,Claude,2026-08-25,Wired in socket gateway
+57,8. Realtime polish,Optimistic message send in frontend,Pending,Claude,2026-09-23,Show pending status
+58,8. Realtime polish,Presence toggle wired end-to-end,Done,Claude,2026-08-25,ONLINE/AWAY/OFFLINE
+59,9. Assignment,Auto-assign new tickets by round-robin among channel members,Pending,Claude,2026-09-24,Configurable per-channel
+60,9. Assignment,Manual assign/unassign UI,Done,Claude,2026-08-25,PATCH /conversations/:id/assignment
+61,9. Assignment,PENDING queue view for unassigned tickets,Pending,Claude,2026-09-24,New filter tab
+62,9. Assignment,Reassign on user deactivation,Pending,Claude,2026-09-25,Bulk reassign logic
+63,10. Bot,Simple keyword-triggered auto-reply,Pending,Claude,2026-09-25,e.g. hours → template response
+64,10. Bot,First-touch bot for common intents (greeting/thanks),Pending,Claude,2026-09-28,Static intent table
+65,10. Bot,Escalation flag: bot can't handle → forward to PENDING queue,Pending,Claude,2026-09-28,Auto-flag conversation
+66,10. Bot,Bot analytics: handled vs escalated counters,Pending,Claude,2026-09-28,Simple counter table
+67,X. Ship,Full regression pass on all channels + assignment + bot,Pending,Both,2026-09-29,Manual QA sweep
+68,X. Ship,Prod deploy freeze + smoke test → ship,Pending,Both,2026-09-30,Final ship

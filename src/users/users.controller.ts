@@ -2,8 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -13,32 +11,18 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { PresenceService } from '../presence/presence.service';
-import { SetPresenceDto } from './dto/set-presence.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponse } from './dto/user-response.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
 export class UsersController {
-  constructor(
-    private readonly users: UsersService,
-    private readonly presence: PresenceService,
-  ) {}
+  constructor(private readonly users: UsersService) {}
 
   @Get()
   @Roles(UserRole.ADMIN)
   list(): Promise<UserResponse[]> {
     return this.users.list();
-  }
-
-  @Post('me/presence')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async setMyPresence(
-    @CurrentUser() actor: AuthenticatedUser,
-    @Body() dto: SetPresenceDto,
-  ): Promise<void> {
-    await this.presence.setStatus(actor.id, dto.status);
   }
 
   @Get(':id')

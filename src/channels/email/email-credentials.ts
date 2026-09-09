@@ -13,7 +13,7 @@ import { plainToInstance, Type } from 'class-transformer';
 
 /**
  * On-disk shape for a mailbox connection. Persisted encrypted in
- * Channel.credentialsEncrypted; decrypted only when the adapter needs it.
+ * Channel.credentials_encrypted; decrypted only when the adapter needs it.
  *
  * For Gmail preset:
  *   smtp: smtp.gmail.com:465, secure=true

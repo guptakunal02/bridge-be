@@ -2,7 +2,7 @@ import { UserRole } from '@prisma/client';
 
 export interface SessionUserResponse {
   id: string;
-  email: string;
+  email: string | null;
   name: string;
   phone: string | null;
   photoUrl: string | null;

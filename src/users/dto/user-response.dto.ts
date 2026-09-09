@@ -2,7 +2,7 @@ import { User, UserRole, UserStatus } from '@prisma/client';
 
 export interface UserResponse {
   id: string;
-  email: string;
+  email: string | null;
   name: string;
   role: UserRole;
   status: UserStatus;

@@ -1,5 +1,6 @@
-// Prisma schema
-// Docs: https://pris.ly/d/prisma-schema
+// Prisma schema — bridge-be
+// Redesigned schema: 5 tables only.
+//   User, Channel, Ticket, EmailMessage, TicketActivityLog
 
 generator client {
   provider = "prisma-client-js"
@@ -9,60 +10,18 @@ datasource db {
   provider = "postgresql"
 }
 
+// ---- Enums ---------------------------------------------------------------
+
 enum UserRole {
   MEMBER
   ADMIN
+  BOT
 }
 
 enum UserStatus {
   ONLINE
   AWAY
   OFFLINE
-}
-
-model User {
-  id            String     @id @default(uuid()) @db.Uuid
-  // Stable Google-issued user id (`sub` in the ID token). Preferred key
-  // for lookup / linking; email can change but `sub` never does.
-  googleSub     String     @unique
-  email         String     @unique
-  name          String
-  phone         String?
-  photoUrl      String?
-  role          UserRole   @default(MEMBER)
-  status        UserStatus @default(OFFLINE)
-  // Every user is created unapproved on first Google sign-in. An admin
-  // must flip this to true (via DB or a future admin console) before the
-  // account can access anything past /access-restricted.
-  isApproved    Boolean    @default(false)
-  lastSeenAt    DateTime?
-  deactivatedAt DateTime?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-
-  refreshTokens         RefreshToken[]
-  channelAssignments    UserChannel[]  @relation("ChannelMember")
-  assignedChannelsBy    UserChannel[]  @relation("ChannelAssignedBy")
-  assignedConversations Conversation[] @relation("ConversationAssignee")
-  sentMessages          Message[]      @relation("MessageAuthor")
-
-  @@index([role, isApproved, deactivatedAt])
-}
-
-model RefreshToken {
-  id           String    @id @default(uuid()) @db.Uuid
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId       String    @db.Uuid
-  tokenHash    String    @unique
-  expiresAt    DateTime
-  revokedAt    DateTime?
-  replacedById String?   @db.Uuid
-  createdByIp  String?
-  userAgent    String?
-  createdAt    DateTime  @default(now())
-
-  @@index([userId, revokedAt])
-  @@index([expiresAt])
 }
 
 enum ChannelType {
@@ -76,168 +35,123 @@ enum ChannelStatus {
   DISCONNECTED
 }
 
-model Channel {
-  id                    String        @id @default(uuid()) @db.Uuid
-  type                  ChannelType
-  // Display name is what admins see everywhere in the app. Enforced
-  // globally unique so two channels can't share a label regardless of
-  // their type (Instagram vs Email vs WhatsApp).
-  displayName           String        @unique
-  externalId            String?
-  credentialsEncrypted  String?
-  // Non-secret, human-readable identifier for the connected account.
-  // For EMAIL channels this is the SMTP username. Displayed in the
-  // "connection summary" view so admins can see which mailbox is wired
-  // up without exposing the encrypted credentials blob.
-  mailboxAddress        String?
-  // Timestamp of the most recent successful OTP verification. Powers
-  // the "Last verified X ago" indicator; null means never (or the
-  // channel's credentials were rotated since the last verify).
-  credentialsVerifiedAt DateTime?
-  status                ChannelStatus @default(CONNECTED)
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
-
-  contacts      Contact[]
-  assignments   UserChannel[]
-  conversations Conversation[]
-  otpChallenges EmailChallenge[]
-
-  @@unique([type, externalId])
-  @@index([type, status])
-}
-
-// One-time-password challenge used by the "Test connection" flow: the
-// backend sends an OTP FROM the connected mailbox TO the admin's Bridge
-// email, and the admin pastes the received code back to prove SMTP
-// delivery works end-to-end. Codes are stored hashed and expire fast.
-model EmailChallenge {
-  id          String    @id @default(uuid()) @db.Uuid
-  channel     Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  channelId   String    @db.Uuid
-  sentToEmail String
-  codeHash    String
-  attempts    Int       @default(0)
-  expiresAt   DateTime
-  verifiedAt  DateTime?
-  createdAt   DateTime  @default(now())
-
-  @@index([channelId, verifiedAt])
-  @@index([expiresAt])
-}
-
-model Contact {
-  id         String   @id @default(uuid()) @db.Uuid
-  channel    Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  channelId  String   @db.Uuid
-  externalId String
-  name       String?
-  avatarUrl  String?
-  metadata   Json     @default("{}")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  conversations Conversation[]
-
-  @@unique([channelId, externalId])
-  @@index([channelId, updatedAt])
-}
-
-model UserChannel {
-  user             User     @relation("ChannelMember", fields: [userId], references: [id], onDelete: Cascade)
-  userId           String   @db.Uuid
-  channel          Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  channelId        String   @db.Uuid
-  assignedBy       User     @relation("ChannelAssignedBy", fields: [assignedByUserId], references: [id])
-  assignedByUserId String   @db.Uuid
-  createdAt        DateTime @default(now())
-
-  @@id([userId, channelId])
-  @@index([channelId])
-  @@index([userId])
-}
-
-enum ConversationStatus {
+enum TicketStatus {
   OPEN
-  PENDING
+  IN_FOLLOWUP
+  WAITING
   RESOLVED
-  SNOOZED
 }
 
 enum MessageDirection {
-  INBOUND
-  OUTBOUND
-}
-
-enum MessageAuthorType {
-  CUSTOMER
-  AGENT
-  SYSTEM
-}
-
-enum MessageType {
-  TEXT
-  IMAGE
-  VIDEO
-  AUDIO
-  FILE
-  STORY_REPLY
-  REACTION
-}
-
-enum MessageDeliveryStatus {
-  PENDING
   SENT
-  DELIVERED
-  READ
-  FAILED
+  RECEIVED
 }
 
-model Conversation {
-  id                    String             @id @default(uuid()) @db.Uuid
-  channel               Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  channelId             String             @db.Uuid
-  contact               Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  contactId             String             @db.Uuid
-  status                ConversationStatus @default(OPEN)
-  assignedUser          User?              @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  assignedUserId        String?            @db.Uuid
-  lastMessageAt         DateTime           @default(now())
-  lastCustomerMessageAt DateTime?
-  unreadCount           Int                @default(0)
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
-
-  messages Message[]
-
-  @@unique([channelId, contactId])
-  @@index([status, lastMessageAt])
-  @@index([assignedUserId, status, lastMessageAt])
-  @@index([channelId, lastMessageAt])
+enum TicketActivity {
+  CREATED
+  ASSIGNED_TO_BOT
+  ASSIGNED_TO_AGENT
+  REASSIGNED_TO_AGENT
+  PUT_INTO_FOLLOWUP
+  PUT_INTO_WAITING
+  MARKED_RESOLVED
+  REOPENED
+  NOTES_ADDED
+  SENT_BACK_TO_QUEUE
 }
 
-model Message {
-  id                String                @id @default(uuid()) @db.Uuid
-  conversation      Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  conversationId    String                @db.Uuid
-  direction         MessageDirection
-  authorType        MessageAuthorType
-  authorUser        User?                 @relation("MessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
-  authorUserId      String?               @db.Uuid
-  externalId        String?               @unique
-  type              MessageType           @default(TEXT)
-  text              String?
-  mediaUrl          String?
-  mediaMimeType     String?
-  replyToMessageId  String?               @db.Uuid
-  deliveryStatus    MessageDeliveryStatus @default(SENT)
-  errorReason       String?
-  // Server-internal per-message extras (email subject, provider ids, etc.).
-  // Not exposed in MessageResponse; used only by adapters/services.
-  metadata          Json                  @default("{}")
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
+// ---- Models --------------------------------------------------------------
 
-  @@index([conversationId, createdAt(sort: Desc), id(sort: Desc)])
-  @@index([conversationId, direction, createdAt])
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  googleSub     String?    @unique
+  email         String?    @unique
+  name          String
+  phone         String?
+  photoUrl      String?
+  role          UserRole   @default(MEMBER)
+  status        UserStatus @default(OFFLINE)
+  isApproved    Boolean    @default(false)
+  lastSeenAt    DateTime?
+  deactivatedAt DateTime?
+  // Refresh token lives inline instead of in a separate table. One
+  // active session per user — logging in on device B invalidates
+  // whatever refresh token device A was holding. Fine for a CRM.
+  refreshTokenHash      String?
+  refreshTokenExpiresAt DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  assignedTickets Ticket[] @relation("TicketAssignee")
+
+  @@index([role, isApproved, deactivatedAt])
+}
+
+model Channel {
+  id                    String        @id @default(uuid()) @db.Uuid
+  type                  ChannelType
+  displayName           String        @unique
+  inbox_contact         String?
+  credentials_encrypted String?
+  credentialsVerifiedAt DateTime?
+  status                ChannelStatus @default(DISCONNECTED)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  tickets       Ticket[]
+  emailMessages EmailMessage[]
+}
+
+model Ticket {
+  id             BigInt       @id @default(autoincrement())
+  channel        Channel      @relation(fields: [channel_id], references: [id], onDelete: Cascade)
+  channel_id     String       @db.Uuid
+  channel_type   ChannelType
+  assigneeUser   User         @relation("TicketAssignee", fields: [assignee], references: [id])
+  assignee       String       @db.Uuid
+  status         TicketStatus
+  is_reopened    Boolean      @default(false)
+  refund_related Boolean      @default(false)
+  thread_key     String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  emailMessages EmailMessage[]
+  activityLogs  TicketActivityLog[]
+
+  @@unique([channel_id, thread_key])
+  @@index([assignee, status])
+  @@index([status, updatedAt])
+}
+
+model EmailMessage {
+  id                  String           @id @default(uuid()) @db.Uuid
+  channel             Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId           String           @db.Uuid
+  subject             String?
+  type                MessageDirection
+  content             String
+  sender              String?
+  receiver            String[]
+  ticket              Ticket           @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  ticket_id           BigInt
+  external_message_id String           @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  deletedAt           DateTime?
+
+  @@index([channelId, createdAt])
+  @@index([ticket_id, createdAt])
+}
+
+model TicketActivityLog {
+  id        String         @id @default(uuid()) @db.Uuid
+  ticket    Ticket         @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  ticket_id BigInt
+  event     TicketActivity
+  log       String?
+  createdAt DateTime       @default(now())
+
+  @@index([ticket_id, createdAt])
 }

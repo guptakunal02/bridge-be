@@ -1,10 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import type { User } from '@prisma/client';
 import ms, { StringValue } from 'ms';
 import { generateOpaqueToken, hashToken } from '../common/crypto/tokens';
-import type { EnvVars } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
   SessionResponse,
@@ -17,110 +15,75 @@ export interface IssuedSession extends SessionResponse {
   refreshTokenExpiresAt: Date;
 }
 
-export interface RequestContext {
-  ip: string | null;
-  userAgent: string | null;
-}
-
 @Injectable()
 export class AuthService {
-  private readonly accessTtl: StringValue;
-  private readonly refreshTtl: StringValue;
+  private readonly accessTtl: StringValue = '15m';
+  private readonly refreshTtl: StringValue = '7d';
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
-    config: ConfigService<EnvVars, true>,
-  ) {
-    this.accessTtl = config.get('JWT_ACCESS_TTL', { infer: true });
-    this.refreshTtl = config.get('JWT_REFRESH_TTL', { infer: true });
-  }
+  ) {}
 
-  async issueSession(
-    user: User,
-    ctx: RequestContext,
-  ): Promise<IssuedSession> {
+  /**
+   * Issue a fresh access + refresh token pair for a user. Overwrites
+   * any previous refresh token on the User row (single-session-per-user
+   * semantics — logging in on a new device signs out the old one).
+   */
+  async issueSession(user: User): Promise<IssuedSession> {
     const accessToken = await this.signAccessToken(user);
     const accessTokenExpiresAt = new Date(Date.now() + ms(this.accessTtl));
 
     const rawRefresh = generateOpaqueToken();
     const refreshTokenExpiresAt = new Date(Date.now() + ms(this.refreshTtl));
 
-    await this.prisma.refreshToken.create({
+    await this.prisma.user.update({
+      where: { id: user.id },
       data: {
-        userId: user.id,
-        tokenHash: hashToken(rawRefresh),
-        expiresAt: refreshTokenExpiresAt,
-        createdByIp: ctx.ip,
-        userAgent: ctx.userAgent,
+        refreshTokenHash: hashToken(rawRefresh),
+        refreshTokenExpiresAt,
       },
     });
 
     return {
       accessToken,
       accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
-      user: this.toSessionUser(user),
+      user: toSessionUser(user),
       refreshToken: rawRefresh,
       refreshTokenExpiresAt,
     };
   }
 
-  async rotateRefresh(
-    rawRefreshToken: string,
-    ctx: RequestContext,
-  ): Promise<IssuedSession> {
+  /**
+   * Rotate a refresh token: verify the presented token matches the one
+   * stored on the User row, then generate a new pair. Invalidates the
+   * previous token in the same step.
+   */
+  async rotateRefresh(rawRefreshToken: string): Promise<IssuedSession> {
     const tokenHash = hashToken(rawRefreshToken);
 
-    return this.prisma.$transaction(async (tx) => {
-      const row = await tx.refreshToken.findUnique({
-        where: { tokenHash },
-        include: { user: true },
-      });
-
-      if (
-        !row ||
-        row.revokedAt !== null ||
-        row.expiresAt.getTime() <= Date.now() ||
-        row.user.deactivatedAt !== null
-      ) {
-        throw new UnauthorizedException('Refresh token is invalid or expired');
-      }
-
-      const rawNew = generateOpaqueToken();
-      const newExpiresAt = new Date(Date.now() + ms(this.refreshTtl));
-      const newRow = await tx.refreshToken.create({
-        data: {
-          userId: row.userId,
-          tokenHash: hashToken(rawNew),
-          expiresAt: newExpiresAt,
-          createdByIp: ctx.ip,
-          userAgent: ctx.userAgent,
-        },
-      });
-
-      await tx.refreshToken.update({
-        where: { id: row.id },
-        data: { revokedAt: new Date(), replacedById: newRow.id },
-      });
-
-      const accessToken = await this.signAccessToken(row.user);
-      const accessTokenExpiresAt = new Date(Date.now() + ms(this.accessTtl));
-
-      return {
-        accessToken,
-        accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
-        user: this.toSessionUser(row.user),
-        refreshToken: rawNew,
-        refreshTokenExpiresAt: newExpiresAt,
-      };
+    const user = await this.prisma.user.findFirst({
+      where: { refreshTokenHash: tokenHash },
     });
+
+    if (
+      !user ||
+      user.refreshTokenExpiresAt === null ||
+      user.refreshTokenExpiresAt.getTime() <= Date.now() ||
+      user.deactivatedAt !== null
+    ) {
+      throw new UnauthorizedException('Refresh token is invalid or expired');
+    }
+
+    return this.issueSession(user);
   }
 
+  /** Clear the refresh token on the user row that owns this raw token. */
   async revokeRefresh(rawRefreshToken: string): Promise<void> {
     const tokenHash = hashToken(rawRefreshToken);
-    await this.prisma.refreshToken.updateMany({
-      where: { tokenHash, revokedAt: null },
-      data: { revokedAt: new Date() },
+    await this.prisma.user.updateMany({
+      where: { refreshTokenHash: tokenHash },
+      data: { refreshTokenHash: null, refreshTokenExpiresAt: null },
     });
   }
 
@@ -141,10 +104,6 @@ export class AuthService {
     if (!user || user.deactivatedAt !== null) {
       throw new UnauthorizedException('Account is not active');
     }
-    return toSessionUser(user);
-  }
-
-  private toSessionUser(user: User): SessionUserResponse {
     return toSessionUser(user);
   }
 

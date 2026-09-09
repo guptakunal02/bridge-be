@@ -19,5 +19,5 @@ export class CreateChannelDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
-  externalId?: string;
+  inboxContact?: string;
 }
