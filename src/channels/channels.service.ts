@@ -4,8 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ChannelType, Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
+import { Channel } from '../database/entities';
+import { ChannelType } from '../database/enums';
 import type { CreateChannelDto } from './dto/create-channel.dto';
 import type { SetCredentialsDto } from './dto/set-credentials.dto';
 import type { UpdateChannelDto } from './dto/update-channel.dto';
@@ -15,35 +17,39 @@ import {
 } from './dto/channel-response.dto';
 import { EmailCredentialsService } from './email/email-credentials.service';
 
+// Postgres SQLSTATE for unique_violation — surfaced via the pg driver
+// on QueryFailedError.driverError.code.
+const PG_UNIQUE_VIOLATION = '23505';
+
 @Injectable()
 export class ChannelsService {
   constructor(
-    private readonly prisma: PrismaService,
+    @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly emailCredentials: EmailCredentialsService,
   ) {}
 
   async list(): Promise<ChannelResponse[]> {
-    const rows = await this.prisma.channel.findMany({
-      orderBy: [{ createdAt: 'asc' }],
+    const rows = await this.channels.find({
+      order: { createdAt: 'ASC' },
     });
     return rows.map(toChannelResponse);
   }
 
   async get(id: string): Promise<ChannelResponse> {
-    const channel = await this.prisma.channel.findUnique({ where: { id } });
+    const channel = await this.channels.findOne({ where: { id } });
     if (!channel) throw new NotFoundException('Channel not found');
     return toChannelResponse(channel);
   }
 
   async create(dto: CreateChannelDto): Promise<ChannelResponse> {
     try {
-      const created = await this.prisma.channel.create({
-        data: {
+      const created = await this.channels.save(
+        this.channels.create({
           type: dto.type,
           displayName: dto.displayName,
           inbox_contact: dto.inboxContact ?? null,
-        },
-      });
+        }),
+      );
       return toChannelResponse(created);
     } catch (err) {
       throw translateChannelUniqueError(err);
@@ -51,43 +57,30 @@ export class ChannelsService {
   }
 
   async update(id: string, dto: UpdateChannelDto): Promise<ChannelResponse> {
+    const existing = await this.channels.findOne({ where: { id } });
+    if (!existing) throw new NotFoundException('Channel not found');
+
     if (dto.displayName === undefined && dto.status === undefined) {
-      const existing = await this.prisma.channel.findUnique({ where: { id } });
-      if (!existing) throw new NotFoundException('Channel not found');
       return toChannelResponse(existing);
     }
 
+    const data: Partial<Channel> = {};
+    if (dto.displayName !== undefined) data.displayName = dto.displayName;
+    if (dto.status !== undefined) data.status = dto.status;
+
     try {
-      const updated = await this.prisma.channel.update({
-        where: { id },
-        data: {
-          displayName: dto.displayName,
-          status: dto.status,
-        },
-      });
-      return toChannelResponse(updated);
+      await this.channels.update({ id }, data);
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2025'
-      ) {
-        throw new NotFoundException('Channel not found');
-      }
       throw translateChannelUniqueError(err);
     }
+    const updated = await this.channels.findOneOrFail({ where: { id } });
+    return toChannelResponse(updated);
   }
 
   async remove(id: string): Promise<void> {
-    try {
-      await this.prisma.channel.delete({ where: { id } });
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2025'
-      ) {
-        throw new NotFoundException('Channel not found');
-      }
-      throw err;
+    const result = await this.channels.delete({ id });
+    if (!result.affected) {
+      throw new NotFoundException('Channel not found');
     }
   }
 
@@ -95,7 +88,7 @@ export class ChannelsService {
     id: string,
     dto: SetCredentialsDto,
   ): Promise<ChannelResponse> {
-    const channel = await this.prisma.channel.findUnique({ where: { id } });
+    const channel = await this.channels.findOne({ where: { id } });
     if (!channel) throw new NotFoundException('Channel not found');
 
     if (channel.type === ChannelType.EMAIL) {
@@ -105,15 +98,16 @@ export class ChannelsService {
         );
       }
       const envelope = this.emailCredentials.seal(dto.email);
-      const updated = await this.prisma.channel.update({
-        where: { id },
-        data: {
+      await this.channels.update(
+        { id },
+        {
           credentials_encrypted: envelope,
           // Rotating creds invalidates any prior verification — the frontend
           // should surface the Test button again once rebuilt.
           credentialsVerifiedAt: null,
         },
-      });
+      );
+      const updated = await this.channels.findOneOrFail({ where: { id } });
       return toChannelResponse(updated);
     }
     throw new BadRequestException(
@@ -123,17 +117,17 @@ export class ChannelsService {
 }
 
 /**
- * Convert Prisma's P2002 unique-constraint error on Channel into a
- * user-friendly ConflictException.
+ * Convert Postgres' unique_violation (SQLSTATE 23505), surfaced by
+ * TypeORM as QueryFailedError, into a user-friendly ConflictException.
  */
 function translateChannelUniqueError(err: unknown): Error {
   if (
-    !(err instanceof Prisma.PrismaClientKnownRequestError) ||
-    err.code !== 'P2002'
+    err instanceof QueryFailedError &&
+    (err.driverError as { code?: string })?.code === PG_UNIQUE_VIOLATION
   ) {
-    return err as Error;
+    return new ConflictException(
+      'An inbox with this display name already exists. Pick a different name.',
+    );
   }
-  return new ConflictException(
-    'An inbox with this display name already exists. Pick a different name.',
-  );
+  return err as Error;
 }

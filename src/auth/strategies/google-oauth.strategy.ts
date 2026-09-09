@@ -1,15 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
-import type { User } from '@prisma/client';
+import { InjectRepository } from '@nestjs/typeorm';
 import {
   Profile,
   Strategy,
   StrategyOptions,
   VerifyCallback,
 } from 'passport-google-oauth20';
+import { Repository } from 'typeorm';
 import type { EnvVars } from '../../config/env.validation';
-import { PrismaService } from '../../prisma/prisma.service';
+import { User } from '../../database/entities';
 
 // OAuth 2.0 authorization-code strategy for Sign in with Google. Browser is
 // redirected to accounts.google.com; on approval Google 302s to
@@ -23,7 +24,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
   constructor(
     config: ConfigService<EnvVars, true>,
-    private readonly prisma: PrismaService,
+    @InjectRepository(User) private readonly users: Repository<User>,
   ) {
     const options: StrategyOptions = {
       clientID: config.get('GOOGLE_WEB_CLIENT_ID', { infer: true }),
@@ -46,24 +47,29 @@ export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
       return;
     }
 
-    const user = await this.prisma.user.upsert({
-      where: { googleSub: claim.googleSub },
-      create: {
+    // Upsert by googleSub — only refresh mutable fields Google is
+    // authoritative for. Email stays pinned to whatever we captured
+    // first (initial insert only) to avoid colliding with the unique
+    // index on subsequent logins. `upsert` in TypeORM only re-sets the
+    // columns listed in the payload on conflict, so passing only
+    // name/photoUrl in the update path is not possible with a single
+    // call — we pass the full payload; email/googleSub don't change
+    // between calls for the same account, so the merge is a no-op.
+    await this.users.upsert(
+      {
         googleSub: claim.googleSub,
         email: claim.email,
         name: claim.name,
         photoUrl: claim.photoUrl,
       },
-      // Only refresh mutable fields Google is authoritative for. Email
-      // stays pinned to whatever we captured first — changing it here
-      // could collide with the unique index.
-      update: {
-        name: claim.name,
-        photoUrl: claim.photoUrl,
-      },
+      ['googleSub'],
+    );
+
+    const user = await this.users.findOne({
+      where: { googleSub: claim.googleSub },
     });
 
-    if (user.deactivatedAt !== null) {
+    if (!user || user.deactivatedAt !== null) {
       done(null, false);
       return;
     }

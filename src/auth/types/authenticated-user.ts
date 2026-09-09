@@ -1,4 +1,4 @@
-import type { UserRole } from '@prisma/client';
+import type { UserRole } from '../../database/enums';
 
 /** Populated on `req.user` after JwtStrategy resolves the access token. */
 export interface AuthenticatedUser {

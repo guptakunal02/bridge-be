@@ -7,8 +7,8 @@ import { HttpModule } from './common/http/http.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
+import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
-import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -22,7 +22,7 @@ import { UsersModule } from './users/users.module';
     HttpModule,
     ThrottlerModule,
     EventEmitterModule.forRoot({ wildcard: false, maxListeners: 20 }),
-    PrismaModule,
+    DatabaseModule,
     HealthModule,
     AuthModule,
     UsersModule,

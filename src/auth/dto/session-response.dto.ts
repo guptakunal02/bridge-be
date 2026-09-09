@@ -1,4 +1,4 @@
-import { UserRole } from '@prisma/client';
+import { UserRole } from '../../database/enums';
 
 export interface SessionUserResponse {
   id: string;

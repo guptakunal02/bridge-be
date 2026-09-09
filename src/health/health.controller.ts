@@ -4,17 +4,15 @@ import {
   HealthCheckResult,
   HealthCheckService,
   HealthIndicatorResult,
-  PrismaHealthIndicator,
 } from '@nestjs/terminus';
+import { DataSource } from 'typeorm';
 import { Public } from '../auth/decorators/public.decorator';
-import { PrismaService } from '../prisma/prisma.service';
 
 @Controller('health')
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
-    private readonly prismaHealth: PrismaHealthIndicator,
-    private readonly prisma: PrismaService,
+    private readonly dataSource: DataSource,
   ) {}
 
   @Public()
@@ -22,9 +20,17 @@ export class HealthController {
   @HealthCheck()
   check(): Promise<HealthCheckResult> {
     return this.health.check([
-      () => this.prismaHealth.pingCheck('database', this.prisma),
+      () => this.databaseCheck(),
       () => this.processCheck(),
     ]);
+  }
+
+  // Simple `SELECT 1` round-trip against the primary datasource. Throws
+  // if the connection is down — Terminus converts the throw into a 503
+  // with `database: { status: 'down' }`.
+  private async databaseCheck(): Promise<HealthIndicatorResult> {
+    await this.dataSource.query('SELECT 1');
+    return { database: { status: 'up' } };
   }
 
   private processCheck(): HealthIndicatorResult {

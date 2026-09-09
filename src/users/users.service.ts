@@ -4,19 +4,23 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, UserRole } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { IsNull, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { UserResponse, toUserResponse } from './dto/user-response.dto';
+import { User } from '../database/entities';
+import { UserRole } from '../database/enums';
 import type { UpdateUserDto } from './dto/update-user.dto';
+import { UserResponse, toUserResponse } from './dto/user-response.dto';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @InjectRepository(User) private readonly users: Repository<User>,
+  ) {}
 
   async list(): Promise<UserResponse[]> {
-    const users = await this.prisma.user.findMany({
-      orderBy: [{ deactivatedAt: 'asc' }, { createdAt: 'asc' }],
+    const users = await this.users.find({
+      order: { deactivatedAt: 'ASC', createdAt: 'ASC' },
     });
     return users.map(toUserResponse);
   }
@@ -25,7 +29,7 @@ export class UsersService {
     if (actor.role !== UserRole.ADMIN && actor.id !== id) {
       throw new ForbiddenException('You can only view your own profile');
     }
-    const user = await this.prisma.user.findUnique({ where: { id } });
+    const user = await this.users.findOne({ where: { id } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -50,37 +54,29 @@ export class UsersService {
 
     if (dto.role !== undefined && isSelf && dto.role !== UserRole.ADMIN) {
       // Prevent an admin demoting themselves — could lock out the only admin.
-      const adminCount = await this.prisma.user.count({
-        where: { role: UserRole.ADMIN, deactivatedAt: null },
+      const adminCount = await this.users.count({
+        where: { role: UserRole.ADMIN, deactivatedAt: IsNull() },
       });
       if (adminCount <= 1) {
         throw new BadRequestException('Cannot demote the last active admin');
       }
     }
 
-    const data: Prisma.UserUpdateInput = {};
+    const data: Partial<User> = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.photoUrl !== undefined) data.photoUrl = dto.photoUrl;
     if (dto.role !== undefined) data.role = dto.role;
 
+    const existing = await this.users.findOne({ where: { id } });
+    if (!existing) throw new NotFoundException('User not found');
+
     if (Object.keys(data).length === 0) {
-      const existing = await this.prisma.user.findUnique({ where: { id } });
-      if (!existing) throw new NotFoundException('User not found');
       return toUserResponse(existing);
     }
 
-    try {
-      const updated = await this.prisma.user.update({ where: { id }, data });
-      return toUserResponse(updated);
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2025'
-      ) {
-        throw new NotFoundException('User not found');
-      }
-      throw err;
-    }
+    await this.users.update({ id }, data);
+    const updated = await this.users.findOneOrFail({ where: { id } });
+    return toUserResponse(updated);
   }
 
   async deactivate(
@@ -90,12 +86,12 @@ export class UsersService {
     if (actor.id === id) {
       throw new BadRequestException('You cannot deactivate your own account');
     }
-    const target = await this.prisma.user.findUnique({ where: { id } });
+    const target = await this.users.findOne({ where: { id } });
     if (!target) throw new NotFoundException('User not found');
 
     if (target.role === UserRole.ADMIN) {
-      const activeAdmins = await this.prisma.user.count({
-        where: { role: UserRole.ADMIN, deactivatedAt: null },
+      const activeAdmins = await this.users.count({
+        where: { role: UserRole.ADMIN, deactivatedAt: IsNull() },
       });
       if (activeAdmins <= 1) {
         throw new BadRequestException(
@@ -104,20 +100,16 @@ export class UsersService {
       }
     }
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: { deactivatedAt: new Date() },
-    });
+    await this.users.update({ id }, { deactivatedAt: new Date() });
+    const updated = await this.users.findOneOrFail({ where: { id } });
     return toUserResponse(updated);
   }
 
   async reactivate(id: string): Promise<UserResponse> {
-    const target = await this.prisma.user.findUnique({ where: { id } });
+    const target = await this.users.findOne({ where: { id } });
     if (!target) throw new NotFoundException('User not found');
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: { deactivatedAt: null },
-    });
+    await this.users.update({ id }, { deactivatedAt: null });
+    const updated = await this.users.findOneOrFail({ where: { id } });
     return toUserResponse(updated);
   }
 }

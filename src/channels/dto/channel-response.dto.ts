@@ -1,4 +1,5 @@
-import { Channel, ChannelStatus, ChannelType } from '@prisma/client';
+import { Channel } from '../../database/entities';
+import { ChannelStatus, ChannelType } from '../../database/enums';
 
 export interface ChannelResponse {
   id: string;

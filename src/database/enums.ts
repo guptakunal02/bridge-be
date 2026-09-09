@@ -1,0 +1,47 @@
+export enum UserRole {
+  MEMBER = 'MEMBER',
+  ADMIN = 'ADMIN',
+  BOT = 'BOT',
+}
+
+export enum UserStatus {
+  ONLINE = 'ONLINE',
+  AWAY = 'AWAY',
+  OFFLINE = 'OFFLINE',
+}
+
+export enum ChannelType {
+  INSTAGRAM = 'INSTAGRAM',
+  WHATSAPP = 'WHATSAPP',
+  EMAIL = 'EMAIL',
+}
+
+export enum ChannelStatus {
+  CONNECTED = 'CONNECTED',
+  DISCONNECTED = 'DISCONNECTED',
+}
+
+export enum TicketStatus {
+  OPEN = 'OPEN',
+  IN_FOLLOWUP = 'IN_FOLLOWUP',
+  WAITING = 'WAITING',
+  RESOLVED = 'RESOLVED',
+}
+
+export enum MessageDirection {
+  SENT = 'SENT',
+  RECEIVED = 'RECEIVED',
+}
+
+export enum TicketActivity {
+  CREATED = 'CREATED',
+  ASSIGNED_TO_BOT = 'ASSIGNED_TO_BOT',
+  ASSIGNED_TO_AGENT = 'ASSIGNED_TO_AGENT',
+  REASSIGNED_TO_AGENT = 'REASSIGNED_TO_AGENT',
+  PUT_INTO_FOLLOWUP = 'PUT_INTO_FOLLOWUP',
+  PUT_INTO_WAITING = 'PUT_INTO_WAITING',
+  MARKED_RESOLVED = 'MARKED_RESOLVED',
+  REOPENED = 'REOPENED',
+  NOTES_ADDED = 'NOTES_ADDED',
+  SENT_BACK_TO_QUEUE = 'SENT_BACK_TO_QUEUE',
+}

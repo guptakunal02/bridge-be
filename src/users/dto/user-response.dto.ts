@@ -1,4 +1,5 @@
-import { User, UserRole, UserStatus } from '@prisma/client';
+import { User } from '../../database/entities';
+import { UserRole, UserStatus } from '../../database/enums';
 
 export interface UserResponse {
   id: string;

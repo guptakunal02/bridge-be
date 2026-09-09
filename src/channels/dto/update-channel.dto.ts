@@ -1,4 +1,4 @@
-import { ChannelStatus } from '@prisma/client';
+import { ChannelStatus } from '../../database/enums';
 import {
   IsEnum,
   IsOptional,

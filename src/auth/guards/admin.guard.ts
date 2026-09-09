@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '../../database/enums';
 import type { AuthenticatedUser } from '../types/authenticated-user';
 
 /**

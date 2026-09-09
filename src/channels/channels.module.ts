@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { Channel } from '../database/entities';
 import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
 import { EmailCredentialsService } from './email/email-credentials.service';
 
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, TypeOrmModule.forFeature([Channel])],
   controllers: [ChannelsController],
   providers: [ChannelsService, EmailCredentialsService],
   exports: [ChannelsService, EmailCredentialsService],

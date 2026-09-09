@@ -1,9 +1,10 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import type { User } from '@prisma/client';
+import { InjectRepository } from '@nestjs/typeorm';
 import ms, { StringValue } from 'ms';
+import { Repository } from 'typeorm';
 import { generateOpaqueToken, hashToken } from '../common/crypto/tokens';
-import { PrismaService } from '../prisma/prisma.service';
+import { User } from '../database/entities';
 import type {
   SessionResponse,
   SessionUserResponse,
@@ -21,7 +22,7 @@ export class AuthService {
   private readonly refreshTtl: StringValue = '7d';
 
   constructor(
-    private readonly prisma: PrismaService,
+    @InjectRepository(User) private readonly users: Repository<User>,
     private readonly jwt: JwtService,
   ) {}
 
@@ -37,13 +38,13 @@ export class AuthService {
     const rawRefresh = generateOpaqueToken();
     const refreshTokenExpiresAt = new Date(Date.now() + ms(this.refreshTtl));
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
+    await this.users.update(
+      { id: user.id },
+      {
         refreshTokenHash: hashToken(rawRefresh),
         refreshTokenExpiresAt,
       },
-    });
+    );
 
     return {
       accessToken,
@@ -62,7 +63,7 @@ export class AuthService {
   async rotateRefresh(rawRefreshToken: string): Promise<IssuedSession> {
     const tokenHash = hashToken(rawRefreshToken);
 
-    const user = await this.prisma.user.findFirst({
+    const user = await this.users.findOne({
       where: { refreshTokenHash: tokenHash },
     });
 
@@ -81,14 +82,14 @@ export class AuthService {
   /** Clear the refresh token on the user row that owns this raw token. */
   async revokeRefresh(rawRefreshToken: string): Promise<void> {
     const tokenHash = hashToken(rawRefreshToken);
-    await this.prisma.user.updateMany({
-      where: { refreshTokenHash: tokenHash },
-      data: { refreshTokenHash: null, refreshTokenExpiresAt: null },
-    });
+    await this.users.update(
+      { refreshTokenHash: tokenHash },
+      { refreshTokenHash: null, refreshTokenExpiresAt: null },
+    );
   }
 
   async findSessionUser(userId: string): Promise<SessionUserResponse> {
-    const user = await this.prisma.user.findUnique({
+    const user = await this.users.findOne({
       where: { id: userId },
       select: {
         id: true,

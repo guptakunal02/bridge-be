@@ -11,7 +11,7 @@ import {
   Post,
   Put,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '../database/enums';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ChannelsService } from './channels.service';
 import { ChannelResponse } from './dto/channel-response.dto';

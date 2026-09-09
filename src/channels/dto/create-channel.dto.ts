@@ -1,4 +1,4 @@
-import { ChannelType } from '@prisma/client';
+import { ChannelType } from '../../database/enums';
 import {
   IsEnum,
   IsOptional,
