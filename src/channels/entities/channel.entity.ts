@@ -6,9 +6,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { ChannelStatus, ChannelType } from '../enums';
-import { EmailMessage } from './email-message.entity';
-import { Ticket } from './ticket.entity';
+import { ChannelStatus, ChannelType } from '../../database/enums';
+import { Ticket } from '../../tickets/entities/ticket.entity';
 
 @Entity({ name: 'channel' })
 export class Channel {
@@ -41,7 +40,4 @@ export class Channel {
 
   @OneToMany(() => Ticket, (t) => t.channel)
   tickets!: Ticket[];
-
-  @OneToMany(() => EmailMessage, (m) => m.channel)
-  emailMessages!: EmailMessage[];
 }

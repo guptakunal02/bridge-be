@@ -5,7 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Repository } from 'typeorm';
 import type { EnvVars } from '../../config/env.validation';
-import { User } from '../../database/entities';
+import { User } from '../../users/entities/user.entity';
 import type {
   AccessTokenPayload,
   AuthenticatedUser,

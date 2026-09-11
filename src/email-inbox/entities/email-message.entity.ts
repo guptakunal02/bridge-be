@@ -1,4 +1,11 @@
 import {
+  ArrayNotEmpty,
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  IsString,
+} from 'class-validator';
+import {
   Column,
   CreateDateColumn,
   DeleteDateColumn,
@@ -9,9 +16,9 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { MessageDirection } from '../enums';
-import { Channel } from './channel.entity';
-import { Ticket } from './ticket.entity';
+import { Channel } from '../../channels/entities/channel.entity';
+import { Ticket } from '../../tickets/entities/ticket.entity';
+import { MessageDirection } from '../../database/enums';
 
 @Entity({ name: 'email_message' })
 @Index(['channelId', 'createdAt'])
@@ -23,33 +30,44 @@ export class EmailMessage {
   @Column({ type: 'uuid' })
   channelId!: string;
 
-  @ManyToOne(() => Channel, (c) => c.emailMessages, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Channel, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'channelId' })
   channel!: Channel;
 
   @Column({ type: 'text', nullable: true })
+  @IsString()
   subject!: string | null;
 
   @Column({ type: 'enum', enum: MessageDirection })
+  @IsEnum(MessageDirection)
   type!: MessageDirection;
 
   @Column({ type: 'text' })
+  @IsString()
+  @IsNotEmpty()
   content!: string;
 
   @Column({ type: 'text', nullable: true })
+  @IsEmail()
   sender!: string | null;
 
   @Column({ type: 'text', array: true, default: '{}' })
+  @IsEmail({}, { each: true })
+  @ArrayNotEmpty()
   receiver!: string[];
 
+  // bigint is returned as string in Node (JS `number` can't safely
+  // hold 64-bit ints), so this field is a string in TS.
   @Column({ type: 'bigint', name: 'ticket_id' })
   ticket_id!: string;
 
-  @ManyToOne(() => Ticket, (t) => t.emailMessages, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Ticket, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'ticket_id' })
   ticket!: Ticket;
 
   @Column({ type: 'text', unique: true, name: 'external_message_id' })
+  @IsString()
+  @IsNotEmpty()
   external_message_id!: string;
 
   @CreateDateColumn({ type: 'timestamptz' })

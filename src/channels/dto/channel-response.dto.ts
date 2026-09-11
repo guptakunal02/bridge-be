@@ -1,4 +1,4 @@
-import { Channel } from '../../database/entities';
+import { Channel } from '../entities/channel.entity';
 import { ChannelStatus, ChannelType } from '../../database/enums';
 
 export interface ChannelResponse {

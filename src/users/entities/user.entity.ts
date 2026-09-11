@@ -3,12 +3,10 @@ import {
   CreateDateColumn,
   Entity,
   Index,
-  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { UserRole, UserStatus } from '../enums';
-import { Ticket } from './ticket.entity';
+import { UserRole, UserStatus } from '../../database/enums';
 
 @Entity({ name: 'user' })
 @Index(['role', 'isApproved', 'deactivatedAt'])
@@ -60,7 +58,4 @@ export class User {
 
   @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt!: Date;
-
-  @OneToMany(() => Ticket, (t) => t.assigneeUser)
-  assignedTickets!: Ticket[];
 }

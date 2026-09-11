@@ -4,18 +4,38 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
-import { Channel } from '../database/entities';
-import { ChannelType } from '../database/enums';
+import { Channel } from './entities/channel.entity';
+import { ChannelStatus, ChannelType } from '../database/enums';
+import { ChannelResponse, toChannelResponse } from './dto/channel-response.dto';
 import type { CreateChannelDto } from './dto/create-channel.dto';
 import type { SetCredentialsDto } from './dto/set-credentials.dto';
 import type { UpdateChannelDto } from './dto/update-channel.dto';
-import {
-  ChannelResponse,
-  toChannelResponse,
-} from './dto/channel-response.dto';
 import { EmailCredentialsService } from './email/email-credentials.service';
+
+/**
+ * Channel lifecycle events. Consumers (currently the IMAP IDLE worker
+ * in email-inbox) subscribe via @OnEvent — this keeps ChannelsService
+ * free of any downstream feature-module imports.
+ */
+export const CHANNEL_EVENTS = {
+  CREDENTIALS_SAVED: 'channel.credentials.saved',
+  DELETED: 'channel.deleted',
+  STATUS_CHANGED: 'channel.status.changed',
+} as const;
+
+export interface ChannelCredentialsSavedEvent {
+  channelId: string;
+}
+export interface ChannelDeletedEvent {
+  channelId: string;
+}
+export interface ChannelStatusChangedEvent {
+  channelId: string;
+  status: ChannelStatus;
+}
 
 // Postgres SQLSTATE for unique_violation — surfaced via the pg driver
 // on QueryFailedError.driverError.code.
@@ -26,6 +46,7 @@ export class ChannelsService {
   constructor(
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly emailCredentials: EmailCredentialsService,
+    private readonly events: EventEmitter2,
   ) {}
 
   async list(): Promise<ChannelResponse[]> {
@@ -74,6 +95,16 @@ export class ChannelsService {
       throw translateChannelUniqueError(err);
     }
     const updated = await this.channels.findOneOrFail({ where: { id } });
+
+    // Fire an event on real status transitions so the IMAP worker can
+    // start / stop watching this inbox as needed.
+    if (dto.status !== undefined && dto.status !== existing.status) {
+      this.events.emit(CHANNEL_EVENTS.STATUS_CHANGED, {
+        channelId: id,
+        status: dto.status,
+      } satisfies ChannelStatusChangedEvent);
+    }
+
     return toChannelResponse(updated);
   }
 
@@ -82,6 +113,9 @@ export class ChannelsService {
     if (!result.affected) {
       throw new NotFoundException('Channel not found');
     }
+    this.events.emit(CHANNEL_EVENTS.DELETED, {
+      channelId: id,
+    } satisfies ChannelDeletedEvent);
   }
 
   async setCredentials(
@@ -108,6 +142,12 @@ export class ChannelsService {
         },
       );
       const updated = await this.channels.findOneOrFail({ where: { id } });
+
+      // Tell the IMAP worker to (re)start on the new credentials.
+      this.events.emit(CHANNEL_EVENTS.CREDENTIALS_SAVED, {
+        channelId: id,
+      } satisfies ChannelCredentialsSavedEvent);
+
       return toChannelResponse(updated);
     }
     throw new BadRequestException(

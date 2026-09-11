@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Channel } from '../database/entities';
+import { Channel } from './entities/channel.entity';
 import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
 import { EmailCredentialsService } from './email/email-credentials.service';

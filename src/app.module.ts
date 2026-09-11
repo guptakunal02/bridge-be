@@ -8,6 +8,7 @@ import { LoggerModule } from './common/logger/logger.module';
 import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
+import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
 import { UsersModule } from './users/users.module';
 
@@ -27,6 +28,7 @@ import { UsersModule } from './users/users.module';
     AuthModule,
     UsersModule,
     ChannelsModule,
+    EmailInboxModule,
   ],
 })
 export class AppModule {}

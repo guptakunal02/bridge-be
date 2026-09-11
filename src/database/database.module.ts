@@ -1,13 +1,9 @@
+import * as path from 'node:path';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import type { EnvVars } from '../config/env.validation';
 import { NodeEnv } from '../config/env.validation';
-import { Channel } from './entities/channel.entity';
-import { EmailMessage } from './entities/email-message.entity';
-import { Ticket } from './entities/ticket.entity';
-import { TicketActivityLog } from './entities/ticket-activity-log.entity';
-import { User } from './entities/user.entity';
 
 /**
  * TypeORM connection wiring. `synchronize: true` in dev keeps the DB
@@ -25,7 +21,14 @@ import { User } from './entities/user.entity';
         return {
           type: 'postgres',
           url: config.get('DATABASE_URL', { infer: true }),
-          entities: [User, Channel, Ticket, EmailMessage, TicketActivityLog],
+          // Auto-discover every *.entity.ts under src/. Feature modules
+          // can drop entities wherever they live (e.g.
+          // src/email-inbox/entities/email-message.entity.ts) without
+          // ever touching this file.
+          entities: [
+            path.join(__dirname, '..', '**', '*.entity.js'),
+            path.join(__dirname, '..', '**', '*.entity.ts'),
+          ],
           // Schema is owned by TypeORM migrations. Run `pnpm migration:run`
           // to apply pending migrations (both dev and prod).
           synchronize: false,

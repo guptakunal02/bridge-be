@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import ms, { StringValue } from 'ms';
 import { Repository } from 'typeorm';
 import { generateOpaqueToken, hashToken } from '../common/crypto/tokens';
-import { User } from '../database/entities';
+import { User } from '../users/entities/user.entity';
 import type {
   SessionResponse,
   SessionUserResponse,

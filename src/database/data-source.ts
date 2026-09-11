@@ -17,7 +17,7 @@ const suffix = isCompiled ? '.js' : '.ts';
 export const AppDataSource = new DataSource({
   type: 'postgres',
   url: process.env.DATABASE_URL,
-  entities: [path.join(__dirname, `entities/*.entity${suffix}`)],
+  entities: [path.join(__dirname, '..', '**', `*.entity${suffix}`)],
   migrations: [path.join(__dirname, `migrations/*${suffix}`)],
   synchronize: false,
   logging: ['error', 'schema'],

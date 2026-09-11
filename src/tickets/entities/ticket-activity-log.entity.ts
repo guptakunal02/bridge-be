@@ -7,7 +7,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { TicketActivity } from '../enums';
+import { TicketActivity } from '../../database/enums';
 import { Ticket } from './ticket.entity';
 
 @Entity({ name: 'ticket_activity_log' })

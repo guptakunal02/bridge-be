@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { User } from '../database/entities';
+import { User } from './entities/user.entity';
 import { UserRole } from '../database/enums';
 import type { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponse, toUserResponse } from './dto/user-response.dto';

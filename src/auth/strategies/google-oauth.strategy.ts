@@ -10,7 +10,7 @@ import {
 } from 'passport-google-oauth20';
 import { Repository } from 'typeorm';
 import type { EnvVars } from '../../config/env.validation';
-import { User } from '../../database/entities';
+import { User } from '../../users/entities/user.entity';
 
 // OAuth 2.0 authorization-code strategy for Sign in with Google. Browser is
 // redirected to accounts.google.com; on approval Google 302s to

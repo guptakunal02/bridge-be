@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuthGuard } from '@nestjs/passport';
-import type { User } from '../database/entities';
+import type { User } from '../users/entities/user.entity';
 import type { Request, Response } from 'express';
 import type { EnvVars } from '../config/env.validation';
 import { AuthService, IssuedSession } from './auth.service';

@@ -11,11 +11,10 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { ChannelType, TicketStatus } from '../enums';
-import { Channel } from './channel.entity';
-import { EmailMessage } from './email-message.entity';
+import { ChannelType, TicketStatus } from '../../database/enums';
+import { Channel } from '../../channels/entities/channel.entity';
+import { User } from '../../users/entities/user.entity';
 import { TicketActivityLog } from './ticket-activity-log.entity';
-import { User } from './user.entity';
 
 @Entity({ name: 'ticket' })
 @Unique('ticket_channel_thread_key_unique', ['channel_id', 'thread_key'])
@@ -41,7 +40,7 @@ export class Ticket {
   @Column({ type: 'uuid' })
   assignee!: string;
 
-  @ManyToOne(() => User, (u) => u.assignedTickets)
+  @ManyToOne(() => User)
   @JoinColumn({ name: 'assignee' })
   assigneeUser!: User;
 
@@ -65,9 +64,6 @@ export class Ticket {
 
   @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt!: Date | null;
-
-  @OneToMany(() => EmailMessage, (m) => m.ticket)
-  emailMessages!: EmailMessage[];
 
   @OneToMany(() => TicketActivityLog, (l) => l.ticket)
   activityLogs!: TicketActivityLog[];
