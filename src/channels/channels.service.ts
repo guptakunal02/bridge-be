@@ -136,6 +136,12 @@ export class ChannelsService {
         { id },
         {
           credentials_encrypted: envelope,
+          // Human-readable "Connected as X" display value.
+          inbox_contact: dto.email.smtp.username,
+          // Saving creds means the admin wants this inbox active — flip
+          // status so the IMAP worker actually starts. Status can still
+          // be toggled off via PATCH /channels/:id if they want to pause.
+          status: ChannelStatus.CONNECTED,
           // Rotating creds invalidates any prior verification — the frontend
           // should surface the Test button again once rebuilt.
           credentialsVerifiedAt: null,
