@@ -208,8 +208,12 @@ export class InitialSchema1725900000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP TABLE IF EXISTS public.ticket_activity_log CASCADE`);
-    await queryRunner.query(`DROP TABLE IF EXISTS public.email_message CASCADE`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS public.ticket_activity_log CASCADE`,
+    );
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS public.email_message CASCADE`,
+    );
     await queryRunner.query(`DROP TABLE IF EXISTS public.ticket CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS public.channel CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS public."user" CASCADE`);

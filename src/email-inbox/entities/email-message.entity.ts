@@ -47,6 +47,9 @@ export class EmailMessage {
   @IsNotEmpty()
   content!: string;
 
+  @Column({ type: 'text', nullable: true, name: 'content_html' })
+  content_html!: string | null;
+
   @Column({ type: 'text', nullable: true })
   @IsEmail()
   sender!: string | null;

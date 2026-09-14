@@ -46,6 +46,7 @@ export interface EmailMessageResponse {
   sender: string | null;
   receiver: string[];
   content: string;
+  contentHtml: string | null;
   externalMessageId: string;
   createdAt: string;
 }
@@ -127,6 +128,7 @@ function toEmailMessage(m: EmailMessage): EmailMessageResponse {
     sender: m.sender,
     receiver: m.receiver,
     content: m.content,
+    contentHtml: m.content_html,
     externalMessageId: m.external_message_id,
     createdAt: m.createdAt.toISOString(),
   };

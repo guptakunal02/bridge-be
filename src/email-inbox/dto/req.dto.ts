@@ -30,6 +30,11 @@ export class IngestEmailInbox {
   @IsNotEmpty()
   content!: string;
 
+  /** Original HTML body (if the sender included one). */
+  @IsOptional()
+  @IsString()
+  contentHtml?: string;
+
   /**
    * Gmail Message-ID header. Used as the idempotency key in
    * EmailMessage.external_message_id to dedup replays from the IMAP loop.

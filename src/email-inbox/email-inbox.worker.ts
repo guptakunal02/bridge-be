@@ -68,16 +68,16 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await Promise.all(
-      [...this.connections.values()].map((c) => c.stop()),
-    );
+    await Promise.all([...this.connections.values()].map((c) => c.stop()));
     this.connections.clear();
   }
 
   // ---- Event handlers (from ChannelsService) --------------------------
 
   @OnEvent(CHANNEL_EVENTS.CREDENTIALS_SAVED)
-  async onCredentialsSaved(payload: ChannelCredentialsSavedEvent): Promise<void> {
+  async onCredentialsSaved(
+    payload: ChannelCredentialsSavedEvent,
+  ): Promise<void> {
     // Rotate: kill the old socket (if any) then start fresh
     await this.stopForChannel(payload.channelId);
     await this.startForChannel(payload.channelId).catch((err: Error) => {
@@ -120,12 +120,7 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
     if (!channel.credentials_encrypted) return;
 
     const creds = this.credentials.open(channel.credentials_encrypted);
-    const conn = new ImapConnection(
-      channel.id,
-      creds,
-      this.inbox,
-      this.logger,
-    );
+    const conn = new ImapConnection(channel.id, creds, this.inbox, this.logger);
     await conn.start();
     this.connections.set(channel.id, conn);
   }

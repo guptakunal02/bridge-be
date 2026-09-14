@@ -92,6 +92,7 @@ export class EmailInboxService {
           type: MessageDirection.RECEIVED,
           subject: req.subject ?? null,
           content: req.content,
+          content_html: req.contentHtml ?? null,
           sender: req.sender,
           receiver: req.receiver,
           external_message_id: req.external_message_id,

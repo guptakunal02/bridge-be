@@ -262,11 +262,17 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
 
   if (!sender || receiver.length === 0 || !externalMessageId) return null;
 
+  const html =
+    typeof parsed.html === 'string' && parsed.html.trim().length > 0
+      ? parsed.html
+      : undefined;
+
   return {
     sender,
     receiver,
     subject: parsed.subject?.trim() || undefined,
     content: parsed.text?.trim() || '',
+    contentHtml: html,
     external_message_id: externalMessageId,
   };
 }
