@@ -100,6 +100,8 @@ export class AuthService {
         role: true,
         isApproved: true,
         deactivatedAt: true,
+        status: true,
+        status_changed_at: true,
       },
     });
     if (!user || user.deactivatedAt !== null) {
@@ -124,7 +126,15 @@ export class AuthService {
 function toSessionUser(
   user: Pick<
     User,
-    'id' | 'email' | 'name' | 'phone' | 'photoUrl' | 'role' | 'isApproved'
+    | 'id'
+    | 'email'
+    | 'name'
+    | 'phone'
+    | 'photoUrl'
+    | 'role'
+    | 'isApproved'
+    | 'status'
+    | 'status_changed_at'
   >,
 ): SessionUserResponse {
   return {
@@ -135,5 +145,7 @@ function toSessionUser(
     photoUrl: user.photoUrl,
     role: user.role,
     isApproved: user.isApproved,
+    status: user.status,
+    statusChangedAt: user.status_changed_at.toISOString(),
   };
 }

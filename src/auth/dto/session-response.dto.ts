@@ -1,4 +1,4 @@
-import { UserRole } from '../../database/enums';
+import { UserRole, UserStatus } from '../../database/enums';
 
 export interface SessionUserResponse {
   id: string;
@@ -8,6 +8,8 @@ export interface SessionUserResponse {
   photoUrl: string | null;
   role: UserRole;
   isApproved: boolean;
+  status: UserStatus;
+  statusChangedAt: string;
 }
 
 export interface SessionResponse {
