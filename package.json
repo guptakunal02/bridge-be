@@ -22,7 +22,8 @@
     "migration:run": "pnpm build && pnpm typeorm migration:run",
     "migration:revert": "pnpm build && pnpm typeorm migration:revert",
     "migration:show": "pnpm build && pnpm typeorm migration:show",
-    "migration:generate": "pnpm build && pnpm typeorm migration:generate src/database/migrations/Auto"
+    "migration:generate": "pnpm build && pnpm typeorm migration:generate src/database/migrations/Auto",
+    "backfill:email-html": "pnpm build && node dist/scripts/backfill-email-html.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
