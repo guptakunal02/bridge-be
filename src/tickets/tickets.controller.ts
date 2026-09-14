@@ -26,6 +26,18 @@ export class TicketsController {
     return this.tickets.list(query, user);
   }
 
+  /**
+   * Numbers for the member top strip. Cheap read — three COUNTs.
+   */
+  @Get('me/stats')
+  myStats(@CurrentUser() user: AuthenticatedUser): Promise<{
+    teamQueueCount: number;
+    activeOnMe: number;
+    resolvedTodayByMe: number;
+  }> {
+    return this.tickets.myStats(user);
+  }
+
   @Get(':id')
   get(@Param('id', ParseIntPipe) id: number): Promise<TicketDetail> {
     return this.tickets.get(String(id));

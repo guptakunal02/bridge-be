@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import {
   ChannelType,
@@ -10,6 +10,7 @@ import {
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { User } from '../users/entities/user.entity';
+import { AssignmentPickerService } from '../users/assignment-picker.service';
 import type { IngestEmailInbox } from './dto/req.dto';
 import { EmailMessage } from './entities/email-message.entity';
 import { EmailMessageRepository } from './providers/email-message.repository';
@@ -19,21 +20,26 @@ export class EmailInboxService {
   constructor(
     private readonly emails: EmailMessageRepository,
     private readonly dataSource: DataSource,
+    private readonly picker: AssignmentPickerService,
   ) {}
 
   /**
    * Persist an inbound email. Idempotent on external_message_id.
    *
    * Flow:
-   *   1. If we've already stored this Message-ID, return the existing row
-   *      (dedup for IMAP replays / worker retries).
-   *   2. Otherwise, inside a single transaction:
+   *   1. Idempotency short-circuit outside the txn (fast path for
+   *      IMAP replays / worker retries).
+   *   2. Inside a single transaction:
    *      a. Find-or-create the Ticket for this thread. For MVP the
    *         thread_key is the email's own Message-ID (one ticket per
-   *         email); real threading via References/In-Reply-To headers
-   *         is a follow-up.
-   *      b. Insert the EmailMessage row.
-   *      c. Log a CREATED activity on the ticket.
+   *         email); real threading via References/In-Reply-To
+   *         headers is a follow-up.
+   *      b. Ask the AssignmentPickerService for the next assignee —
+   *         round-robins among Online agents, falls back to BOT when
+   *         nobody is live.
+   *      c. Insert the EmailMessage row.
+   *      d. Log CREATED, then either ASSIGNED_TO_AGENT or
+   *         ASSIGNED_TO_BOT depending on the picker's choice.
    *
    * Transactional: a crash mid-way leaves no orphaned tickets or logs.
    */
@@ -41,49 +47,57 @@ export class EmailInboxService {
     channelId: string,
     req: IngestEmailInbox,
   ): Promise<EmailMessage> {
-    // 1. Idempotency short-circuit (outside the txn — fast path)
     const existing = await this.emails.findOne({
       where: { external_message_id: req.external_message_id },
     });
     if (existing) return existing;
 
     return this.dataSource.transaction(async (mgr) => {
-      // 2a. Ticket assignee defaults to the BOT user
-      const bot = await mgr.getRepository(User).findOne({
-        where: { role: UserRole.BOT },
-      });
-      if (!bot) {
-        throw new NotFoundException(
-          'BOT user is not seeded — cannot assign new tickets',
-        );
-      }
-
-      // Find-or-create the ticket by (channel_id, thread_key)
       const threadKey = req.external_message_id;
       const ticketRepo = mgr.getRepository(Ticket);
+      const logRepo = mgr.getRepository(TicketActivityLog);
+      const userRepo = mgr.getRepository(User);
+
       let ticket = await ticketRepo.findOne({
         where: { channel_id: channelId, thread_key: threadKey },
       });
+
       if (!ticket) {
+        const assigneeId = await this.picker.pickNextAssignee(mgr);
         ticket = await ticketRepo.save(
           ticketRepo.create({
             channel_id: channelId,
             channel_type: ChannelType.EMAIL,
             thread_key: threadKey,
-            assignee: bot.id,
+            assignee: assigneeId,
             status: TicketStatus.OPEN,
           }),
         );
 
-        // Log CREATED only on the first insert
-        await mgr.getRepository(TicketActivityLog).save({
+        await logRepo.save({
           ticket_id: ticket.id,
           event: TicketActivity.CREATED,
+          actor_id: null,
           log: `Ticket opened from ${req.sender}`,
+        });
+
+        const assignee = await userRepo.findOneOrFail({
+          where: { id: assigneeId },
+        });
+        await logRepo.save({
+          ticket_id: ticket.id,
+          event:
+            assignee.role === UserRole.BOT
+              ? TicketActivity.ASSIGNED_TO_BOT
+              : TicketActivity.ASSIGNED_TO_AGENT,
+          actor_id: null,
+          log:
+            assignee.role === UserRole.BOT
+              ? 'Parked on the bot — no live agents were Online'
+              : `Auto-assigned to ${assignee.name}`,
         });
       }
 
-      // 2b. Persist the email row
       const messageRepo = mgr.getRepository(EmailMessage);
       return messageRepo.save(
         messageRepo.create({

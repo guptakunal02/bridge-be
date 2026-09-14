@@ -7,6 +7,8 @@ export interface UserResponse {
   name: string;
   role: UserRole;
   status: UserStatus;
+  /** Effective start of the current status — slides forward with activity while non-ONLINE. */
+  statusChangedAt: string;
   photoUrl: string | null;
   lastSeenAt: string | null;
   deactivatedAt: string | null;
@@ -21,6 +23,7 @@ export function toUserResponse(user: User): UserResponse {
     name: user.name,
     role: user.role,
     status: user.status,
+    statusChangedAt: user.status_changed_at.toISOString(),
     photoUrl: user.photoUrl,
     lastSeenAt: user.lastSeenAt?.toISOString() ?? null,
     deactivatedAt: user.deactivatedAt?.toISOString() ?? null,

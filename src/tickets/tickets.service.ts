@@ -9,6 +9,7 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { TicketActivity, TicketStatus, UserRole } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { User } from '../users/entities/user.entity';
+import { PresenceService } from '../users/presence.service';
 import type { ListTicketsQuery, TicketScope } from './dto/list-tickets.dto';
 import {
   TicketDetail,
@@ -23,6 +24,16 @@ import { TicketActivityLog } from './entities/ticket-activity-log.entity';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 
+/**
+ * Every ticket status that is NOT terminal — the ones a member is
+ * still expected to act on. RESOLVED is intentionally excluded.
+ */
+const OPEN_STATUSES: TicketStatus[] = [
+  TicketStatus.OPEN,
+  TicketStatus.IN_FOLLOWUP,
+  TicketStatus.WAITING,
+];
+
 @Injectable()
 export class TicketsService {
   constructor(
@@ -33,6 +44,7 @@ export class TicketsService {
     private readonly emails: Repository<EmailMessage>,
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly dataSource: DataSource,
+    private readonly presence: PresenceService,
   ) {}
 
   async list(
@@ -66,6 +78,54 @@ export class TicketsService {
     return rows.map((t) =>
       toTicketListItem(t, latestByTicket.get(t.id) ?? null),
     );
+  }
+
+  /**
+   * Numbers for the member top strip:
+   *   teamQueueCount  — total tickets parked on BOT (i.e. genuinely
+   *                     unassigned), across every channel
+   *   activeOnMe      — my tickets that aren't RESOLVED
+   *   resolvedTodayByMe — my resolves since IST midnight
+   *
+   * IST is baked into the query via `AT TIME ZONE 'Asia/Kolkata'`
+   * so the cutoff matches the ops team's local day even when the DB
+   * clock is UTC.
+   */
+  async myStats(actingUser: AuthenticatedUser): Promise<{
+    teamQueueCount: number;
+    activeOnMe: number;
+    resolvedTodayByMe: number;
+  }> {
+    const bot = await this.users.findOne({ where: { role: UserRole.BOT } });
+    const botId = bot?.id ?? null;
+
+    const teamQueueCount = botId
+      ? await this.tickets.count({
+          where: { assignee: botId, status: In(OPEN_STATUSES) },
+        })
+      : 0;
+
+    const activeOnMe = await this.tickets.count({
+      where: { assignee: actingUser.id, status: In(OPEN_STATUSES) },
+    });
+
+    // Resolved-today = every MARKED_RESOLVED log this user authored
+    // since IST midnight. Actor is stored explicitly on the log row
+    // so this is a straight equality filter, not a LIKE match. IST
+    // baked into the WHERE via AT TIME ZONE so the cutoff matches
+    // the ops team's local day regardless of the DB clock.
+    const resolvedRows: Array<{ count: string }> = await this.activity
+      .createQueryBuilder('a')
+      .select('COUNT(a.id)', 'count')
+      .where('a.event = :event', { event: TicketActivity.MARKED_RESOLVED })
+      .andWhere('a.actor_id = :actorId', { actorId: actingUser.id })
+      .andWhere(
+        `a."createdAt" AT TIME ZONE 'Asia/Kolkata' >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Kolkata')`,
+      )
+      .getRawMany();
+    const resolvedTodayByMe = Number(resolvedRows[0]?.count ?? 0);
+
+    return { teamQueueCount, activeOnMe, resolvedTodayByMe };
   }
 
   async get(id: string): Promise<TicketDetail> {
@@ -155,10 +215,15 @@ export class TicketsService {
         await logRepo.save({
           ticket_id: id,
           event: entry.event,
+          actor_id: actingUser.id,
           log: entry.log,
         });
       }
     });
+
+    // Slide the acting user's status timestamp — captures the "real"
+    // break/meeting boundary as the moment of last actual work.
+    await this.presence.slideOnActivity(actingUser.id);
 
     return this.get(id);
   }

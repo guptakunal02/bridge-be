@@ -11,13 +11,32 @@ import { UserRole } from '../database/enums';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { SetStatusDto } from './dto/set-status.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UserResponse } from './dto/user-response.dto';
+import { UserResponse, toUserResponse } from './dto/user-response.dto';
+import { PresenceService } from './presence.service';
 import { UsersService } from './users.service';
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly presence: PresenceService,
+  ) {}
+
+  /**
+   * Change the caller's own availability status. Endpoint is kept
+   * separate from PATCH /users/:id so guards + audit are unambiguous:
+   * this route always acts on the caller, never someone else.
+   */
+  @Patch('me/status')
+  async setMyStatus(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() dto: SetStatusDto,
+  ): Promise<UserResponse> {
+    const updated = await this.presence.setStatus(actor.id, dto.status);
+    return toUserResponse(updated);
+  }
 
   @Get()
   @Roles(UserRole.ADMIN)

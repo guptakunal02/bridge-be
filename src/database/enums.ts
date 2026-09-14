@@ -4,9 +4,24 @@ export enum UserRole {
   BOT = 'BOT',
 }
 
+/**
+ * Availability status drives assignment routing.
+ *   ONLINE     — eligible for new auto-assignments
+ *   MEETING    — no new assignments, existing tickets stay
+ *   BREAK      — no new assignments, existing tickets stay
+ *   EMERGENCY  — no new assignments, existing tickets bounce back to team queue
+ *   OFFLINE    — no new assignments, existing tickets stay (end-of-day)
+ *
+ * Every non-ONLINE state has an "effective start" tracked by
+ * User.status_changed_at — activity while non-ONLINE slides that
+ * forward so admins see the real break/meeting boundary, not the
+ * declared one.
+ */
 export enum UserStatus {
   ONLINE = 'ONLINE',
-  AWAY = 'AWAY',
+  MEETING = 'MEETING',
+  BREAK = 'BREAK',
+  EMERGENCY = 'EMERGENCY',
   OFFLINE = 'OFFLINE',
 }
 

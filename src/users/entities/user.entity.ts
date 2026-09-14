@@ -35,6 +35,28 @@ export class User {
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.OFFLINE })
   status!: UserStatus;
 
+  /**
+   * Effective start-of-current-status. Set to NOW() on any status
+   * change. While the user is NOT ONLINE, this slides forward every
+   * time they perform a ticket-mutating action — so break/meeting
+   * duration reflects the *last activity* the user did, not the
+   * declared switch time.
+   */
+  @Column({
+    type: 'timestamptz',
+    name: 'status_changed_at',
+    default: () => 'NOW()',
+  })
+  status_changed_at!: Date;
+
+  /**
+   * Timestamp of the most recent auto-assignment. Used as the
+   * round-robin cursor: eligible members are sorted by this ASC so
+   * whoever hasn't been assigned in longest goes next.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'last_assigned_at' })
+  last_assigned_at!: Date | null;
+
   @Column({ type: 'boolean', default: false })
   isApproved!: boolean;
 
