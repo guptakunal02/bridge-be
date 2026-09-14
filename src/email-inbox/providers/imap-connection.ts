@@ -191,6 +191,12 @@ export class ImapConnection {
       )) {
         seen++;
         const uid = msg.uid;
+        // Gmail quirk: `X:*` where X > uidNext returns the highest existing
+        // UID rather than an empty result. Filter those out so the drain
+        // stays a no-op when there's genuinely nothing new.
+        if (uid && this.lastUid != null && uid <= this.lastUid) {
+          continue;
+        }
         if (!msg.source) {
           this.logger.warn(
             `[imap:${this.channelId}] drain(${trigger}) uid=${uid} has no source — skipping`,
