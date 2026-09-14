@@ -10,6 +10,7 @@ import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
+import { TicketsModule } from './tickets/tickets.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -29,6 +30,7 @@ import { UsersModule } from './users/users.module';
     UsersModule,
     ChannelsModule,
     EmailInboxModule,
+    TicketsModule,
   ],
 })
 export class AppModule {}
