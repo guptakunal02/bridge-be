@@ -64,9 +64,33 @@ export class TeamsService {
       const created = await this.teams.save(
         this.teams.create({ name: dto.name, is_default: false }),
       );
-      return toTeamResponse(created, 0);
+      // BOT is a first-class fallback member on every team so
+      // admins can toggle it just like any other agent. Idempotent
+      // via ON CONFLICT so a re-create after a partial failure is
+      // fine.
+      await this.autoAddBot(created.id);
+      const count = await this.countMembers(created.id);
+      return toTeamResponse(created, count);
     } catch (err) {
       throw translateUniqueError(err);
+    }
+  }
+
+  /**
+   * Ensures every existing BOT user is a member of the given team.
+   * Called after team creation; the migration handles the same
+   * backfill for pre-existing teams.
+   */
+  private async autoAddBot(teamId: string): Promise<void> {
+    const bots = await this.users.find({ where: { role: UserRole.BOT } });
+    for (const bot of bots) {
+      try {
+        await this.members.save(
+          this.members.create({ team_id: teamId, user_id: bot.id }),
+        );
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+      }
     }
   }
 
@@ -108,9 +132,6 @@ export class TeamsService {
     if (!team) throw new NotFoundException('Team not found');
     const user = await this.users.findOne({ where: { id: dto.userId } });
     if (!user) throw new NotFoundException('User not found');
-    if (user.role === UserRole.BOT) {
-      throw new BadRequestException('The BOT user cannot join a team');
-    }
     try {
       await this.members.save(
         this.members.create({

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, IsNull, Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { UserRole, UserStatus } from '../database/enums';
 import { User } from './entities/user.entity';
 
@@ -67,12 +67,29 @@ export class AssignmentPickerService {
       }
     }
 
-    const bot = await repo.findOne({
-      where: { role: UserRole.BOT, deactivatedAt: IsNull() },
-    });
+    // BOT is a first-class team member — the admin's toggle for it
+    // controls whether it accepts fallback tickets in this team.
+    // If BOT is paused here, ingest fails (caller catches, IMAP
+    // retries later — forces the admin to un-pause).
+    const botRows: Array<{ id: string; paused: boolean | null }> =
+      await repo.manager.query(
+        `SELECT u.id, tm.paused_in_team AS paused
+         FROM public."user" u
+         LEFT JOIN public.team_member tm
+           ON tm.user_id = u.id AND tm.team_id = $1
+         WHERE u.role = 'BOT' AND u."deactivatedAt" IS NULL
+         LIMIT 1`,
+        [teamId],
+      );
+    const bot = botRows[0];
     if (!bot) {
       throw new Error(
         'BOT user is not seeded and no live agents are available',
+      );
+    }
+    if (bot.paused === true) {
+      throw new Error(
+        'No live agents and BOT is paused on this team — un-pause BOT or set an agent Online.',
       );
     }
     return bot.id;
