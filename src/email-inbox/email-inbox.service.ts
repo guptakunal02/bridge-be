@@ -79,7 +79,7 @@ export class EmailInboxService {
         await mgr.getRepository(TicketActivityLog).save({
           ticket_id: ticket.id,
           event: TicketActivity.CREATED,
-          log: `Ticket opened from inbound email ${req.external_message_id}`,
+          log: `Ticket opened from ${req.sender}`,
         });
       }
 
