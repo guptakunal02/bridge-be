@@ -37,6 +37,14 @@ export class Ticket {
   @Column({ type: 'enum', enum: ChannelType, name: 'channel_type' })
   channel_type!: ChannelType;
 
+  /**
+   * The team responsible for handling this ticket. Set at ingest —
+   * for MVP always the default team since routing rules aren't
+   * shipped yet. Wave 3 will let rules override.
+   */
+  @Column({ type: 'uuid', name: 'team_id' })
+  team_id!: string;
+
   @Column({ type: 'uuid' })
   assignee!: string;
 

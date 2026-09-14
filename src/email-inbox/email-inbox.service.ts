@@ -7,6 +7,7 @@ import {
   TicketStatus,
   UserRole,
 } from '../database/enums';
+import { TeamsService } from '../teams/teams.service';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { User } from '../users/entities/user.entity';
@@ -21,6 +22,7 @@ export class EmailInboxService {
     private readonly emails: EmailMessageRepository,
     private readonly dataSource: DataSource,
     private readonly picker: AssignmentPickerService,
+    private readonly teams: TeamsService,
   ) {}
 
   /**
@@ -63,11 +65,16 @@ export class EmailInboxService {
       });
 
       if (!ticket) {
-        const assigneeId = await this.picker.pickNextAssignee(mgr);
+        const defaultTeam = await this.teams.getDefault();
+        const assigneeId = await this.picker.pickNextAssigneeForTeam(
+          defaultTeam.id,
+          mgr,
+        );
         ticket = await ticketRepo.save(
           ticketRepo.create({
             channel_id: channelId,
             channel_type: ChannelType.EMAIL,
+            team_id: defaultTeam.id,
             thread_key: threadKey,
             assignee: assigneeId,
             status: TicketStatus.OPEN,
