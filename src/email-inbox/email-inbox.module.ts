@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BotModule } from '../bot/bot.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { RulesModule } from '../rules/rules.module';
@@ -22,6 +23,9 @@ import { EmailMessageRepository } from './providers/email-message.repository';
     TeamsModule,
     // RoutingService — evaluates active rules on every new ticket.
     RulesModule,
+    // BotRuntimeService — fires TICKET_CREATED on fresh threads and
+    // advances any ACTIVE session on customer replies.
+    BotModule,
   ],
   controllers: [EmailInboxController],
   providers: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],

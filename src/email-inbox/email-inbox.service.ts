@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import {
+  BotTrigger,
   ChannelType,
   MessageDirection,
   TicketActivity,
@@ -8,6 +10,7 @@ import {
   UserRole,
 } from '../database/enums';
 import { RoutingService } from '../rules/routing.service';
+import { buildTicketContext } from '../rules/ticket-context';
 import { TeamsService } from '../teams/teams.service';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
@@ -25,27 +28,22 @@ export class EmailInboxService {
     private readonly picker: AssignmentPickerService,
     private readonly teams: TeamsService,
     private readonly router: RoutingService,
+    private readonly runtime: BotRuntimeService,
   ) {}
 
   /**
    * Persist an inbound email. Idempotent on external_message_id.
    *
-   * Flow:
-   *   1. Idempotency short-circuit outside the txn (fast path for
-   *      IMAP replays / worker retries).
-   *   2. Inside a single transaction:
-   *      a. Find-or-create the Ticket for this thread. For MVP the
-   *         thread_key is the email's own Message-ID (one ticket per
-   *         email); real threading via References/In-Reply-To
-   *         headers is a follow-up.
-   *      b. Ask the AssignmentPickerService for the next assignee —
-   *         round-robins among Online agents, falls back to BOT when
-   *         nobody is live.
-   *      c. Insert the EmailMessage row.
-   *      d. Log CREATED, then either ASSIGNED_TO_AGENT or
-   *         ASSIGNED_TO_BOT depending on the picker's choice.
+   * Two phases so the bot runtime never runs inside our write txn:
+   *   1. Idempotency short-circuit + transactional persist (ticket
+   *      find-or-create, routing rules, assignee picker, email row,
+   *      activity logs).
+   *   2. Post-commit bot triggers. Fresh ticket → TICKET_CREATED
+   *      trigger. Reply to an existing ticket → handleCustomerReply
+   *      so any parked question step advances on the reply text.
    *
-   * Transactional: a crash mid-way leaves no orphaned tickets or logs.
+   * The runtime never sees an in-flight transaction, so its own
+   * session writes don't fight ours for row locks.
    */
   async ingestInbound(
     channelId: string,
@@ -56,90 +54,121 @@ export class EmailInboxService {
     });
     if (existing) return existing;
 
-    return this.dataSource.transaction(async (mgr) => {
-      const threadKey = req.external_message_id;
-      const ticketRepo = mgr.getRepository(Ticket);
-      const logRepo = mgr.getRepository(TicketActivityLog);
-      const userRepo = mgr.getRepository(User);
+    const { message, ticket, wasNewTicket } = await this.dataSource.transaction(
+      async (mgr) => {
+        const threadKey = req.external_message_id;
+        const ticketRepo = mgr.getRepository(Ticket);
+        const logRepo = mgr.getRepository(TicketActivityLog);
+        const userRepo = mgr.getRepository(User);
 
-      let ticket = await ticketRepo.findOne({
-        where: { channel_id: channelId, thread_key: threadKey },
-      });
+        let ticket = await ticketRepo.findOne({
+          where: { channel_id: channelId, thread_key: threadKey },
+        });
+        const isNew = !ticket;
 
-      if (!ticket) {
-        // Route via active rules first. First matching rule wins;
-        // fall back to the default team when nothing matches.
-        const routed = await this.router.routeFacts(
-          {
-            createdAt: new Date(),
-            channelType: ChannelType.EMAIL,
-            senderEmail: req.sender,
+        if (!ticket) {
+          const routed = await this.router.routeFacts(
+            {
+              createdAt: new Date(),
+              channelType: ChannelType.EMAIL,
+              senderEmail: req.sender,
+              subject: req.subject ?? null,
+              tags: [],
+            },
+            mgr,
+          );
+          const targetTeamId =
+            routed?.teamId ?? (await this.teams.getDefault()).id;
+
+          const assigneeId = await this.picker.pickNextAssigneeForTeam(
+            targetTeamId,
+            mgr,
+          );
+          ticket = await ticketRepo.save(
+            ticketRepo.create({
+              channel_id: channelId,
+              channel_type: ChannelType.EMAIL,
+              team_id: targetTeamId,
+              thread_key: threadKey,
+              assignee: assigneeId,
+              status: TicketStatus.OPEN,
+            }),
+          );
+
+          await logRepo.save({
+            ticket_id: ticket.id,
+            event: TicketActivity.CREATED,
+            actor_id: null,
+            log: routed
+              ? `Ticket opened from ${req.sender} — routed by rule "${routed.matchedRule.name}"`
+              : `Ticket opened from ${req.sender}`,
+          });
+
+          const assignee = await userRepo.findOneOrFail({
+            where: { id: assigneeId },
+          });
+          await logRepo.save({
+            ticket_id: ticket.id,
+            event:
+              assignee.role === UserRole.BOT
+                ? TicketActivity.ASSIGNED_TO_BOT
+                : TicketActivity.ASSIGNED_TO_AGENT,
+            actor_id: null,
+            log:
+              assignee.role === UserRole.BOT
+                ? 'Parked on the bot — no live agents were Online'
+                : `Auto-assigned to ${assignee.name}`,
+          });
+        }
+
+        const messageRepo = mgr.getRepository(EmailMessage);
+        const saved = await messageRepo.save(
+          messageRepo.create({
+            channelId,
+            ticket_id: ticket.id,
+            type: MessageDirection.RECEIVED,
             subject: req.subject ?? null,
-            // Tags are always empty at ingest — a rule that keys off
-            // tags only matches after someone tags the ticket. That
-            // limitation is documented in the FE builder.
-            tags: [],
-          },
-          mgr,
-        );
-        const targetTeamId =
-          routed?.teamId ?? (await this.teams.getDefault()).id;
-
-        const assigneeId = await this.picker.pickNextAssigneeForTeam(
-          targetTeamId,
-          mgr,
-        );
-        ticket = await ticketRepo.save(
-          ticketRepo.create({
-            channel_id: channelId,
-            channel_type: ChannelType.EMAIL,
-            team_id: targetTeamId,
-            thread_key: threadKey,
-            assignee: assigneeId,
-            status: TicketStatus.OPEN,
+            content: req.content,
+            content_html: req.contentHtml ?? null,
+            sender: req.sender,
+            receiver: req.receiver,
+            external_message_id: req.external_message_id,
           }),
         );
 
-        await logRepo.save({
-          ticket_id: ticket.id,
-          event: TicketActivity.CREATED,
-          actor_id: null,
-          log: routed
-            ? `Ticket opened from ${req.sender} — routed by rule "${routed.matchedRule.name}"`
-            : `Ticket opened from ${req.sender}`,
-        });
+        return { message: saved, ticket, wasNewTicket: isNew };
+      },
+    );
 
-        const assignee = await userRepo.findOneOrFail({
-          where: { id: assigneeId },
+    // Post-commit bot dispatch. Failures here don't roll back the
+    // email — the ticket is already the source of truth for humans.
+    try {
+      if (wasNewTicket) {
+        await this.runtime.startSession({
+          ticketId: ticket.id,
+          channelId,
+          trigger: BotTrigger.TICKET_CREATED,
+          initialVariables: buildTicketContext({
+            createdAt: ticket.createdAt,
+            channelType: ChannelType.EMAIL,
+            senderEmail: req.sender,
+            subject: req.subject ?? null,
+            tags: ticket.tags ?? [],
+          }),
         });
-        await logRepo.save({
-          ticket_id: ticket.id,
-          event:
-            assignee.role === UserRole.BOT
-              ? TicketActivity.ASSIGNED_TO_BOT
-              : TicketActivity.ASSIGNED_TO_AGENT,
-          actor_id: null,
-          log:
-            assignee.role === UserRole.BOT
-              ? 'Parked on the bot — no live agents were Online'
-              : `Auto-assigned to ${assignee.name}`,
+      } else {
+        await this.runtime.handleCustomerReply({
+          ticketId: ticket.id,
+          channelId,
+          replyText: req.content,
         });
       }
+    } catch {
+      // Runtime errors already logged inside the service. Swallow
+      // so the HTTP call still returns 2xx — the message is safely
+      // persisted regardless.
+    }
 
-      const messageRepo = mgr.getRepository(EmailMessage);
-      return messageRepo.save(
-        messageRepo.create({
-          channelId,
-          ticket_id: ticket.id,
-          type: MessageDirection.RECEIVED,
-          subject: req.subject ?? null,
-          content: req.content,
-          content_html: req.contentHtml ?? null,
-          sender: req.sender,
-          receiver: req.receiver,
-          external_message_id: req.external_message_id,
-        }),
-      );
-    });
+    return message;
   }
 }

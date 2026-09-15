@@ -6,8 +6,15 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { TicketActivity, TicketStatus, UserRole } from '../database/enums';
+import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
+import {
+  BotTrigger,
+  TicketActivity,
+  TicketStatus,
+  UserRole,
+} from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
+import { buildTicketContext } from '../rules/ticket-context';
 import { User } from '../users/entities/user.entity';
 import { PresenceService } from '../users/presence.service';
 import type { ListTicketsQuery, TicketScope } from './dto/list-tickets.dto';
@@ -45,6 +52,7 @@ export class TicketsService {
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly presence: PresenceService,
+    private readonly runtime: BotRuntimeService,
   ) {}
 
   async list(
@@ -183,6 +191,11 @@ export class TicketsService {
       throw new BadRequestException('Nothing to update');
     }
 
+    // Capture added tags across the txn boundary — we fire a
+    // BotTrigger.TICKET_TAG_ADDED after commit so the runtime never
+    // runs inside our write transaction.
+    let addedTags: string[] = [];
+
     await this.dataSource.transaction(async (mgr) => {
       const ticketRepo = mgr.getRepository(Ticket);
       const logRepo = mgr.getRepository(TicketActivityLog);
@@ -236,6 +249,7 @@ export class TicketsService {
           patch.tags = nextTags;
           const added = nextTags.filter((t) => !prevTags.includes(t));
           const removed = prevTags.filter((t) => !nextTags.includes(t));
+          addedTags = added;
           const parts: string[] = [];
           if (added.length) parts.push(`added [${added.join(', ')}]`);
           if (removed.length) parts.push(`removed [${removed.join(', ')}]`);
@@ -263,7 +277,37 @@ export class TicketsService {
     // break/meeting boundary as the moment of last actual work.
     await this.presence.slideOnActivity(actingUser.id);
 
-    return this.get(id);
+    const detail = await this.get(id);
+
+    // Fire TICKET_TAG_ADDED to any flow that keys off it. `added_tags`
+    // is exposed as a first-class variable so flow authors can branch
+    // on "which tag was just added" without walking the whole tags
+    // array.
+    if (addedTags.length > 0) {
+      try {
+        const firstMsg = detail.messages[0] ?? null;
+        await this.runtime.startSession({
+          ticketId: id,
+          channelId: detail.channelId,
+          trigger: BotTrigger.TICKET_TAG_ADDED,
+          initialVariables: {
+            ...buildTicketContext({
+              createdAt: new Date(detail.createdAt),
+              channelType: detail.channelType,
+              senderEmail: firstMsg?.sender ?? null,
+              subject: firstMsg?.subject ?? null,
+              tags: detail.tags,
+            }),
+            added_tags: addedTags,
+          },
+        });
+      } catch {
+        // Runtime failures are logged inside the service — swallow
+        // so the human-side PATCH still returns success.
+      }
+    }
+
+    return detail;
   }
 
   private async applyScope(

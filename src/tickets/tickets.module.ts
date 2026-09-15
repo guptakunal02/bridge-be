@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BotModule } from '../bot/bot.module';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
@@ -12,6 +13,9 @@ import { TicketsService } from './tickets.service';
   imports: [
     TypeOrmModule.forFeature([Ticket, TicketActivityLog, EmailMessage, User]),
     UsersModule,
+    // BotRuntimeService — fires TICKET_TAG_ADDED after every
+    // successful tag update.
+    BotModule,
   ],
   controllers: [TicketsController],
   providers: [TicketsService],
