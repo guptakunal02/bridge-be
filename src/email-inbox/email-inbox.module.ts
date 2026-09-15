@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
+import { RulesModule } from '../rules/rules.module';
 import { TeamsModule } from '../teams/teams.module';
 import { UsersModule } from '../users/users.module';
 import { EmailInboxController } from './email-inbox.controller';
@@ -19,6 +20,8 @@ import { EmailMessageRepository } from './providers/email-message.repository';
     UsersModule,
     // TeamsService — needed to resolve the default team every ingest.
     TeamsModule,
+    // RoutingService — evaluates active rules on every new ticket.
+    RulesModule,
   ],
   controllers: [EmailInboxController],
   providers: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],

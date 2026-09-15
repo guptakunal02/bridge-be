@@ -7,6 +7,7 @@ import {
   TicketStatus,
   UserRole,
 } from '../database/enums';
+import { RoutingService } from '../rules/routing.service';
 import { TeamsService } from '../teams/teams.service';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
@@ -23,6 +24,7 @@ export class EmailInboxService {
     private readonly dataSource: DataSource,
     private readonly picker: AssignmentPickerService,
     private readonly teams: TeamsService,
+    private readonly router: RoutingService,
   ) {}
 
   /**
@@ -65,16 +67,33 @@ export class EmailInboxService {
       });
 
       if (!ticket) {
-        const defaultTeam = await this.teams.getDefault();
+        // Route via active rules first. First matching rule wins;
+        // fall back to the default team when nothing matches.
+        const routed = await this.router.routeFacts(
+          {
+            createdAt: new Date(),
+            channelType: ChannelType.EMAIL,
+            senderEmail: req.sender,
+            subject: req.subject ?? null,
+            // Tags are always empty at ingest — a rule that keys off
+            // tags only matches after someone tags the ticket. That
+            // limitation is documented in the FE builder.
+            tags: [],
+          },
+          mgr,
+        );
+        const targetTeamId =
+          routed?.teamId ?? (await this.teams.getDefault()).id;
+
         const assigneeId = await this.picker.pickNextAssigneeForTeam(
-          defaultTeam.id,
+          targetTeamId,
           mgr,
         );
         ticket = await ticketRepo.save(
           ticketRepo.create({
             channel_id: channelId,
             channel_type: ChannelType.EMAIL,
-            team_id: defaultTeam.id,
+            team_id: targetTeamId,
             thread_key: threadKey,
             assignee: assigneeId,
             status: TicketStatus.OPEN,
@@ -85,7 +104,9 @@ export class EmailInboxService {
           ticket_id: ticket.id,
           event: TicketActivity.CREATED,
           actor_id: null,
-          log: `Ticket opened from ${req.sender}`,
+          log: routed
+            ? `Ticket opened from ${req.sender} — routed by rule "${routed.matchedRule.name}"`
+            : `Ticket opened from ${req.sender}`,
         });
 
         const assignee = await userRepo.findOneOrFail({

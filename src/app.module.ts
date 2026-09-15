@@ -10,6 +10,7 @@ import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
+import { RulesModule } from './rules/rules.module';
 import { TeamsModule } from './teams/teams.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { UsersModule } from './users/users.module';
@@ -33,6 +34,7 @@ import { UsersModule } from './users/users.module';
     EmailInboxModule,
     TicketsModule,
     TeamsModule,
+    RulesModule,
   ],
 })
 export class AppModule {}
