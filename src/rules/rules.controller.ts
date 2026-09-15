@@ -16,8 +16,6 @@ import type { AttributeDefinition } from './attributes';
 import { CreateRuleDto, UpdateRuleDto, ValidateRuleDto } from './dto/rule.dto';
 import { RuleResponse } from './dto/rule-response.dto';
 import { RuleEvaluatorService } from './rule-evaluator.service';
-import { RuleValidatorService } from './rule-validator.service';
-import type { ValidationResult } from './rule-validator.service';
 import { RulesService } from './rules.service';
 
 @Controller('rules')
@@ -26,7 +24,6 @@ export class RulesController {
   constructor(
     private readonly rules: RulesService,
     private readonly evaluator: RuleEvaluatorService,
-    private readonly validator: RuleValidatorService,
   ) {}
 
   /**
@@ -68,13 +65,19 @@ export class RulesController {
   }
 
   /**
-   * One-click auto-validate. Synthesises a matching ticket in memory
-   * (no DB write) and confirms the evaluator agrees. Reports whether
-   * the tree is structurally valid AND actually matchable — the two
-   * together are the "green tick" the FE surfaces.
+   * One-click auto-validate. Runs three checks in one round trip:
+   *   1. Structural validation (attributes, operators, value types)
+   *   2. Matchability (a synthesised ticket exists that fires it)
+   *   3. Mutual exclusivity vs every other rule in the system
+   *
+   * When editing an existing rule, the caller passes ruleId so the
+   * overlap check excludes it from the "others" set. Nothing is
+   * persisted — no synthetic ticket ever hits the DB.
    */
   @Post('validate')
-  validate(@Body() dto: ValidateRuleDto): ValidationResult {
-    return this.validator.validate(dto.conditionTree);
+  async validate(
+    @Body() dto: ValidateRuleDto,
+  ): Promise<ReturnType<RulesService['validateCandidate']>> {
+    return this.rules.validateCandidate(dto.conditionTree, dto.ruleId ?? null);
   }
 }

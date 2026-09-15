@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, Not, IsNull, Repository } from 'typeorm';
 import { RoutingRule } from './entities/routing-rule.entity';
 import { ConditionTree, RuleEvaluatorService } from './rule-evaluator.service';
 import type { IngestFacts } from './ticket-context';
@@ -43,14 +43,20 @@ export class RoutingService {
       ? mgr.getRepository(RoutingRule)
       : this.rules;
 
+    // Only rules that are both active AND attached to a team route
+    // tickets. Unattached rules are stored definitions waiting for a
+    // team to claim them.
     const active = await repo.find({
-      where: { is_active: true },
+      where: { is_active: true, team_id: Not(IsNull()) },
       order: { createdAt: 'ASC' },
     });
     if (active.length === 0) return null;
 
     const ctx = buildTicketContext(facts);
     for (const rule of active) {
+      // team_id can be null on the entity but the query above filtered
+      // to attached rules only — belt-and-braces re-check keeps TS happy.
+      if (rule.team_id === null) continue;
       const tree = rule.condition_tree as ConditionTree;
       if (this.evaluator.evaluate(tree, ctx)) {
         return {

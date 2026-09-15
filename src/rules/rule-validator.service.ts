@@ -3,6 +3,7 @@ import { AttributeDefinition, findAttribute } from './attributes';
 import {
   Condition,
   ConditionGroup,
+  ConditionTree,
   RuleEvaluatorService,
   TicketContext,
 } from './rule-evaluator.service';
@@ -16,6 +17,13 @@ export interface ValidationResult {
   sampleTicket: TicketContext | null;
   /** Human-readable outcome for the FE toast. */
   message: string;
+}
+
+export interface Overlap {
+  otherRuleId: string;
+  otherRuleName: string;
+  /** A ticket that both this candidate and the other rule would match. */
+  sampleTicket: TicketContext;
 }
 
 /**
@@ -77,6 +85,83 @@ export class RuleValidatorService {
       message:
         'This rule can never match — the conditions contradict each other. Check for conflicting operators on the same attribute (e.g. hour equals 10 AND hour equals 20).',
     };
+  }
+
+  /**
+   * Given a candidate tree and every other rule in the system, return
+   * the ones the candidate would overlap with. Two rules overlap when
+   * there exists a context that satisfies at least one group of each.
+   *
+   *   candidate matches when: any group Ai holds
+   *   other     matches when: any group Bj holds
+   *   overlap = ∃ i,j such that (Ai ∧ Bj) is satisfiable
+   *
+   * Ai ∧ Bj is itself an AND-group — we reuse synthesiseFromGroup to
+   * try to build a satisfying context. If we find one, the pair
+   * overlaps and we return it as the sample.
+   */
+  checkOverlap(
+    candidate: unknown,
+    others: Array<{ id: string; name: string; conditionTree: unknown }>,
+  ): Overlap[] {
+    // Structural failures are the caller's problem; overlap is only
+    // meaningful for well-formed trees. Bail early if the candidate
+    // itself is malformed — the caller already surfaces that error.
+    try {
+      this.evaluator.validate(candidate);
+    } catch {
+      return [];
+    }
+    const candTree = candidate;
+
+    const overlaps: Overlap[] = [];
+    for (const other of others) {
+      let otherTree: ConditionTree;
+      try {
+        this.evaluator.validate(other.conditionTree);
+        otherTree = other.conditionTree;
+      } catch {
+        // Skip malformed existing rules — they can't route anything
+        // anyway, so they can't conflict.
+        continue;
+      }
+
+      const sample = this.findOverlapSample(candTree, otherTree);
+      if (sample) {
+        overlaps.push({
+          otherRuleId: other.id,
+          otherRuleName: other.name,
+          sampleTicket: sample,
+        });
+      }
+    }
+    return overlaps;
+  }
+
+  private findOverlapSample(
+    a: ConditionTree,
+    b: ConditionTree,
+  ): TicketContext | null {
+    for (const ga of a.groups) {
+      for (const gb of b.groups) {
+        const merged: ConditionGroup = {
+          conditions: [...ga.conditions, ...gb.conditions],
+        };
+        const sample = this.synthesiseFromGroup(merged);
+        if (!sample) continue;
+        // Belt-and-braces: confirm both trees actually accept the
+        // sample. synthesiseFromGroup already guarantees this for
+        // the merged conditions, but running the real evaluator
+        // guards against future divergence.
+        if (
+          this.evaluator.evaluate(a, sample) &&
+          this.evaluator.evaluate(b, sample)
+        ) {
+          return sample;
+        }
+      }
+    }
+    return null;
   }
 
   /**

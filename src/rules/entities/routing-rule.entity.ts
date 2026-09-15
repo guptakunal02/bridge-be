@@ -38,12 +38,18 @@ export class RoutingRule {
   @Column({ type: 'text', unique: true })
   name!: string;
 
-  @Column({ type: 'uuid', name: 'team_id' })
-  team_id!: string;
+  /**
+   * Which team consumes matches from this rule. Nullable — a rule
+   * without a team is a stored definition that doesn't route
+   * anything. The team-creation modal is what attaches rules to
+   * teams; the routing engine skips rules with team_id IS NULL.
+   */
+  @Column({ type: 'uuid', name: 'team_id', nullable: true })
+  team_id!: string | null;
 
   @ManyToOne(() => Team, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'team_id' })
-  team!: Team;
+  team!: Team | null;
 
   @Column({ type: 'jsonb', name: 'condition_tree' })
   condition_tree!: unknown;

@@ -3,7 +3,7 @@ import { RoutingRule } from '../entities/routing-rule.entity';
 export interface RuleResponse {
   id: string;
   name: string;
-  teamId: string;
+  teamId: string | null;
   teamName: string | null;
   conditionTree: unknown;
   isActive: boolean;
