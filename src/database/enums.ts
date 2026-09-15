@@ -48,6 +48,51 @@ export enum MessageDirection {
   RECEIVED = 'RECEIVED',
 }
 
+/**
+ * Where a bot flow starts. Each trigger fires with a distinct set of
+ * variables the flow can key off — e.g. `ticket.created` puts the
+ * fresh sender + subject + channel into session state. `event.custom`
+ * is reserved for the future proactive-campaign use case.
+ */
+export enum BotTrigger {
+  TICKET_CREATED = 'ticket.created',
+  TICKET_MESSAGE_RECEIVED = 'ticket.message.received',
+  TICKET_TAG_ADDED = 'ticket.tag.added',
+}
+
+/**
+ * Kind of step. Config JSONB shape depends on the kind:
+ *   message  — { text, nextStepId }
+ *   question — { text, options: [{ label, nextStepId }], timeout? }
+ *   function — { functionKey, inputs, outputVariable, nextStepId }
+ *   branch   — { branches: [{ conditions, nextStepId }, ...] }
+ *   handoff  — { teamId?, note? }   (terminal)
+ */
+export enum BotStepType {
+  MESSAGE = 'message',
+  QUESTION = 'question',
+  FUNCTION = 'function',
+  BRANCH = 'branch',
+  HANDOFF = 'handoff',
+}
+
+/**
+ * Lifecycle of a per-ticket conversation.
+ *   ACTIVE     — the runtime is driving; the customer's next reply
+ *                advances the current step.
+ *   COMPLETED  — the flow ended without a handoff.
+ *   HANDOFF    — a handoff step fired; the ticket now sits with a
+ *                team as a normal human-assigned ticket.
+ *   FAILED     — an unrecoverable error (missing function, malformed
+ *                config, etc.). Manual intervention required.
+ */
+export enum BotSessionStatus {
+  ACTIVE = 'active',
+  COMPLETED = 'completed',
+  HANDOFF = 'handoff',
+  FAILED = 'failed',
+}
+
 export enum TicketActivity {
   CREATED = 'CREATED',
   ASSIGNED_TO_BOT = 'ASSIGNED_TO_BOT',
