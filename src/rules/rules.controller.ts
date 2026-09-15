@@ -13,9 +13,11 @@ import {
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../database/enums';
 import type { AttributeDefinition } from './attributes';
-import { CreateRuleDto, TestRuleDto, UpdateRuleDto } from './dto/rule.dto';
+import { CreateRuleDto, UpdateRuleDto, ValidateRuleDto } from './dto/rule.dto';
 import { RuleResponse } from './dto/rule-response.dto';
 import { RuleEvaluatorService } from './rule-evaluator.service';
+import { RuleValidatorService } from './rule-validator.service';
+import type { ValidationResult } from './rule-validator.service';
 import { RulesService } from './rules.service';
 
 @Controller('rules')
@@ -24,6 +26,7 @@ export class RulesController {
   constructor(
     private readonly rules: RulesService,
     private readonly evaluator: RuleEvaluatorService,
+    private readonly validator: RuleValidatorService,
   ) {}
 
   /**
@@ -65,27 +68,13 @@ export class RulesController {
   }
 
   /**
-   * Dry-run: evaluate this rule against a hand-crafted context.
-   * Returns { matched: boolean } so the FE can show green/red.
+   * One-click auto-validate. Synthesises a matching ticket in memory
+   * (no DB write) and confirms the evaluator agrees. Reports whether
+   * the tree is structurally valid AND actually matchable — the two
+   * together are the "green tick" the FE surfaces.
    */
-  @Post(':id/test')
-  async testMatch(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: TestRuleDto,
-  ): Promise<{ matched: boolean }> {
-    const matched = await this.rules.testMatch(id, dto.context);
-    return { matched };
-  }
-
-  /**
-   * Dry-run against an unsaved condition tree — used while the admin
-   * is still editing in the builder.
-   */
-  @Post('test-tree')
-  testTree(
-    @Body() body: { conditionTree: unknown; context: Record<string, unknown> },
-  ): { matched: boolean } {
-    const matched = this.rules.testTree(body.conditionTree, body.context);
-    return { matched };
+  @Post('validate')
+  validate(@Body() dto: ValidateRuleDto): ValidationResult {
+    return this.validator.validate(dto.conditionTree);
   }
 }

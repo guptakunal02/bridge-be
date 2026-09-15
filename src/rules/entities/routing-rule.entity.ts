@@ -23,12 +23,14 @@ import { Team } from '../../teams/entities/team.entity';
  * Groups are OR'd, conditions within a group are AND'd. Two-level
  * nesting only; no arbitrary depth. Validation lives in the service.
  *
- * Ordering: rules are evaluated in `priority` ASC. First match wins;
- * subsequent rules don't get a look. `is_active = false` skips the
- * rule entirely — useful for pausing without losing the definition.
+ * Ordering: rules evaluate in createdAt ASC (oldest first) — no
+ * priority column. Rules are equal-weight; admins are expected to
+ * keep their condition trees mutually exclusive. `is_active = false`
+ * skips the rule entirely — useful for pausing without losing the
+ * definition.
  */
 @Entity({ name: 'routing_rule' })
-@Index(['is_active', 'priority'])
+@Index(['is_active', 'createdAt'])
 export class RoutingRule {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -45,9 +47,6 @@ export class RoutingRule {
 
   @Column({ type: 'jsonb', name: 'condition_tree' })
   condition_tree!: unknown;
-
-  @Column({ type: 'integer', default: 100 })
-  priority!: number;
 
   @Column({ type: 'boolean', default: true, name: 'is_active' })
   is_active!: boolean;

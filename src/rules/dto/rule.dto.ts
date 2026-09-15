@@ -1,13 +1,10 @@
 import {
   IsBoolean,
-  IsInt,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
-  Max,
   MaxLength,
-  Min,
   MinLength,
 } from 'class-validator';
 
@@ -22,12 +19,6 @@ export class CreateRuleDto {
 
   @IsObject()
   conditionTree!: unknown;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(9999)
-  priority?: number;
 
   @IsOptional()
   @IsBoolean()
@@ -50,22 +41,16 @@ export class UpdateRuleDto {
   conditionTree?: unknown;
 
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(9999)
-  priority?: number;
-
-  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 }
 
 /**
- * Payload for POST /rules/:id/test — hand-crafted attribute values
- * for a dry run. Any key not sent defaults to null and the evaluator
- * treats it as "no match."
+ * Payload for POST /rules/validate — checks a candidate tree without
+ * saving it. Backend synthesises a sample ticket that would satisfy
+ * the first group's conditions and confirms the evaluator agrees.
  */
-export class TestRuleDto {
+export class ValidateRuleDto {
   @IsObject()
-  context!: Record<string, unknown>;
+  conditionTree!: unknown;
 }

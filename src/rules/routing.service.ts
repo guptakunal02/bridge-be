@@ -45,7 +45,7 @@ export class RoutingService {
 
     const active = await repo.find({
       where: { is_active: true },
-      order: { priority: 'ASC', createdAt: 'ASC' },
+      order: { createdAt: 'ASC' },
     });
     if (active.length === 0) return null;
 
