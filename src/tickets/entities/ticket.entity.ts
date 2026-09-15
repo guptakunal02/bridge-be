@@ -64,6 +64,15 @@ export class Ticket {
   @Column({ type: 'text', name: 'thread_key' })
   thread_key!: string;
 
+  /**
+   * Free-form labels used by routing rules and by humans to
+   * categorise threads. Stored as a Postgres text[] with a GIN
+   * index — the routing engine relies on `tags @> ARRAY[...]`
+   * containment queries.
+   */
+  @Column({ type: 'text', array: true, default: '{}' })
+  tags!: string[];
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

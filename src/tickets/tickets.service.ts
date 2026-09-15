@@ -128,6 +128,22 @@ export class TicketsService {
     return { teamQueueCount, activeOnMe, resolvedTodayByMe };
   }
 
+  /**
+   * Every distinct tag ever attached to a ticket, sorted. Backs the
+   * autocomplete in the tag chip editor. Postgres' UNNEST + DISTINCT
+   * is O(N) over ticket rows — cheap enough at MVP scale; add a
+   * materialised view if it ever gets slow.
+   */
+  async listTags(): Promise<string[]> {
+    const rows: Array<{ tag: string }> = await this.tickets.manager.query(
+      `SELECT DISTINCT unnest(tags) AS tag
+       FROM public.ticket
+       WHERE "deletedAt" IS NULL
+       ORDER BY tag ASC`,
+    );
+    return rows.map((r) => r.tag);
+  }
+
   async get(id: string): Promise<TicketDetail> {
     const ticket = await this.tickets.findOne({
       where: { id },
@@ -159,7 +175,11 @@ export class TicketsService {
     dto: UpdateTicketDto,
     actingUser: AuthenticatedUser,
   ): Promise<TicketDetail> {
-    if (dto.status === undefined && dto.assigneeId === undefined) {
+    if (
+      dto.status === undefined &&
+      dto.assigneeId === undefined &&
+      dto.tags === undefined
+    ) {
       throw new BadRequestException('Nothing to update');
     }
 
@@ -206,6 +226,24 @@ export class TicketsService {
           event,
           log: `Status ${ticket.status} → ${dto.status} by ${actingUser.email ?? actingUser.id}`,
         });
+      }
+
+      if (dto.tags !== undefined) {
+        const nextTags = normaliseTags(dto.tags);
+        const prevTags = (ticket.tags ?? []).slice().sort();
+        const nextSorted = nextTags.slice().sort();
+        if (!arraysEqual(prevTags, nextSorted)) {
+          patch.tags = nextTags;
+          const added = nextTags.filter((t) => !prevTags.includes(t));
+          const removed = prevTags.filter((t) => !nextTags.includes(t));
+          const parts: string[] = [];
+          if (added.length) parts.push(`added [${added.join(', ')}]`);
+          if (removed.length) parts.push(`removed [${removed.join(', ')}]`);
+          logs.push({
+            event: TicketActivity.NOTES_ADDED,
+            log: `Tags ${parts.join('; ')} by ${actingUser.email ?? actingUser.id}`,
+          });
+        }
       }
 
       if (Object.keys(patch).length > 0) {
@@ -309,4 +347,28 @@ function pickStatusEvent(
   // next === OPEN
   if (prev === TicketStatus.RESOLVED) return TicketActivity.REOPENED;
   return TicketActivity.SENT_BACK_TO_QUEUE;
+}
+
+/**
+ * DTO validation already enforces the shape; this is defensive de-dup
+ * + trim so the DB representation stays canonical regardless of
+ * whitespace quirks in the incoming payload.
+ */
+function normaliseTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tags) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }

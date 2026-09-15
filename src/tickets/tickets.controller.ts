@@ -38,6 +38,15 @@ export class TicketsController {
     return this.tickets.myStats(user);
   }
 
+  /**
+   * Every distinct tag ever attached to a ticket — powers the
+   * autocomplete in the tag chip editor.
+   */
+  @Get('tags/all')
+  listTags(): Promise<string[]> {
+    return this.tickets.listTags();
+  }
+
   @Get(':id')
   get(@Param('id', ParseIntPipe) id: number): Promise<TicketDetail> {
     return this.tickets.get(String(id));

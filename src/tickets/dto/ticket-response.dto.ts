@@ -31,6 +31,7 @@ export interface TicketListItem {
   isReopened: boolean;
   refundRelated: boolean;
   threadKey: string;
+  tags: string[];
   assignee: TicketAssigneeSummary | null;
   latestMessage: TicketLatestMessage | null;
   createdAt: string;
@@ -77,6 +78,7 @@ export function toTicketListItem(
     isReopened: ticket.is_reopened,
     refundRelated: ticket.refund_related,
     threadKey: ticket.thread_key,
+    tags: ticket.tags ?? [],
     assignee: ticket.assigneeUser
       ? {
           id: ticket.assigneeUser.id,
