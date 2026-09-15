@@ -5,11 +5,34 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import type { EnvVars } from '../config/env.validation';
 import { NodeEnv } from '../config/env.validation';
 
+export const OPS_CONNECTION = 'ops';
+
 /**
- * TypeORM connection wiring. `synchronize: true` in dev keeps the DB
- * schema in sync with entity classes on every boot — no migrations
- * needed while iterating. For production, flip to `synchronize: false`
- * and generate a migration with `typeorm migration:generate`.
+ * Rewrite the DATABASE_URL's pathname (`/bridge`) to point at a
+ * different logical DB (`/surma_common_ops`). Same host, port,
+ * user, password, TLS — just a different database name.
+ *
+ * Kept as a plain function so callers can compose their own URLs
+ * without spinning up a full Nest context (useful in tests / scripts).
+ */
+export function buildOpsUrl(baseUrl: string, opsDbName: string): string {
+  const parsed = new URL(baseUrl);
+  parsed.pathname = `/${opsDbName}`;
+  return parsed.toString();
+}
+
+/**
+ * TypeORM wiring. Two connections:
+ *
+ *   default — the Bridge DB. Schema owned by our migrations. Every
+ *             entity in `src/` auto-registers here.
+ *
+ *   ops     — the read-only surma_common_ops DB. NO entities are
+ *             registered (empty array), migrations are off, and
+ *             `synchronize: false` guarantees TypeORM never emits
+ *             a DDL statement against it. All access goes through
+ *             `OpsReadService`, which only exposes SELECT-style
+ *             query helpers.
  */
 @Module({
   imports: [
@@ -17,22 +40,43 @@ import { NodeEnv } from '../config/env.validation';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService<EnvVars, true>) => {
-        const isProd = config.get('NODE_ENV', { infer: true }) === NodeEnv.Production;
+        const isProd =
+          config.get('NODE_ENV', { infer: true }) === NodeEnv.Production;
         return {
           type: 'postgres',
           url: config.get('DATABASE_URL', { infer: true }),
-          // Auto-discover every *.entity.ts under src/. Feature modules
-          // can drop entities wherever they live (e.g.
-          // src/email-inbox/entities/email-message.entity.ts) without
-          // ever touching this file.
           entities: [
             path.join(__dirname, '..', '**', '*.entity.js'),
             path.join(__dirname, '..', '**', '*.entity.ts'),
           ],
-          // Schema is owned by TypeORM migrations. Run `pnpm migration:run`
-          // to apply pending migrations (both dev and prod).
           synchronize: false,
           migrationsRun: false,
+          logging: false,
+          ssl: isProd ? { rejectUnauthorized: false } : false,
+        };
+      },
+    }),
+    TypeOrmModule.forRootAsync({
+      name: OPS_CONNECTION,
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvVars, true>) => {
+        const isProd =
+          config.get('NODE_ENV', { infer: true }) === NodeEnv.Production;
+        return {
+          type: 'postgres',
+          url: buildOpsUrl(
+            config.get('DATABASE_URL', { infer: true }),
+            config.get('DB_OPS_NAME', { infer: true }),
+          ),
+          // Empty entities = TypeORM has no model of the ops schema.
+          // Handlers use raw SQL through OpsReadService, so if the
+          // ops schema evolves we don't need a Bridge deploy to keep
+          // reads working.
+          entities: [],
+          synchronize: false,
+          migrationsRun: false,
+          migrations: [],
           logging: false,
           ssl: isProd ? { rejectUnauthorized: false } : false,
         };

@@ -29,6 +29,15 @@ export class EnvVars {
   @MinLength(1)
   DATABASE_URL!: string;
 
+  /**
+   * Read-only companion DB — same RDS host / creds as DATABASE_URL,
+   * just a different logical database. Bridge NEVER writes here;
+   * bot function handlers use it for order / customer lookups.
+   */
+  @IsString()
+  @MinLength(1)
+  DB_OPS_NAME!: string;
+
   @IsUrl({ require_tld: false, require_protocol: true })
   FRONTEND_ORIGIN!: string;
 
