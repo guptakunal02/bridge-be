@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AuthModule } from './auth/auth.module';
+import { BotModule } from './bot/bot.module';
 import { ChannelsModule } from './channels/channels.module';
 import { HttpModule } from './common/http/http.module';
 import { LoggerModule } from './common/logger/logger.module';
@@ -35,6 +36,7 @@ import { UsersModule } from './users/users.module';
     TicketsModule,
     TeamsModule,
     RulesModule,
+    BotModule,
   ],
 })
 export class AppModule {}
