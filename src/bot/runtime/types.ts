@@ -7,15 +7,21 @@ import type { ConditionTree } from '../../rules/rule-evaluator.service';
  * are safe by contract.
  */
 
+/**
+ * A message step. `options` is what decides whether the runtime
+ * blocks:
+ *   options empty / missing → send `text`, advance via nextStepId
+ *                             (or the linear next step at position+1).
+ *   options[] present       → send text + buttons, wait for the
+ *                             customer to reply with one of the
+ *                             labels, route to that option's
+ *                             nextStepId.
+ */
 export interface MessageStepConfig {
   text: string;
-  nextStepId?: string;
-}
-
-export interface QuestionStepConfig {
-  text: string;
-  options: Array<{ label: string; nextStepId: string }>;
+  options?: Array<{ label: string; nextStepId: string }>;
   timeoutSeconds?: number;
+  nextStepId?: string;
 }
 
 export interface FunctionStepConfig {
@@ -38,14 +44,13 @@ export interface HandoffStepConfig {
 }
 
 /**
- * Every message the runtime asks the ChannelAdapter to send. Kept
- * intentionally small — templates / rich cards can come later once
- * the WhatsApp adapter is real.
+ * Every message the runtime asks the ChannelAdapter to send. Options
+ * are optional — a message without them is pure text; with them it's
+ * text plus a button list the channel adapter renders however its
+ * medium allows (WhatsApp: quick-reply buttons; email: numbered list;
+ * SMS: plain enumeration).
  */
-export type OutboundMessage =
-  | { kind: 'text'; text: string }
-  | {
-      kind: 'question';
-      text: string;
-      options: Array<{ label: string }>;
-    };
+export interface OutboundMessage {
+  text: string;
+  options?: Array<{ label: string }>;
+}

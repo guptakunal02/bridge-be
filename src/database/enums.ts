@@ -62,15 +62,20 @@ export enum BotTrigger {
 
 /**
  * Kind of step. Config JSONB shape depends on the kind:
- *   message  — { text, nextStepId }
- *   question — { text, options: [{ label, nextStepId }], timeout? }
+ *   message  — { text,
+ *                options?: [{ label, nextStepId }],
+ *                timeoutSeconds?,
+ *                nextStepId? }
+ *              Zero options → auto-advance via nextStepId (or the
+ *              linear next step at position+1).
+ *              1+ options → send text + button list, wait for the
+ *              customer to pick, route on that option's nextStepId.
  *   function — { functionKey, inputs, outputVariable, nextStepId }
  *   branch   — { branches: [{ conditions, nextStepId }, ...] }
  *   handoff  — { teamId?, note? }   (terminal)
  */
 export enum BotStepType {
   MESSAGE = 'message',
-  QUESTION = 'question',
   FUNCTION = 'function',
   BRANCH = 'branch',
   HANDOFF = 'handoff',

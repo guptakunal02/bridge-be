@@ -24,7 +24,6 @@ import type {
   FunctionStepConfig,
   HandoffStepConfig,
   MessageStepConfig,
-  QuestionStepConfig,
 } from './types';
 
 /**
@@ -124,14 +123,14 @@ export class BotRuntimeService {
     const step = await this.steps.findOne({
       where: { id: session.current_step_id },
     });
-    if (!step || step.type !== BotStepType.QUESTION) {
-      // Session is active but not parked on a question — this reply
-      // isn't for us. Runtime silence is the right call; the human
-      // routing path picks it up as a normal inbound message.
-      return;
-    }
+    if (!step || step.type !== BotStepType.MESSAGE) return;
 
-    const cfg = step.config as QuestionStepConfig;
+    const cfg = step.config as MessageStepConfig;
+    // Only messages with reply options wait for a reply. A plain
+    // (options-less) message wouldn't have blocked the runtime here
+    // in the first place, so this reply isn't for us.
+    if (!cfg.options || cfg.options.length === 0) return;
+
     const normalised = input.replyText.trim().toLowerCase();
     const match = cfg.options.find(
       (o) => o.label.trim().toLowerCase() === normalised,
@@ -241,23 +240,20 @@ export class BotRuntimeService {
             step,
             session.variables,
           );
+          if (cfg.options && cfg.options.length > 0) {
+            // Message with reply buttons — block. handleCustomerReply
+            // matches the reply to an option label and advances via
+            // that option's nextStepId.
+            return;
+          }
+          // Plain message — auto-advance to nextStepId (or the linear
+          // position + 1 fallback).
           session.current_step_id = await this.resolveLinearNext(
             step,
             cfg.nextStepId,
           );
           await this.sessions.save(session);
-          break; // continue loop
-        }
-
-        case BotStepType.QUESTION: {
-          await this.sendStep(
-            session.ticket_id,
-            channelId,
-            step,
-            session.variables,
-          );
-          // Block: wait for handleCustomerReply to advance us.
-          return;
+          break;
         }
 
         case BotStepType.FUNCTION: {
@@ -350,27 +346,19 @@ export class BotRuntimeService {
     step: BotStep,
     variables: Record<string, unknown>,
   ): Promise<void> {
-    if (step.type === BotStepType.MESSAGE) {
-      const cfg = step.config as MessageStepConfig;
-      await this.channel.send({
-        ticketId,
-        channelId,
-        message: { kind: 'text', text: renderText(cfg.text, variables) },
-      });
-    } else if (step.type === BotStepType.QUESTION) {
-      const cfg = step.config as QuestionStepConfig;
-      await this.channel.send({
-        ticketId,
-        channelId,
-        message: {
-          kind: 'question',
-          text: renderText(cfg.text, variables),
-          options: cfg.options.map((o) => ({
-            label: renderText(o.label, variables),
-          })),
-        },
-      });
-    }
+    if (step.type !== BotStepType.MESSAGE) return;
+    const cfg = step.config as MessageStepConfig;
+    const options = cfg.options?.length
+      ? cfg.options.map((o) => ({ label: renderText(o.label, variables) }))
+      : undefined;
+    await this.channel.send({
+      ticketId,
+      channelId,
+      message: {
+        text: renderText(cfg.text, variables),
+        options,
+      },
+    });
   }
 
   private async applyHandoff(

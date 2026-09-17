@@ -36,9 +36,6 @@ export class StepConfigValidator {
       case BotStepType.MESSAGE:
         this.validateMessage(cfg, strict);
         return;
-      case BotStepType.QUESTION:
-        this.validateQuestion(cfg, strict);
-        return;
       case BotStepType.FUNCTION:
         this.validateFunction(cfg, strict);
         return;
@@ -51,6 +48,11 @@ export class StepConfigValidator {
     }
   }
 
+  /**
+   * Unified message validator. Handles both:
+   *   - "send text and auto-advance" (options empty / missing)
+   *   - "send text + reply buttons, wait for a pick" (options set)
+   */
   private validateMessage(cfg: Record<string, unknown>, strict: boolean): void {
     if (cfg.text !== undefined && typeof cfg.text !== 'string') {
       throw new BadRequestException(
@@ -63,30 +65,10 @@ export class StepConfigValidator {
       );
     }
     optionalUuid(cfg.nextStepId, 'Message step: config.nextStepId');
-  }
 
-  private validateQuestion(
-    cfg: Record<string, unknown>,
-    strict: boolean,
-  ): void {
-    if (cfg.text !== undefined && typeof cfg.text !== 'string') {
-      throw new BadRequestException(
-        'Question step: config.text must be a string',
-      );
-    }
-    if (strict && (typeof cfg.text !== 'string' || cfg.text.trim() === '')) {
-      throw new BadRequestException(
-        'Question step: config.text must be a non-empty string',
-      );
-    }
     if (cfg.options !== undefined && !Array.isArray(cfg.options)) {
       throw new BadRequestException(
-        'Question step: config.options must be an array when set',
-      );
-    }
-    if (strict && (!Array.isArray(cfg.options) || cfg.options.length === 0)) {
-      throw new BadRequestException(
-        'Question step: config.options must be a non-empty array',
+        'Message step: config.options must be an array when set',
       );
     }
     if (Array.isArray(cfg.options)) {
@@ -94,18 +76,18 @@ export class StepConfigValidator {
         const o = asObject(opt);
         if (o.label !== undefined && typeof o.label !== 'string') {
           throw new BadRequestException(
-            `Question step: option ${i}: label must be a string`,
+            `Message step: option ${i}: label must be a string`,
           );
         }
         if (strict && (typeof o.label !== 'string' || o.label.trim() === '')) {
           throw new BadRequestException(
-            `Question step: option ${i}: label must be a non-empty string`,
+            `Message step: option ${i}: label must be a non-empty string`,
           );
         }
         if (strict) {
-          requireUuid(o.nextStepId, `Question step: option ${i}: nextStepId`);
+          requireUuid(o.nextStepId, `Message step: option ${i}: nextStepId`);
         } else {
-          optionalUuid(o.nextStepId, `Question step: option ${i}: nextStepId`);
+          optionalUuid(o.nextStepId, `Message step: option ${i}: nextStepId`);
         }
       });
     }
@@ -116,7 +98,7 @@ export class StepConfigValidator {
         cfg.timeoutSeconds < 1
       ) {
         throw new BadRequestException(
-          'Question step: config.timeoutSeconds must be a positive integer',
+          'Message step: config.timeoutSeconds must be a positive integer',
         );
       }
     }

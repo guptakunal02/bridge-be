@@ -32,16 +32,12 @@ export class LoggingChannelAdapter implements ChannelAdapter {
     message: OutboundMessage;
   }): Promise<void> {
     const { ticketId, channelId, message } = input;
-    if (message.kind === 'text') {
-      this.logger.log(
-        `[stub-send] channel=${channelId} ticket=${ticketId} text="${message.text}"`,
-      );
-    } else {
-      const options = message.options.map((o) => o.label).join(' | ');
-      this.logger.log(
-        `[stub-send] channel=${channelId} ticket=${ticketId} question="${message.text}" options=[${options}]`,
-      );
-    }
+    const suffix = message.options?.length
+      ? ` options=[${message.options.map((o) => o.label).join(' | ')}]`
+      : '';
+    this.logger.log(
+      `[stub-send] channel=${channelId} ticket=${ticketId} text="${message.text}"${suffix}`,
+    );
     return Promise.resolve();
   }
 }
