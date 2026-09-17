@@ -5,34 +5,45 @@ import { findFunction } from '../functions/registry';
 
 /**
  * Validates a step's config JSONB against the shape declared for its
- * type. Used by:
- *   - flows service on create / update, to reject malformed configs
- *     before they hit the DB
- *   - runtime, so a config that survived an evolution of the schema
- *     is caught before it drives a real conversation
+ * type. Two modes:
+ *
+ *   strict = false  (default, used by flows CRUD):
+ *     Structural-only. Tolerates scaffold configs — empty message
+ *     text, empty options[], missing functionKey, empty branches[].
+ *     A blank Add-step click should always succeed so the admin can
+ *     fill it in.
+ *
+ *   strict = true   (used by the runtime before executing):
+ *     Every required field must be present and non-empty. A missing
+ *     text or functionKey at this point means the flow is unfinished
+ *     and the runtime marks the session FAILED with a clear log.
+ *
+ * Both modes still reject *structural* garbage (wrong types on any
+ * present field, unknown attributes in branch conditions, unknown
+ * function keys) — those are always bugs regardless of when they
+ * surface.
  *
  * Cross-reference validation (nextStepId points at a step that
- * actually exists in this flow) is the flows service's job — that
- * needs the full step set, which the validator doesn't know about.
+ * actually exists in this flow) is the flows service's job.
  */
 @Injectable()
 export class StepConfigValidator {
   constructor(private readonly evaluator: RuleEvaluatorService) {}
 
-  validate(type: BotStepType, rawConfig: unknown): void {
+  validate(type: BotStepType, rawConfig: unknown, strict = false): void {
     const cfg = asObject(rawConfig);
     switch (type) {
       case BotStepType.MESSAGE:
-        this.validateMessage(cfg);
+        this.validateMessage(cfg, strict);
         return;
       case BotStepType.QUESTION:
-        this.validateQuestion(cfg);
+        this.validateQuestion(cfg, strict);
         return;
       case BotStepType.FUNCTION:
-        this.validateFunction(cfg);
+        this.validateFunction(cfg, strict);
         return;
       case BotStepType.BRANCH:
-        this.validateBranch(cfg);
+        this.validateBranch(cfg, strict);
         return;
       case BotStepType.HANDOFF:
         this.validateHandoff(cfg);
@@ -40,8 +51,13 @@ export class StepConfigValidator {
     }
   }
 
-  private validateMessage(cfg: Record<string, unknown>): void {
-    if (typeof cfg.text !== 'string' || cfg.text.trim() === '') {
+  private validateMessage(cfg: Record<string, unknown>, strict: boolean): void {
+    if (cfg.text !== undefined && typeof cfg.text !== 'string') {
+      throw new BadRequestException(
+        'Message step: config.text must be a string',
+      );
+    }
+    if (strict && (typeof cfg.text !== 'string' || cfg.text.trim() === '')) {
       throw new BadRequestException(
         'Message step: config.text must be a non-empty string',
       );
@@ -49,26 +65,50 @@ export class StepConfigValidator {
     optionalUuid(cfg.nextStepId, 'Message step: config.nextStepId');
   }
 
-  private validateQuestion(cfg: Record<string, unknown>): void {
-    if (typeof cfg.text !== 'string' || cfg.text.trim() === '') {
+  private validateQuestion(
+    cfg: Record<string, unknown>,
+    strict: boolean,
+  ): void {
+    if (cfg.text !== undefined && typeof cfg.text !== 'string') {
+      throw new BadRequestException(
+        'Question step: config.text must be a string',
+      );
+    }
+    if (strict && (typeof cfg.text !== 'string' || cfg.text.trim() === '')) {
       throw new BadRequestException(
         'Question step: config.text must be a non-empty string',
       );
     }
-    if (!Array.isArray(cfg.options) || cfg.options.length === 0) {
+    if (cfg.options !== undefined && !Array.isArray(cfg.options)) {
+      throw new BadRequestException(
+        'Question step: config.options must be an array when set',
+      );
+    }
+    if (strict && (!Array.isArray(cfg.options) || cfg.options.length === 0)) {
       throw new BadRequestException(
         'Question step: config.options must be a non-empty array',
       );
     }
-    cfg.options.forEach((opt: unknown, i) => {
-      const o = asObject(opt);
-      if (typeof o.label !== 'string' || o.label.trim() === '') {
-        throw new BadRequestException(
-          `Question step: option ${i}: label must be a non-empty string`,
-        );
-      }
-      requireUuid(o.nextStepId, `Question step: option ${i}: nextStepId`);
-    });
+    if (Array.isArray(cfg.options)) {
+      cfg.options.forEach((opt: unknown, i) => {
+        const o = asObject(opt);
+        if (o.label !== undefined && typeof o.label !== 'string') {
+          throw new BadRequestException(
+            `Question step: option ${i}: label must be a string`,
+          );
+        }
+        if (strict && (typeof o.label !== 'string' || o.label.trim() === '')) {
+          throw new BadRequestException(
+            `Question step: option ${i}: label must be a non-empty string`,
+          );
+        }
+        if (strict) {
+          requireUuid(o.nextStepId, `Question step: option ${i}: nextStepId`);
+        } else {
+          optionalUuid(o.nextStepId, `Question step: option ${i}: nextStepId`);
+        }
+      });
+    }
     if (cfg.timeoutSeconds !== undefined) {
       if (
         typeof cfg.timeoutSeconds !== 'number' ||
@@ -82,48 +122,82 @@ export class StepConfigValidator {
     }
   }
 
-  private validateFunction(cfg: Record<string, unknown>): void {
-    if (typeof cfg.functionKey !== 'string') {
-      throw new BadRequestException(
-        'Function step: config.functionKey must be a string',
-      );
+  private validateFunction(
+    cfg: Record<string, unknown>,
+    strict: boolean,
+  ): void {
+    if (cfg.functionKey !== undefined) {
+      if (typeof cfg.functionKey !== 'string') {
+        throw new BadRequestException(
+          'Function step: config.functionKey must be a string',
+        );
+      }
+      if (cfg.functionKey !== '' && !findFunction(cfg.functionKey)) {
+        throw new BadRequestException(
+          `Function step: no registered function "${cfg.functionKey}"`,
+        );
+      }
     }
-    const fn = findFunction(cfg.functionKey);
-    if (!fn) {
+    if (
+      strict &&
+      (typeof cfg.functionKey !== 'string' || cfg.functionKey === '')
+    ) {
       throw new BadRequestException(
-        `Function step: no registered function "${cfg.functionKey}"`,
+        'Function step: config.functionKey is required — pick a function.',
       );
     }
     if (
       cfg.inputs !== undefined &&
-      (typeof cfg.inputs !== 'object' || Array.isArray(cfg.inputs))
+      (typeof cfg.inputs !== 'object' ||
+        cfg.inputs === null ||
+        Array.isArray(cfg.inputs))
     ) {
       throw new BadRequestException(
         'Function step: config.inputs must be an object mapping input names to values or `${variable}` refs',
       );
     }
     if (
-      typeof cfg.outputVariable !== 'string' ||
-      cfg.outputVariable.trim() === ''
+      cfg.outputVariable !== undefined &&
+      typeof cfg.outputVariable !== 'string'
     ) {
       throw new BadRequestException(
-        'Function step: config.outputVariable must be a non-empty string (the session-variable key the function output lands under)',
+        'Function step: config.outputVariable must be a string',
+      );
+    }
+    if (
+      strict &&
+      (typeof cfg.outputVariable !== 'string' ||
+        cfg.outputVariable.trim() === '')
+    ) {
+      throw new BadRequestException(
+        'Function step: config.outputVariable is required — pick a session-variable key to store the output under.',
       );
     }
     optionalUuid(cfg.nextStepId, 'Function step: config.nextStepId');
   }
 
-  private validateBranch(cfg: Record<string, unknown>): void {
-    if (!Array.isArray(cfg.branches) || cfg.branches.length === 0) {
+  private validateBranch(cfg: Record<string, unknown>, strict: boolean): void {
+    if (cfg.branches !== undefined && !Array.isArray(cfg.branches)) {
+      throw new BadRequestException(
+        'Branch step: config.branches must be an array when set',
+      );
+    }
+    if (strict && (!Array.isArray(cfg.branches) || cfg.branches.length === 0)) {
       throw new BadRequestException(
         'Branch step: config.branches must be a non-empty array',
       );
     }
+    if (!Array.isArray(cfg.branches)) return;
+
     const branches: unknown[] = cfg.branches;
     let sawDefault = false;
     branches.forEach((branch: unknown, i) => {
       const b = asObject(branch);
-      requireUuid(b.nextStepId, `Branch step: branch ${i}: nextStepId`);
+      if (strict) {
+        requireUuid(b.nextStepId, `Branch step: branch ${i}: nextStepId`);
+      } else {
+        optionalUuid(b.nextStepId, `Branch step: branch ${i}: nextStepId`);
+      }
       if (b.conditions === undefined || b.conditions === null) {
         if (sawDefault) {
           throw new BadRequestException(
@@ -186,7 +260,7 @@ function requireUuid(value: unknown, label: string): void {
 }
 
 function optionalUuid(value: unknown, label: string): void {
-  if (value === undefined || value === null) return;
+  if (value === undefined || value === null || value === '') return;
   if (typeof value !== 'string' || !UUID_RE.test(value)) {
     throw new BadRequestException(`${label} must be a UUID when set`);
   }

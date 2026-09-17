@@ -219,7 +219,10 @@ export class BotRuntimeService {
       }
 
       try {
-        this.configValidator.validate(step.type, step.config);
+        // Strict mode: at execution time every required field must
+        // be filled. Scaffolds are legal at save-time (so the FE
+        // builder can create and edit) but not at run-time.
+        this.configValidator.validate(step.type, step.config, true);
       } catch (err) {
         this.logger.error(
           `Session ${session.id} step ${step.id} has invalid config: ${(err as Error).message}`,
