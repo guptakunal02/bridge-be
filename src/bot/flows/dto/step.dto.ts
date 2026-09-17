@@ -1,12 +1,23 @@
+import { Type } from 'class-transformer';
 import {
   ArrayNotEmpty,
   IsArray,
   IsEnum,
+  IsNumber,
   IsObject,
   IsOptional,
   IsUUID,
+  ValidateNested,
 } from 'class-validator';
 import { BotStepType } from '../../../database/enums';
+
+export class CanvasPositionDto {
+  @IsNumber()
+  x!: number;
+
+  @IsNumber()
+  y!: number;
+}
 
 export class CreateStepDto {
   @IsEnum(BotStepType)
@@ -20,6 +31,12 @@ export class CreateStepDto {
   @IsOptional()
   @IsObject()
   config?: Record<string, unknown>;
+
+  /** Where the node lands on the canvas. Defaulted by the service if omitted. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CanvasPositionDto)
+  canvasPosition?: CanvasPositionDto;
 }
 
 export class UpdateStepDto {
@@ -30,6 +47,11 @@ export class UpdateStepDto {
   @IsOptional()
   @IsObject()
   config?: Record<string, unknown>;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CanvasPositionDto)
+  canvasPosition?: CanvasPositionDto;
 }
 
 export class ReorderStepsDto {

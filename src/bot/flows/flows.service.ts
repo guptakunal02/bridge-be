@@ -145,13 +145,19 @@ export class FlowsService {
       const flowRepo = mgr.getRepository(BotFlow);
 
       const position = await stepRepo.count({ where: { flow_id: flowId } });
+      // Default canvas position: 180px below the current lowest node
+      // so newly-added nodes never overlap on the canvas. Client can
+      // override with an explicit canvasPosition (e.g. when the admin
+      // drops a step from the palette at a specific spot).
+      const canvasPosition =
+        dto.canvasPosition ?? (await defaultCanvasPosition(stepRepo, flowId));
       const created = await stepRepo.save(
         stepRepo.create({
           flow_id: flowId,
           position,
           type: dto.type,
-          // Cast around the `unknown` type on the jsonb column.
           config: dto.config ?? {},
+          canvas_position: canvasPosition,
         }),
       );
 
@@ -189,6 +195,9 @@ export class FlowsService {
     if (dto.type !== undefined) patch.type = dto.type;
     if (dto.config !== undefined) {
       (patch as { config?: unknown }).config = dto.config;
+    }
+    if (dto.canvasPosition !== undefined) {
+      patch.canvas_position = dto.canvasPosition;
     }
 
     if (Object.keys(patch).length > 0) {
@@ -289,4 +298,25 @@ function translateUniqueError(err: unknown): Error {
     return new ConflictException('A flow with that name already exists.');
   }
   return err as Error;
+}
+
+/**
+ * "Where should the next new node land?" Answers: 180px below the
+ * lowest existing node so the newcomer never overlaps whatever's on
+ * the canvas. First node in a flow lands at (0, 0).
+ */
+async function defaultCanvasPosition(
+  stepRepo: Repository<BotStep>,
+  flowId: string,
+): Promise<{ x: number; y: number }> {
+  const existing = await stepRepo.find({
+    where: { flow_id: flowId },
+    select: { canvas_position: true },
+  });
+  if (existing.length === 0) return { x: 0, y: 0 };
+  const maxY = existing.reduce(
+    (acc, s) => Math.max(acc, s.canvas_position?.y ?? 0),
+    0,
+  );
+  return { x: 0, y: maxY + 180 };
 }

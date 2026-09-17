@@ -8,6 +8,7 @@ export interface StepResponse {
   position: number;
   type: BotStepType;
   config: unknown;
+  canvasPosition: { x: number; y: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +37,7 @@ export function toStepResponse(s: BotStep): StepResponse {
     position: s.position,
     type: s.type,
     config: s.config,
+    canvasPosition: s.canvas_position ?? { x: 0, y: 0 },
     createdAt: s.createdAt.toISOString(),
     updatedAt: s.updatedAt.toISOString(),
   };

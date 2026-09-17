@@ -61,6 +61,19 @@ export class BotStep {
   @Column({ type: 'jsonb', default: () => `'{}'` })
   config!: unknown;
 
+  /**
+   * Where this node sits on the visual builder canvas. Purely a UI
+   * concern — the runtime doesn't read it. Nodes without an
+   * explicit position get {x: 0, y: 0}; the FE snaps them into a
+   * sensible spot on first drag.
+   */
+  @Column({
+    type: 'jsonb',
+    name: 'canvas_position',
+    default: () => `'{"x": 0, "y": 0}'`,
+  })
+  canvas_position!: { x: number; y: number };
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 
