@@ -56,6 +56,10 @@ export class EmailInboxService {
     });
     if (existing) return existing;
 
+    // Captured inside the txn, used AFTER commit for the drain hook.
+    // Non-null only when we just created a fresh ticket AND the
+    // picker landed on a human agent. When it's null, no drain runs.
+    let pickedAssigneeId: string | null = null;
     const { message, ticket, wasNewTicket } = await this.dataSource.transaction(
       async (mgr) => {
         const threadKey = req.external_message_id;
@@ -89,17 +93,35 @@ export class EmailInboxService {
           const targetTeamId =
             routed?.teamId ?? (await this.teams.getDefault()).id;
 
-          const assigneeId = await this.picker.pickNextAssigneeForTeam(
+          // Two-step assignment for FIFO fairness:
+          //
+          //   1. Run the round-robin picker — this stamps
+          //      last_assigned_at on the chosen user (or returns BOT
+          //      if nobody is eligible) and, importantly, decides
+          //      WHO the next human recipient is.
+          //   2. Save the new ticket parked on BOT regardless. The
+          //      post-commit drain then pulls the OLDEST BOT-queued
+          //      ticket to the picked agent — which is the just-
+          //      created one when the queue was empty, or an older
+          //      stranded ticket when the backlog is deep.
+          //
+          // Result: customers that waited longest get served first,
+          // without changing the picker's round-robin semantics.
+          pickedAssigneeId = await this.picker.pickNextAssigneeForTeam(
             targetTeamId,
             mgr,
           );
+          const bot = await userRepo.findOneOrFail({
+            where: { role: UserRole.BOT },
+          });
+          const initialAssigneeId = bot.id;
           ticket = await ticketRepo.save(
             ticketRepo.create({
               channel_id: channelId,
               channel_type: ChannelType.EMAIL,
               team_id: targetTeamId,
               thread_key: threadKey,
-              assignee: assigneeId,
+              assignee: initialAssigneeId,
               status: TicketStatus.OPEN,
             }),
           );
@@ -113,21 +135,19 @@ export class EmailInboxService {
               : `Ticket opened from ${req.sender}`,
           });
 
-          const assignee = await userRepo.findOneOrFail({
-            where: { id: assigneeId },
-          });
-          await logRepo.save({
-            ticket_id: ticket.id,
-            event:
-              assignee.role === UserRole.BOT
-                ? TicketActivity.ASSIGNED_TO_BOT
-                : TicketActivity.ASSIGNED_TO_AGENT,
-            actor_id: null,
-            log:
-              assignee.role === UserRole.BOT
-                ? 'Parked on the bot — no live agents were Online'
-                : `Auto-assigned to ${assignee.name}`,
-          });
+          // When the picker found no live agents, log the true BOT
+          // parking event now. When it did find someone, the drain
+          // will log its own ASSIGNED_TO_AGENT entry on whichever
+          // ticket ends up moving (possibly older than this one),
+          // so we don't double-log here.
+          if (pickedAssigneeId === bot.id) {
+            await logRepo.save({
+              ticket_id: ticket.id,
+              event: TicketActivity.ASSIGNED_TO_BOT,
+              actor_id: null,
+              log: 'Parked on the bot — no live agents were Online',
+            });
+          }
         }
 
         const messageRepo = mgr.getRepository(EmailMessage);
@@ -148,6 +168,14 @@ export class EmailInboxService {
         return { message: saved, ticket, wasNewTicket: isNew };
       },
     );
+
+    // Post-commit FIFO drain: move the oldest BOT-queued ticket
+    // (which might be the one we just created, or an older stranded
+    // one) to the round-robin-chosen agent. Skipped when picker
+    // returned BOT — nothing to drain to.
+    if (wasNewTicket && pickedAssigneeId) {
+      await this.lifecycle.onCapacityFreed(pickedAssigneeId);
+    }
 
     // Post-commit bot dispatch. Failures here don't roll back the
     // email — the ticket is already the source of truth for humans.
