@@ -4,10 +4,15 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { TicketActivity, TicketStatus, UserRole } from '../database/enums';
 import { User } from '../users/entities/user.entity';
+import {
+  PRESENCE_EVENTS,
+  type PresenceCameOnlineEvent,
+} from '../users/presence.service';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
 
@@ -28,6 +33,13 @@ const SWEEP_BATCH = 200;
  * doesn't strand the lock. Value is arbitrary but must be stable.
  */
 const SWEEP_ADVISORY_LOCK_KEY = 4726050001;
+
+/**
+ * Safety cap on the "drain to me on Online" loop so a broken picker
+ * can't starve the process. Real cap is bounded by the agent's total
+ * per-team cap sum, which will always be far smaller than this.
+ */
+const ONLINE_DRAIN_MAX = 50;
 
 /**
  * Owns the automated lifecycle transitions that aren't triggered
@@ -224,21 +236,50 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
    *      (resume_at <= NOW()), wake the oldest-resumed one.
    *   2. Otherwise, take the oldest BOT-queued ticket in any team
    *      this agent belongs to (respecting paused_in_team + team
-   *      pause) and re-assign it to them.
+   *      pause + the target team's cap for this agent) and re-assign
+   *      it to them.
+   *
+   * Best-effort: swallows errors internally so it never fails an
+   * already-committed status change. Returns whether it actually
+   * moved a ticket, which the drain loop uses to know when to stop.
    */
-  async onCapacityFreed(userId: string): Promise<void> {
+  async onCapacityFreed(userId: string): Promise<boolean> {
     try {
-      await this.dataSource.transaction(async (mgr) => {
-        if (await this.drainRipeFollowup(userId, mgr)) return;
-        await this.pullFromBotQueue(userId, mgr);
+      return await this.dataSource.transaction(async (mgr) => {
+        if (await this.drainRipeFollowup(userId, mgr)) return true;
+        return await this.pullFromBotQueue(userId, mgr);
       });
     } catch (err) {
-      // Backfill is best-effort — never let it fail an already-
-      // committed status change.
       this.logger.warn(
         `Capacity backfill failed for user=${userId}: ${
           err instanceof Error ? err.message : String(err)
         }`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Flood-fill the agent's inbox up to their remaining cap across
+   * every team they belong to. Fired when they come Online — the
+   * queue may have been backing up while they were away.
+   *
+   * Loops `onCapacityFreed` until nothing more can be drained. Each
+   * call is its own txn so long queues don't hold locks across the
+   * whole fill. The safety cap prevents runaway loops if a picker
+   * bug ever returns true forever.
+   */
+  @OnEvent(PRESENCE_EVENTS.CAME_ONLINE)
+  async drainOnCameOnline(payload: PresenceCameOnlineEvent): Promise<void> {
+    let drained = 0;
+    for (let i = 0; i < ONLINE_DRAIN_MAX; i++) {
+      const moved = await this.onCapacityFreed(payload.userId);
+      if (!moved) break;
+      drained++;
+    }
+    if (drained > 0) {
+      this.logger.log(
+        `Drained ${drained} ticket(s) to user=${payload.userId} on Online transition`,
       );
     }
   }
