@@ -5,11 +5,13 @@ import {
   Param,
   ParseIntPipe,
   Patch,
+  Post,
   Query,
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
+import { ReplyTicketDto } from './dto/reply-ticket.dto';
 import { TicketDetail, TicketListItem } from './dto/ticket-response.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { TicketsService } from './tickets.service';
@@ -59,5 +61,19 @@ export class TicketsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
     return this.tickets.update(String(id), dto, user);
+  }
+
+  /**
+   * Outbound reply from an agent. Sends via the channel's SMTP,
+   * threads on the last inbound message, and persists an SENT
+   * EmailMessage row + AGENT_REPLIED activity in the same shot.
+   */
+  @Post(':id/reply')
+  reply(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReplyTicketDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    return this.tickets.reply(String(id), dto, user);
   }
 }

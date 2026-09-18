@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BotModule } from '../bot/bot.module';
+import { ChannelsModule } from '../channels/channels.module';
+import { Channel } from '../channels/entities/channel.entity';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
@@ -12,11 +14,19 @@ import { TicketsService } from './tickets.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Ticket, TicketActivityLog, EmailMessage, User]),
+    TypeOrmModule.forFeature([
+      Ticket,
+      TicketActivityLog,
+      EmailMessage,
+      User,
+      Channel,
+    ]),
     UsersModule,
     // BotRuntimeService — fires TICKET_TAG_ADDED after every
     // successful tag update.
     BotModule,
+    // EmailSenderService — outbound SMTP for agent replies.
+    ChannelsModule,
   ],
   controllers: [TicketsController],
   providers: [TicketsService, TicketLifecycleService],

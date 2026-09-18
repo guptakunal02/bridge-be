@@ -7,8 +7,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
+import { Channel } from '../channels/entities/channel.entity';
+import { EmailSenderService } from '../channels/email/email-sender.service';
 import {
   BotTrigger,
+  MessageDirection,
   TicketActivity,
   TicketStatus,
   UserRole,
@@ -18,6 +21,7 @@ import { buildTicketContext } from '../rules/ticket-context';
 import { User } from '../users/entities/user.entity';
 import { PresenceService } from '../users/presence.service';
 import type { ListTicketsQuery, TicketScope } from './dto/list-tickets.dto';
+import type { ReplyTicketDto } from './dto/reply-ticket.dto';
 import {
   TicketDetail,
   TicketListItem,
@@ -51,10 +55,12 @@ export class TicketsService {
     @InjectRepository(EmailMessage)
     private readonly emails: Repository<EmailMessage>,
     @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly dataSource: DataSource,
     private readonly presence: PresenceService,
     private readonly runtime: BotRuntimeService,
     private readonly lifecycle: TicketLifecycleService,
+    private readonly sender: EmailSenderService,
   ) {}
 
   async list(
@@ -376,6 +382,125 @@ export class TicketsService {
     return detail;
   }
 
+  /**
+   * Send an outbound reply from an agent. Flow:
+   *
+   *   1. Load the ticket, its channel, and every message on the
+   *      thread (in date order) — the last inbound provides the
+   *      In-Reply-To id, subject, and recipient; all inbound
+   *      messages contribute to References.
+   *   2. Fire the SMTP send (outside the txn — network I/O against
+   *      third-party servers must never sit inside a DB txn).
+   *   3. Persist the SENT EmailMessage row + AGENT_REPLIED activity
+   *      inside a single txn once the send has succeeded. On send
+   *      failure, nothing gets written — the FE surfaces the error
+   *      and the agent retries.
+   *
+   * Ticket status is intentionally untouched: the agent chooses
+   * separately whether to mark Waiting / Resolved etc. This keeps
+   * the reply action's semantics predictable and avoids surprising
+   * timer resets.
+   */
+  async reply(
+    id: string,
+    dto: ReplyTicketDto,
+    actingUser: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    const ticket = await this.tickets.findOne({ where: { id } });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.status === TicketStatus.RESOLVED) {
+      throw new BadRequestException(
+        'This ticket is Resolved — reopen it before replying.',
+      );
+    }
+
+    const channel = await this.channels.findOne({
+      where: { id: ticket.channel_id },
+    });
+    if (!channel) {
+      throw new NotFoundException('Ticket channel no longer exists');
+    }
+
+    // Ordered oldest → newest. Cheap: bounded by messages-per-thread
+    // which is dozens at most in practice.
+    const thread = await this.emails.find({
+      where: { ticket_id: id },
+      order: { createdAt: 'ASC' },
+    });
+    const inbound = thread.filter((m) => m.type === MessageDirection.RECEIVED);
+    const lastInbound = inbound[inbound.length - 1] ?? null;
+    if (!lastInbound) {
+      // A ticket with no inbound message is a data-integrity oddity
+      // (email ingest always creates one). Reject rather than send
+      // to nowhere.
+      throw new BadRequestException(
+        'This ticket has no inbound message to reply to.',
+      );
+    }
+
+    const to = lastInbound.sender
+      ? [lastInbound.sender]
+      : (() => {
+          throw new BadRequestException(
+            'The last inbound message has no sender address on record.',
+          );
+        })();
+
+    const subject = replySubject(lastInbound.subject);
+
+    // References chain = every previous message's external id in
+    // chronological order. Some MUAs (Outlook classic) require the
+    // full chain, not just the immediate parent.
+    const references = thread
+      .map((m) => m.external_message_id)
+      .filter((s): s is string => Boolean(s));
+
+    // 1. SMTP send (outside the txn).
+    const { externalMessageId } = await this.sender.sendReply({
+      channel,
+      to,
+      subject,
+      body: dto.body,
+      bodyHtml: dto.bodyHtml ?? null,
+      inReplyTo: lastInbound.external_message_id,
+      references,
+    });
+
+    // 2. Persist message row + activity log in one txn.
+    await this.dataSource.transaction(async (mgr) => {
+      const emailRepo = mgr.getRepository(EmailMessage);
+      const logRepo = mgr.getRepository(TicketActivityLog);
+
+      await emailRepo.save(
+        emailRepo.create({
+          channelId: ticket.channel_id,
+          ticket_id: id,
+          type: MessageDirection.SENT,
+          subject,
+          content: dto.body,
+          content_html: dto.bodyHtml ?? null,
+          sender: channel.inbox_contact,
+          receiver: to,
+          external_message_id: externalMessageId,
+        }),
+      );
+      await logRepo.save({
+        ticket_id: id,
+        event: TicketActivity.AGENT_REPLIED,
+        actor_id: actingUser.id,
+        log: `Replied to ${to.join(', ')} by ${actingUser.email ?? actingUser.id}`,
+      });
+    });
+
+    try {
+      await this.presence.slideOnActivity(actingUser.id);
+    } catch {
+      // presence slide is telemetry-adjacent; safe to swallow.
+    }
+
+    return this.get(id);
+  }
+
   private async applyScope(
     qb: ReturnType<Repository<Ticket>['createQueryBuilder']>,
     scope: TicketScope,
@@ -481,4 +606,17 @@ function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Build the outbound Subject: prepend "Re: " unless the original
+ * already starts with one (case-insensitive). Empty / null falls
+ * back to a neutral "Support reply" so the mail isn't rejected by
+ * strict MTAs.
+ */
+function replySubject(original: string | null): string {
+  const trimmed = (original ?? '').trim();
+  if (!trimmed) return 'Support reply';
+  if (/^re:\s/i.test(trimmed)) return trimmed;
+  return `Re: ${trimmed}`;
 }
