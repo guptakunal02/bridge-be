@@ -61,6 +61,17 @@ export class Ticket {
   @Column({ type: 'boolean', default: false, name: 'refund_related' })
   refund_related!: boolean;
 
+  /**
+   * When status is WAITING or IN_FOLLOWUP, the timestamp at which
+   * the auto-transition fires:
+   *   WAITING → auto-RESOLVED at resume_at (customer didn't reply)
+   *   IN_FOLLOWUP → becomes "ripe" at resume_at; the capacity hook
+   *     wakes it to OPEN next time the assignee frees a slot
+   * Cleared back to NULL any time the ticket returns to OPEN.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'resume_at' })
+  resume_at!: Date | null;
+
   @Column({ type: 'text', name: 'thread_key' })
   thread_key!: string;
 

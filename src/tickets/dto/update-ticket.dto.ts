@@ -3,6 +3,7 @@ import {
   ArrayUnique,
   IsArray,
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -12,10 +13,22 @@ import {
 } from 'class-validator';
 import { TicketStatus } from '../../database/enums';
 
+/** Values allowed in the resumeAtHours dropdown. Keep in sync with FE. */
+export const RESUME_HOUR_OPTIONS = [1, 2, 4, 8, 24] as const;
+
 export class UpdateTicketDto {
   @IsOptional()
   @IsEnum(TicketStatus)
   status?: TicketStatus;
+
+  /**
+   * How many hours from now until the ticket's timer fires.
+   * Required when `status` is WAITING or IN_FOLLOWUP; ignored
+   * otherwise. Values match the FE dropdown.
+   */
+  @IsOptional()
+  @IsIn(RESUME_HOUR_OPTIONS as unknown as number[])
+  resumeAtHours?: number;
 
   @IsOptional()
   @IsUUID()

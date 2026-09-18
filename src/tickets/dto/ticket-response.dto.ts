@@ -34,6 +34,13 @@ export interface TicketListItem {
   tags: string[];
   assignee: TicketAssigneeSummary | null;
   latestMessage: TicketLatestMessage | null;
+  /**
+   * Only set for WAITING / IN_FOLLOWUP tickets. The FE renders it
+   * as a countdown (e.g. "auto-resolves in 42m", "returns to live
+   * in 1h 12m"). Cleared to null when the ticket transitions back
+   * to OPEN or RESOLVED.
+   */
+  resumeAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -87,6 +94,7 @@ export function toTicketListItem(
         }
       : null,
     latestMessage: latest ? toLatestMessage(latest) : null,
+    resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
   };

@@ -27,6 +27,7 @@ import {
 import type { UpdateTicketDto } from './dto/update-ticket.dto';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { TicketLifecycleService } from './ticket-lifecycle.service';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -53,6 +54,7 @@ export class TicketsService {
     private readonly dataSource: DataSource,
     private readonly presence: PresenceService,
     private readonly runtime: BotRuntimeService,
+    private readonly lifecycle: TicketLifecycleService,
   ) {}
 
   async list(
@@ -195,6 +197,10 @@ export class TicketsService {
     // BotTrigger.TICKET_TAG_ADDED after commit so the runtime never
     // runs inside our write transaction.
     let addedTags: string[] = [];
+    // Capture "this transition freed capacity for a human agent" so
+    // we can call the backfill hook post-commit. Set only when a
+    // human's OPEN ticket moves to a non-OPEN status.
+    let freedCapacityFor: string | null = null;
 
     await this.dataSource.transaction(async (mgr) => {
       const ticketRepo = mgr.getRepository(Ticket);
@@ -210,6 +216,14 @@ export class TicketsService {
       const patch: Partial<Ticket> = {};
       const logs: Array<{ event: TicketActivity; log: string }> = [];
 
+      // A human agent's OPEN ticket represents an occupied slot in
+      // their team's cap. Any transition that ends that agent's
+      // ownership of the OPEN state — reassigned away OR status
+      // moved off OPEN — frees the slot and triggers the backfill.
+      const heldOpenByHuman =
+        ticket.status === TicketStatus.OPEN &&
+        ticket.assigneeUser?.role !== UserRole.BOT;
+
       if (dto.assigneeId !== undefined && dto.assigneeId !== ticket.assignee) {
         const nextUser = await userRepo.findOne({
           where: { id: dto.assigneeId },
@@ -220,6 +234,7 @@ export class TicketsService {
         const prevRole = ticket.assigneeUser?.role ?? null;
         const event = pickAssigneeEvent(prevRole, nextUser.role);
         patch.assignee = nextUser.id;
+        if (heldOpenByHuman) freedCapacityFor = ticket.assignee;
         logs.push({
           event,
           log: `Assignee changed to ${nextUser.name} (${nextUser.role}) by ${actingUser.email ?? actingUser.id}`,
@@ -229,16 +244,55 @@ export class TicketsService {
       if (dto.status !== undefined && dto.status !== ticket.status) {
         const event = pickStatusEvent(ticket.status, dto.status);
         patch.status = dto.status;
+        // OPEN → anything-else frees the agent's slot (same rule as
+        // reassign-away above; either can trigger the backfill,
+        // whichever fires first wins the assignment).
+        if (heldOpenByHuman && dto.status !== TicketStatus.OPEN) {
+          freedCapacityFor = ticket.assignee;
+        }
         if (
           ticket.status === TicketStatus.RESOLVED &&
           dto.status !== TicketStatus.RESOLVED
         ) {
           patch.is_reopened = true;
         }
+
+        // Timer field: set when entering WAITING/IN_FOLLOWUP,
+        // clear otherwise. resumeAtHours is required for the two
+        // paused statuses and rejected for the others.
+        if (
+          dto.status === TicketStatus.WAITING ||
+          dto.status === TicketStatus.IN_FOLLOWUP
+        ) {
+          if (dto.resumeAtHours === undefined) {
+            throw new BadRequestException(
+              `resumeAtHours is required when moving a ticket to ${dto.status}`,
+            );
+          }
+          patch.resume_at = new Date(
+            Date.now() + dto.resumeAtHours * 60 * 60 * 1000,
+          );
+        } else {
+          // OPEN / RESOLVED — no timer.
+          if (dto.resumeAtHours !== undefined) {
+            throw new BadRequestException(
+              `resumeAtHours only applies to WAITING or IN_FOLLOWUP`,
+            );
+          }
+          patch.resume_at = null;
+        }
+
         logs.push({
           event,
           log: `Status ${ticket.status} → ${dto.status} by ${actingUser.email ?? actingUser.id}`,
         });
+      } else if (dto.resumeAtHours !== undefined) {
+        // Sent without an accompanying status change — nothing to
+        // do here; the FE only ever pairs it with a WAITING/FOLLOWUP
+        // transition. Rather than silently accept, be loud.
+        throw new BadRequestException(
+          `resumeAtHours only applies to WAITING or IN_FOLLOWUP transitions`,
+        );
       }
 
       if (dto.tags !== undefined) {
@@ -273,9 +327,21 @@ export class TicketsService {
       }
     });
 
-    // Slide the acting user's status timestamp — captures the "real"
-    // break/meeting boundary as the moment of last actual work.
-    await this.presence.slideOnActivity(actingUser.id);
+    // Presence + capacity backfill are both best-effort side effects
+    // that fire AFTER the write commits. Isolate them so a failure in
+    // one doesn't skip the other — a stale presence timestamp mustn't
+    // block a slot from being backfilled.
+    try {
+      await this.presence.slideOnActivity(actingUser.id);
+    } catch {
+      // presence slide is telemetry-adjacent; safe to swallow.
+    }
+
+    if (freedCapacityFor) {
+      // Lifecycle swallows internally and warns; awaited so the FE's
+      // next refetch sees the drained ticket.
+      await this.lifecycle.onCapacityFreed(freedCapacityFor);
+    }
 
     const detail = await this.get(id);
 

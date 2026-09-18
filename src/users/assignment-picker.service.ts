@@ -1,16 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
-import { UserRole, UserStatus } from '../database/enums';
+import { TicketStatus, UserRole, UserStatus } from '../database/enums';
 import { User } from './entities/user.entity';
 
 /**
  * Round-robin picker for auto-assignment. Given a team, returns the
- * team member (Online, non-paused-in-team, approved) whose
- * `last_assigned_at` is oldest, then stamps NOW on it so the next
- * call skips them. Falls back to BOT if:
+ * team member (Online, non-paused-in-team, approved, under their
+ * per-team ticket cap) whose `last_assigned_at` is oldest, then
+ * stamps NOW on it so the next call skips them. Falls back to BOT
+ * if:
  *   - the team itself has assignment_paused = true, or
- *   - no eligible member is available.
+ *   - no eligible member is available (every candidate is at cap or
+ *     otherwise ineligible).
  */
 @Injectable()
 export class AssignmentPickerService {
@@ -23,6 +25,12 @@ export class AssignmentPickerService {
    * EntityManager so callers running inside a transaction (e.g.
    * ingestInbound) share the connection — important so the
    * `last_assigned_at` write commits with the ticket insert.
+   *
+   * Capacity check: a member is eligible only when their count of
+   * OPEN tickets in this team is strictly less than their
+   * `max_concurrent_tickets`. WAITING and IN_FOLLOWUP tickets
+   * DO NOT count against the cap — that's the whole point of those
+   * statuses: they free the agent's slot so the queue keeps moving.
    */
   async pickNextAssigneeForTeam(
     teamId: string,
@@ -53,6 +61,17 @@ export class AssignmentPickerService {
         .andWhere('u.status = :online', { online: UserStatus.ONLINE })
         .andWhere('u.isApproved = true')
         .andWhere('u.deactivatedAt IS NULL')
+        // Capacity check — count only OPEN tickets in this team for
+        // this user. WAITING / IN_FOLLOWUP intentionally excluded.
+        .andWhere(
+          `(SELECT COUNT(*) FROM public.ticket
+             WHERE assignee = u.id
+               AND team_id = tm.team_id
+               AND status = :openStatus
+               AND "deletedAt" IS NULL)
+           < tm.max_concurrent_tickets`,
+          { openStatus: TicketStatus.OPEN },
+        )
         .orderBy('u.last_assigned_at', 'ASC', 'NULLS FIRST')
         .addOrderBy('u.createdAt', 'ASC')
         .limit(1)

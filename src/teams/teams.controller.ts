@@ -13,7 +13,7 @@ import {
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../database/enums';
 import { CreateTeamDto } from './dto/create-team.dto';
-import { AddMemberDto, SetMemberPauseDto } from './dto/team-member.dto';
+import { AddMemberDto, UpdateMemberDto } from './dto/team-member.dto';
 import { TeamDetail, TeamResponse } from './dto/team-response.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TeamsService } from './teams.service';
@@ -73,11 +73,11 @@ export class TeamsController {
   }
 
   @Patch(':id/members/:userId')
-  setMemberPause(
+  updateMember(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Body() dto: SetMemberPauseDto,
+    @Body() dto: UpdateMemberDto,
   ): Promise<TeamDetail> {
-    return this.teams.setMemberPause(id, userId, dto);
+    return this.teams.updateMember(id, userId, dto);
   }
 }

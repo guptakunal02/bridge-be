@@ -8,6 +8,13 @@ export interface TeamMemberSummary {
   email: string | null;
   role: UserRole;
   pausedInTeam: boolean;
+  maxConcurrentTickets: number;
+  /**
+   * Count of this member's OPEN tickets in this team right now.
+   * The FE renders it as `openInTeam / maxConcurrentTickets` so
+   * admins can see who's saturated at a glance.
+   */
+  openTicketsInTeam: number;
 }
 
 export interface TeamResponse {
@@ -36,7 +43,11 @@ export function toTeamResponse(team: Team, memberCount: number): TeamResponse {
   };
 }
 
-export function toTeamDetail(team: Team, members: TeamMember[]): TeamDetail {
+export function toTeamDetail(
+  team: Team,
+  members: TeamMember[],
+  openCounts: Map<string, number>,
+): TeamDetail {
   return {
     ...toTeamResponse(team, members.length),
     members: members.map((m) => ({
@@ -45,6 +56,8 @@ export function toTeamDetail(team: Team, members: TeamMember[]): TeamDetail {
       email: m.user?.email ?? null,
       role: m.user?.role ?? UserRole.MEMBER,
       pausedInTeam: m.paused_in_team,
+      maxConcurrentTickets: m.max_concurrent_tickets,
+      openTicketsInTeam: openCounts.get(m.user_id) ?? 0,
     })),
   };
 }

@@ -5,6 +5,7 @@ import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { RulesModule } from '../rules/rules.module';
 import { TeamsModule } from '../teams/teams.module';
+import { TicketsModule } from '../tickets/tickets.module';
 import { UsersModule } from '../users/users.module';
 import { EmailInboxController } from './email-inbox.controller';
 import { EmailInboxService } from './email-inbox.service';
@@ -26,6 +27,9 @@ import { EmailMessageRepository } from './providers/email-message.repository';
     // BotRuntimeService — fires TICKET_CREATED on fresh threads and
     // advances any ACTIVE session on customer replies.
     BotModule,
+    // TicketLifecycleService — wakes WAITING/IN_FOLLOWUP tickets when
+    // the customer replies (inside the ingest transaction).
+    TicketsModule,
   ],
   controllers: [EmailInboxController],
   providers: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],

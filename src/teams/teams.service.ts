@@ -6,10 +6,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
-import { UserRole } from '../database/enums';
+import { TicketStatus, UserRole } from '../database/enums';
+import { Ticket } from '../tickets/entities/ticket.entity';
 import { User } from '../users/entities/user.entity';
 import type { CreateTeamDto } from './dto/create-team.dto';
-import type { AddMemberDto, SetMemberPauseDto } from './dto/team-member.dto';
+import type { AddMemberDto, UpdateMemberDto } from './dto/team-member.dto';
 import {
   TeamDetail,
   TeamResponse,
@@ -29,6 +30,7 @@ export class TeamsService {
     @InjectRepository(TeamMember)
     private readonly members: Repository<TeamMember>,
     @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Ticket) private readonly tickets: Repository<Ticket>,
   ) {}
 
   async list(): Promise<TeamResponse[]> {
@@ -56,7 +58,28 @@ export class TeamsService {
       relations: { user: true },
       order: { createdAt: 'ASC' },
     });
-    return toTeamDetail(team, members);
+    const openCounts = await this.countOpenTicketsPerMember(id);
+    return toTeamDetail(team, members, openCounts);
+  }
+
+  /**
+   * How many OPEN tickets each member of this team currently holds
+   * inside the team. Used by the admin UI to render capacity usage
+   * as `openInTeam / max` alongside the cap editor.
+   */
+  private async countOpenTicketsPerMember(
+    teamId: string,
+  ): Promise<Map<string, number>> {
+    const rows: Array<{ assignee: string; count: string }> = await this.tickets
+      .createQueryBuilder('t')
+      .select('t.assignee', 'assignee')
+      .addSelect('COUNT(*)', 'count')
+      .where('t.team_id = :teamId', { teamId })
+      .andWhere('t.status = :status', { status: TicketStatus.OPEN })
+      .andWhere('t."deletedAt" IS NULL')
+      .groupBy('t.assignee')
+      .getRawMany();
+    return new Map(rows.map((r) => [r.assignee, Number(r.count)]));
   }
 
   async create(dto: CreateTeamDto): Promise<TeamResponse> {
@@ -157,14 +180,25 @@ export class TeamsService {
     return this.get(id);
   }
 
-  async setMemberPause(
+  async updateMember(
     id: string,
     userId: string,
-    dto: SetMemberPauseDto,
+    dto: UpdateMemberDto,
   ): Promise<TeamDetail> {
+    if (
+      dto.pausedInTeam === undefined &&
+      dto.maxConcurrentTickets === undefined
+    ) {
+      throw new BadRequestException('Nothing to update');
+    }
+    const patch: Partial<TeamMember> = {};
+    if (dto.pausedInTeam !== undefined) patch.paused_in_team = dto.pausedInTeam;
+    if (dto.maxConcurrentTickets !== undefined) {
+      patch.max_concurrent_tickets = dto.maxConcurrentTickets;
+    }
     const result = await this.members.update(
       { team_id: id, user_id: userId },
-      { paused_in_team: dto.pausedInTeam },
+      patch,
     );
     if (!result.affected) {
       throw new NotFoundException('That user is not in this team');

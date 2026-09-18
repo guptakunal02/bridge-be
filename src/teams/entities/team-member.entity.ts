@@ -37,6 +37,20 @@ export class TeamMember {
   @Column({ type: 'boolean', default: false, name: 'paused_in_team' })
   paused_in_team!: boolean;
 
+  /**
+   * Cap on this member's concurrently-OPEN tickets in this team.
+   * Only OPEN tickets count — WAITING / IN_FOLLOWUP free the slot,
+   * which is what lets the queue keep flowing to the agent. Set at
+   * the (team, user) level so the same agent can carry different
+   * loads across teams they belong to.
+   */
+  @Column({
+    type: 'integer',
+    default: 5,
+    name: 'max_concurrent_tickets',
+  })
+  max_concurrent_tickets!: number;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 }

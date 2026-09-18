@@ -6,6 +6,7 @@ import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { TicketLifecycleService } from './ticket-lifecycle.service';
 import { TicketsController } from './tickets.controller';
 import { TicketsService } from './tickets.service';
 
@@ -18,7 +19,9 @@ import { TicketsService } from './tickets.service';
     BotModule,
   ],
   controllers: [TicketsController],
-  providers: [TicketsService],
-  exports: [TicketsService],
+  providers: [TicketsService, TicketLifecycleService],
+  // Lifecycle service exported so EmailInboxService can wake paused
+  // tickets on customer reply inside its ingest transaction.
+  exports: [TicketsService, TicketLifecycleService],
 })
 export class TicketsModule {}

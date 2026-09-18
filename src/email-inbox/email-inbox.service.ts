@@ -14,6 +14,7 @@ import { buildTicketContext } from '../rules/ticket-context';
 import { TeamsService } from '../teams/teams.service';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
+import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
 import { User } from '../users/entities/user.entity';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
 import type { IngestEmailInbox } from './dto/req.dto';
@@ -29,6 +30,7 @@ export class EmailInboxService {
     private readonly teams: TeamsService,
     private readonly router: RoutingService,
     private readonly runtime: BotRuntimeService,
+    private readonly lifecycle: TicketLifecycleService,
   ) {}
 
   /**
@@ -65,6 +67,13 @@ export class EmailInboxService {
           where: { channel_id: channelId, thread_key: threadKey },
         });
         const isNew = !ticket;
+
+        // Reply to an existing paused ticket → wake it now so the
+        // status is OPEN by the time this txn commits. Assignee
+        // unchanged; timer cleared.
+        if (ticket) {
+          await this.lifecycle.wakeIfPaused(ticket.id, mgr);
+        }
 
         if (!ticket) {
           const routed = await this.router.routeFacts(
