@@ -12,13 +12,16 @@ import { Ticket } from './entities/ticket.entity';
  * order still renders, we just skip unknown fields on the FE.
  */
 export interface CustomerOrder {
-  id: string; // internal ops.orders.id
-  orderName: string | null; // display "#123456"
-  shopifyOrderId: string | null; // numeric id
-  fulfillmentStatus: string | null; // e.g. "FULFILLED", "IN_TRANSIT"
-  paymentStatus: string | null;
+  id: string; // internal ops.orders.id (uuid)
+  orderName: string | null; // display like "#159288"
+  orderNumber: string | null; // just the digits, e.g. "159288"
+  shopifyOrderGid: string | null; // full gid, kept but not shown by default
+  paymentStatus: string | null; // Shopify's displayFinancialStatus (PAID, PENDING, …)
+  fulfillmentStatus: string | null; // Shopify's displayFulfillmentStatus (FULFILLED, UNFULFILLED)
+  shipmentStatus: string | null; // raw courier code from ops (normalised_current_status)
+  shipmentStatusLabel: string | null; // display-friendly ("Delivered", "In Transit", "Returned", …)
   placedAt: string | null;
-  totalAmount: string | null; // pre-formatted with currency
+  totalAmount: string | null;
   currency: string | null;
   invoiceName: string | null;
   phoneNumber: string | null;
@@ -158,6 +161,22 @@ interface OrdersRow {
   ordered_at: string | Date | null;
 }
 
+// Shopify's export shape differs between REST (line_items[]) and
+// GraphQL (lineItems.nodes[] or lineItems.edges[].node). We try
+// every known path so a row that came in via a different pipeline
+// doesn't silently render an empty items list.
+type ShopifyLineItem = {
+  title?: string;
+  name?: string;
+  quantity?: number;
+  price?: string;
+  originalUnitPriceSet?: {
+    shopMoney?: { amount?: string; currencyCode?: string };
+  };
+  image?: { url?: string; src?: string };
+  variant?: { image?: { url?: string; src?: string } };
+};
+
 interface ShopifyRaw {
   id?: string | number;
   name?: string;
@@ -167,8 +186,11 @@ interface ShopifyRaw {
   totalPriceSet?: {
     shopMoney?: { amount?: string; currencyCode?: string };
   };
+  total_price?: string;
   displayFinancialStatus?: string;
   displayFulfillmentStatus?: string;
+  financial_status?: string;
+  fulfillment_status?: string | null;
   email?: string;
   tags?: string[] | string;
   customer?: { email?: string };
@@ -185,18 +207,13 @@ interface ShopifyRaw {
     firstName?: string;
     lastName?: string;
   };
+  // GraphQL: lineItems.nodes[] or lineItems.edges[].node
   lineItems?: {
-    nodes?: Array<{
-      title?: string;
-      name?: string;
-      quantity?: number;
-      originalUnitPriceSet?: {
-        shopMoney?: { amount?: string; currencyCode?: string };
-      };
-      image?: { url?: string };
-      variant?: { image?: { url?: string } };
-    }>;
+    nodes?: ShopifyLineItem[];
+    edges?: Array<{ node: ShopifyLineItem }>;
   };
+  // REST: snake-cased array
+  line_items?: ShopifyLineItem[];
 }
 
 interface ClickpostRaw {
@@ -242,15 +259,37 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
       .filter(Boolean)
       .join(', ') || null;
 
-  const lineItems =
-    s.lineItems?.nodes?.map((n) => ({
+  // Pick line items from whichever Shopify export shape this row
+  // was ingested with. REST rows carry `line_items[]`, GraphQL rows
+  // put the array under `lineItems.nodes[]` or under
+  // `lineItems.edges[].node` depending on the query flavour used.
+  const rawItems: ShopifyLineItem[] =
+    s.lineItems?.nodes ??
+    s.lineItems?.edges?.map((e) => e.node) ??
+    s.line_items ??
+    [];
+  const lineItems = rawItems.map((n) => {
+    const priceAmount =
+      n.originalUnitPriceSet?.shopMoney?.amount ?? n.price ?? null;
+    const priceCurrency =
+      n.originalUnitPriceSet?.shopMoney?.currencyCode ??
+      s.totalPriceSet?.shopMoney?.currencyCode ??
+      s.currencyCode ??
+      null;
+    return {
       name: n.title ?? n.name ?? '(unnamed)',
       quantity: Number(n.quantity ?? 1),
-      priceLabel: n.originalUnitPriceSet?.shopMoney?.amount
-        ? `${n.originalUnitPriceSet.shopMoney.currencyCode ?? ''} ${n.originalUnitPriceSet.shopMoney.amount}`.trim()
+      priceLabel: priceAmount
+        ? `${priceCurrency ?? ''} ${priceAmount}`.trim()
         : null,
-      imageUrl: n.variant?.image?.url ?? n.image?.url ?? null,
-    })) ?? [];
+      imageUrl:
+        n.variant?.image?.url ??
+        n.variant?.image?.src ??
+        n.image?.url ??
+        n.image?.src ??
+        null,
+    };
+  });
 
   // Prefer Clickpost's tracking_url if present; else synthesise
   // Surma's Clickpost portal link from the pieces we have.
@@ -262,13 +301,25 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
         }&security_key=${c.security_key}`
       : null);
 
+  // The number-only order id — "#159288" → "159288". Falls back to
+  // the raw name if it doesn't lead with a hash.
+  const orderNumber =
+    s.name && s.name.startsWith('#') ? s.name.slice(1) : (s.name ?? null);
+
+  const shipmentStatus = row.normalised_current_status;
+
   return {
     id: String(row.id),
     orderName: s.name ?? null,
-    shopifyOrderId: s.id ? String(s.id) : null,
+    orderNumber,
+    shopifyOrderGid: s.id ? String(s.id) : null,
     fulfillmentStatus:
-      s.displayFulfillmentStatus ?? row.normalised_current_status ?? null,
-    paymentStatus: s.displayFinancialStatus ?? null,
+      s.displayFulfillmentStatus ?? s.fulfillment_status ?? null,
+    paymentStatus: s.displayFinancialStatus ?? s.financial_status ?? null,
+    shipmentStatus,
+    shipmentStatusLabel: shipmentStatus
+      ? labelForShipmentStatus(shipmentStatus)
+      : null,
     placedAt: toIso(row.ordered_at) ?? s.createdAt ?? s.processedAt ?? null,
     totalAmount,
     currency,
@@ -282,6 +333,41 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
     orderTags: tags,
     lineItems,
   };
+}
+
+/**
+ * Map the raw normalised_current_status enum values (from the ops
+ * ShipmentStatus enum) into user-friendly labels the agent sees.
+ * Exchange isn't a shipment state — Shopify tracks that on the
+ * order tag / return record, so it doesn't show up here.
+ */
+function labelForShipmentStatus(code: string): string {
+  switch (code) {
+    case 'DELIVERED':
+      return 'Delivered';
+    case 'OUT_FOR_DELIVERY':
+      return 'Out for Delivery';
+    case 'PICKED':
+    case 'MISROUTED':
+    case 'FAILED_DELIVERY_RETRYING':
+      return 'In Transit';
+    case 'PRE_PICKUP':
+      return 'Preparing';
+    case 'RTO_CANCELLED':
+    case 'RTO_FAILED_DELIVERY':
+    case 'RTO_DELIVERED_TO_ORIGIN':
+      return 'Returned';
+    case 'CANCELLED':
+      return 'Cancelled';
+    case 'LOST':
+      return 'Lost';
+    case 'NO_SHIPMENT_INFO':
+      return 'Not shipped';
+    default:
+      // Unknown ops enum value — surface it verbatim so we notice
+      // and don't silently swallow.
+      return code;
+  }
 }
 
 function toIso(v: string | Date | null): string | null {
