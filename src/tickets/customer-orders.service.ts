@@ -20,6 +20,12 @@ export interface CustomerOrder {
   fulfillmentStatus: string | null; // Shopify's displayFulfillmentStatus (FULFILLED, UNFULFILLED)
   shipmentStatus: string | null; // raw courier code from ops (normalised_current_status)
   shipmentStatusLabel: string | null; // display-friendly ("Delivered", "In Transit", "Returned", …)
+  /** True once a replacement order has been created for this order via the exchanges table. */
+  isExchanged: boolean;
+  /** Display order name of the replacement, when isExchanged. e.g. "#159289". */
+  replacementOrderName: string | null;
+  /** Timestamp the exchange request was created on ReturnPrime. */
+  exchangeRequestedAt: string | null;
   placedAt: string | null;
   totalAmount: string | null;
   currency: string | null;
@@ -105,21 +111,39 @@ export class CustomerOrdersService {
       async (q) => {
         await q('SET LOCAL statement_timeout = 5000');
         return q(
+          // LEFT JOIN LATERAL to `exchanges` picks up the most recent
+          // exchange record for each order, if any. Ops indexes
+          // exchanges on initial_shopify_order_id so this is a cheap
+          // per-row probe. new_shopify_order_id is NULL while the
+          // replacement order hasn't been created yet — we surface
+          // "Exchanged" only once it exists (see the mapper), so an
+          // in-flight-but-unfulfilled exchange keeps the underlying
+          // shipment status.
           `SELECT
-             id,
-             awb,
-             normalised_current_status,
-             cancelled_at,
-             shopify_tags,
-             raw_shopify_response,
-             raw_clickpost_response,
-             ordered_at
-           FROM orders
+             o.id,
+             o.awb,
+             o.normalised_current_status,
+             o.cancelled_at,
+             o.shopify_tags,
+             o.raw_shopify_response,
+             o.raw_clickpost_response,
+             o.ordered_at,
+             o.shopify_order_id,
+             e.new_shopify_order_id AS exchange_new_order_id,
+             e.request_created_at   AS exchange_request_created_at
+           FROM orders o
+           LEFT JOIN LATERAL (
+             SELECT new_shopify_order_id, request_created_at
+             FROM exchanges
+             WHERE initial_shopify_order_id = o.shopify_order_id
+             ORDER BY request_created_at DESC NULLS LAST
+             LIMIT 1
+           ) e ON TRUE
            WHERE
-                  lower((raw_shopify_response->'shippingAddress'->>'email')) = $1
-               OR lower((raw_shopify_response->'customer'->>'email')) = $1
-               OR lower((raw_shopify_response->>'email')) = $1
-           ORDER BY ordered_at DESC NULLS LAST
+                  lower((o.raw_shopify_response->'shippingAddress'->>'email')) = $1
+               OR lower((o.raw_shopify_response->'customer'->>'email')) = $1
+               OR lower((o.raw_shopify_response->>'email')) = $1
+           ORDER BY o.ordered_at DESC NULLS LAST
            LIMIT $2 OFFSET $3`,
           [email, limit + 1, offset],
         );
@@ -159,6 +183,9 @@ interface OrdersRow {
   raw_shopify_response: ShopifyRaw | null;
   raw_clickpost_response: ClickpostRaw | null;
   ordered_at: string | Date | null;
+  shopify_order_id: string | null;
+  exchange_new_order_id: string | null;
+  exchange_request_created_at: string | Date | null;
 }
 
 // Shopify's export shape differs between REST (line_items[]) and
@@ -308,6 +335,29 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
 
   const shipmentStatus = row.normalised_current_status;
 
+  // Exchange derivation: only considered "exchanged" once the ops
+  // exchanges table has a linked replacement order (new_shopify_order_id
+  // populated). In-flight exchange requests without a replacement yet
+  // keep the underlying shipment status — no false positive.
+  const isExchanged = Boolean(row.exchange_new_order_id);
+  const replacementOrderName = row.exchange_new_order_id
+    ? `#${row.exchange_new_order_id}`
+    : null;
+  const exchangeRequestedAt = toIso(row.exchange_request_created_at);
+
+  // When the exchange is complete, override the display label to
+  // "Exchanged" — that's the customer-facing truth. The raw
+  // shipmentStatus code (usually DELIVERED, since the customer
+  // received the item before requesting an exchange) is preserved
+  // so the FE / any consumer can still see it.
+  const shipmentStatusLabel = shipmentStatus
+    ? isExchanged
+      ? 'Exchanged'
+      : labelForShipmentStatus(shipmentStatus)
+    : isExchanged
+      ? 'Exchanged'
+      : null;
+
   return {
     id: String(row.id),
     orderName: s.name ?? null,
@@ -317,9 +367,10 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
       s.displayFulfillmentStatus ?? s.fulfillment_status ?? null,
     paymentStatus: s.displayFinancialStatus ?? s.financial_status ?? null,
     shipmentStatus,
-    shipmentStatusLabel: shipmentStatus
-      ? labelForShipmentStatus(shipmentStatus)
-      : null,
+    shipmentStatusLabel,
+    isExchanged,
+    replacementOrderName,
+    exchangeRequestedAt,
     placedAt: toIso(row.ordered_at) ?? s.createdAt ?? s.processedAt ?? null,
     totalAmount,
     currency,
