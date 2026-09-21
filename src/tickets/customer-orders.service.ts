@@ -80,21 +80,27 @@ export class CustomerOrdersService {
 
     // Fetch limit+1 to know whether there's a next page without a
     // second COUNT query. Cheap trick, standard cursor-lite paging.
+    //
+    // Column reference: the ops schema uses `ordered_at` (snake case)
+    // as the canonical placed-at timestamp — verified against
+    // surma-common-data-backend/src/orders/order.entity.ts. There is
+    // NO `"createdAt"` on this table.
     const rows = await this.opsRead.query<OrdersRow>(
       `SELECT
          id,
          awb,
          normalised_current_status,
          cancelled_at,
+         shopify_tags,
          raw_shopify_response,
          raw_clickpost_response,
-         "createdAt"
+         ordered_at
        FROM orders
        WHERE
              lower(coalesce(raw_shopify_response->'shippingAddress'->>'email','')) = lower($1)
           OR lower(coalesce(raw_shopify_response->'customer'->>'email','')) = lower($1)
           OR lower(coalesce(raw_shopify_response->>'email','')) = lower($1)
-       ORDER BY "createdAt" DESC NULLS LAST
+       ORDER BY ordered_at DESC NULLS LAST
        LIMIT $2 OFFSET $3`,
       [email, limit + 1, offset],
     );
@@ -128,9 +134,10 @@ interface OrdersRow {
   awb: string | null;
   normalised_current_status: string | null;
   cancelled_at: string | null;
+  shopify_tags: string[] | null;
   raw_shopify_response: ShopifyRaw | null;
   raw_clickpost_response: ClickpostRaw | null;
-  createdAt: string | Date | null;
+  ordered_at: string | Date | null;
 }
 
 interface ShopifyRaw {
@@ -189,14 +196,19 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
   const currency =
     s.totalPriceSet?.shopMoney?.currencyCode ?? s.currencyCode ?? null;
 
-  const tags: string[] = Array.isArray(s.tags)
-    ? s.tags
-    : typeof s.tags === 'string'
-      ? s.tags
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean)
-      : [];
+  // Prefer the first-class `shopify_tags text[]` column; fall back
+  // to whatever the raw Shopify JSON carried (older rows).
+  const tags: string[] =
+    row.shopify_tags && row.shopify_tags.length > 0
+      ? row.shopify_tags
+      : Array.isArray(s.tags)
+        ? s.tags
+        : typeof s.tags === 'string'
+          ? s.tags
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean)
+          : [];
 
   const addr = s.shippingAddress ?? {};
   const composedName =
@@ -239,7 +251,7 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
     fulfillmentStatus:
       s.displayFulfillmentStatus ?? row.normalised_current_status ?? null,
     paymentStatus: s.displayFinancialStatus ?? null,
-    placedAt: s.createdAt ?? s.processedAt ?? toIso(row.createdAt),
+    placedAt: toIso(row.ordered_at) ?? s.createdAt ?? s.processedAt ?? null,
     totalAmount,
     currency,
     invoiceName,
