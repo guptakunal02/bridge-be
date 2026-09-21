@@ -4,6 +4,7 @@ import { BotModule } from '../bot/bot.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
+import { TagsModule } from '../tags/tags.module';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 import { Ticket } from './entities/ticket.entity';
@@ -27,6 +28,9 @@ import { TicketsService } from './tickets.service';
     BotModule,
     // EmailSenderService — outbound SMTP for agent replies.
     ChannelsModule,
+    // TagsService — validates that every tag on a PATCH exists in
+    // the admin-managed catalogue.
+    TagsModule,
   ],
   controllers: [TicketsController],
   providers: [TicketsService, TicketLifecycleService],

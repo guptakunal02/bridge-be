@@ -12,6 +12,7 @@ import { DatabaseModule } from './database/database.module';
 import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
 import { RulesModule } from './rules/rules.module';
+import { TagsModule } from './tags/tags.module';
 import { TeamsModule } from './teams/teams.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { UsersModule } from './users/users.module';
@@ -36,6 +37,7 @@ import { UsersModule } from './users/users.module';
     TicketsModule,
     TeamsModule,
     RulesModule,
+    TagsModule,
     BotModule,
   ],
 })

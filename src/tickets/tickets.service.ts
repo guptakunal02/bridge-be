@@ -18,6 +18,7 @@ import {
 } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { buildTicketContext } from '../rules/ticket-context';
+import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
 import { PresenceService } from '../users/presence.service';
 import type { ListTicketsQuery, TicketScope } from './dto/list-tickets.dto';
@@ -61,6 +62,7 @@ export class TicketsService {
     private readonly runtime: BotRuntimeService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly sender: EmailSenderService,
+    private readonly tagsService: TagsService,
   ) {}
 
   async list(
@@ -363,8 +365,24 @@ export class TicketsService {
         const prevTags = (ticket.tags ?? []).slice().sort();
         const nextSorted = nextTags.slice().sort();
         if (!arraysEqual(prevTags, nextSorted)) {
-          patch.tags = nextTags;
+          // Any tag being ADDED must exist in the catalogue. We only
+          // check the delta (added set) so removing an orphan tag
+          // that predates the catalogue still works — otherwise
+          // admins couldn't clean up historical tags.
           const added = nextTags.filter((t) => !prevTags.includes(t));
+          if (added.length > 0) {
+            const unknown = await this.tagsService.findUnknownNames(added, mgr);
+            if (unknown.length > 0) {
+              throw new BadRequestException(
+                `Unknown tag${unknown.length === 1 ? '' : 's'}: ${unknown
+                  .map((n) => `"${n}"`)
+                  .join(', ')}. Ask an admin to add ${
+                  unknown.length === 1 ? 'it' : 'them'
+                } from the Tags page first.`,
+              );
+            }
+          }
+          patch.tags = nextTags;
           const removed = prevTags.filter((t) => !nextTags.includes(t));
           addedTags = added;
           const parts: string[] = [];
