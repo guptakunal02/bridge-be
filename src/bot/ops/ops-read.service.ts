@@ -50,9 +50,45 @@ export class OpsReadService {
     const rows = await this.query<T>(sql, params);
     return rows[0] ?? null;
   }
+
+  /**
+   * Runs a callback inside a single connection + transaction, so
+   * `SET LOCAL` settings (statement_timeout, work_mem, etc.) stick
+   * for the duration and reset automatically on commit.
+   *
+   * The callback receives a query helper that carries the same
+   * read-only sniffer as the top-level `query()`. Callers use this
+   * for costed reads on the ops DB where an unbounded scan would be
+   * a real problem — statement_timeout there fails the query with a
+   * clean error instead of hanging the caller.
+   */
+  async transactional<T = Record<string, unknown>>(
+    fn: (
+      q: (sql: string, params?: unknown[]) => Promise<T[]>,
+    ) => Promise<T[]>,
+  ): Promise<T[]> {
+    return this.ds.transaction(async (mgr) => {
+      const q = async (sql: string, params: unknown[] = []): Promise<T[]> => {
+        assertReadOnly(sql);
+        const rows: unknown = await mgr.query(sql, params);
+        return rows as T[];
+      };
+      return fn(q);
+    });
+  }
 }
 
-const READ_STARTERS = new Set(['SELECT', 'WITH', 'EXPLAIN', 'SHOW', 'VALUES']);
+const READ_STARTERS = new Set([
+  'SELECT',
+  'WITH',
+  'EXPLAIN',
+  'SHOW',
+  'VALUES',
+  // Session-scoped configuration commands that don't mutate data —
+  // safe inside a read-only txn and used by callers to add a
+  // statement_timeout guardrail before an expensive scan.
+  'SET',
+]);
 
 /**
  * Reject anything that doesn't obviously start with a read verb.
