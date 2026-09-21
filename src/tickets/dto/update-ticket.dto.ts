@@ -35,6 +35,15 @@ export class UpdateTicketDto {
   assigneeId?: string;
 
   /**
+   * Force-move the ticket to a different team. Bypasses the routing
+   * rules that would normally decide team_id at ingest — this is
+   * how an admin drops a mis-routed thread into the right queue.
+   */
+  @IsOptional()
+  @IsUUID()
+  teamId?: string;
+
+  /**
    * The full set of tags this ticket should carry after the update.
    * Set-semantics (not add/remove): whatever you send replaces what
    * was there. Keeps the API idempotent and the wire format simple.

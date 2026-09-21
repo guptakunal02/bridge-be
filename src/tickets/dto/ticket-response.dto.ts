@@ -33,6 +33,7 @@ export interface TicketListItem {
   threadKey: string;
   tags: string[];
   assignee: TicketAssigneeSummary | null;
+  teamId: string;
   latestMessage: TicketLatestMessage | null;
   /**
    * Only set for WAITING / IN_FOLLOWUP tickets. The FE renders it
@@ -93,6 +94,7 @@ export function toTicketListItem(
           role: ticket.assigneeUser.role,
         }
       : null,
+    teamId: ticket.team_id,
     latestMessage: latest ? toLatestMessage(latest) : null,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
     createdAt: ticket.createdAt.toISOString(),

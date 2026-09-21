@@ -9,6 +9,7 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailSenderService } from '../channels/email/email-sender.service';
+import { Team } from '../teams/entities/team.entity';
 import {
   BotTrigger,
   MessageDirection,
@@ -253,6 +254,7 @@ export class TicketsService {
     if (
       dto.status === undefined &&
       dto.assigneeId === undefined &&
+      dto.teamId === undefined &&
       dto.tags === undefined
     ) {
       throw new BadRequestException('Nothing to update');
@@ -303,6 +305,23 @@ export class TicketsService {
         logs.push({
           event,
           log: `Assignee changed to ${nextUser.name} (${nextUser.role}) by ${actingUser.email ?? actingUser.id}`,
+        });
+      }
+
+      if (dto.teamId !== undefined && dto.teamId !== ticket.team_id) {
+        // Force team change — bypasses routing rules on purpose so
+        // admins can drop a mis-routed thread into the right queue.
+        // Validate the target team exists so we surface a clean 404
+        // instead of an FK violation.
+        const teamRepo = mgr.getRepository(Team);
+        const nextTeam = await teamRepo.findOne({ where: { id: dto.teamId } });
+        if (!nextTeam) {
+          throw new NotFoundException('Team not found');
+        }
+        patch.team_id = nextTeam.id;
+        logs.push({
+          event: TicketActivity.SENT_BACK_TO_QUEUE,
+          log: `Team changed to "${nextTeam.name}" by ${actingUser.email ?? actingUser.id}`,
         });
       }
 

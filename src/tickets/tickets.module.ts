@@ -6,6 +6,7 @@ import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { TagsModule } from '../tags/tags.module';
+import { Team } from '../teams/entities/team.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 import { CustomerOrdersService } from './customer-orders.service';
@@ -23,6 +24,7 @@ import { TicketsService } from './tickets.service';
       EmailMessage,
       User,
       Channel,
+      Team,
     ]),
     UsersModule,
     // BotRuntimeService — fires TICKET_TAG_ADDED after every
