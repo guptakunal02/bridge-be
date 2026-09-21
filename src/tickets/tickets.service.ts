@@ -616,29 +616,30 @@ export class TicketsService {
   }
 
   /**
-   * Fetch the newest EmailMessage for each ticket id in a single round
-   * trip using Postgres' `DISTINCT ON` — far cheaper than N per-ticket
-   * queries and avoids the LEFT JOIN LATERAL boilerplate.
+   * Fetch the newest EmailMessage for each ticket id in a single
+   * round trip. Uses Postgres' `DISTINCT ON` — one row per ticket
+   * via the existing (ticket_id, createdAt) index in a single
+   * backward scan. Prior implementation loaded every message for
+   * every listed ticket and picked the max in JS, which on 10
+   * tickets with multi-message threads was pulling hundreds of
+   * rows and driving the ticket list past 3 seconds.
    */
   private async fetchLatestMessages(
     ticketIds: string[],
   ): Promise<Map<string, EmailMessage>> {
     if (ticketIds.length === 0) return new Map();
-    const rows = await this.emails.find({
-      where: { ticket_id: In(ticketIds) },
-      order: { ticket_id: 'ASC', createdAt: 'DESC' },
-    });
-    // Fall back to a JS group-by since TypeORM doesn't emit DISTINCT ON.
-    // Row count = messages across selected tickets, capped by page size,
-    // so this stays cheap.
-    const byTicket = new Map<string, EmailMessage>();
-    for (const m of rows) {
-      const existing = byTicket.get(m.ticket_id);
-      if (!existing || existing.createdAt < m.createdAt) {
-        byTicket.set(m.ticket_id, m);
-      }
-    }
-    return byTicket;
+    // ticket_id is bigint on the entity — TypeORM returns it as a
+    // string, which is what the map key is compared against
+    // downstream, so we don't cast either side.
+    const rows: EmailMessage[] = await this.emails.query(
+      `SELECT DISTINCT ON (ticket_id) *
+         FROM email_message
+        WHERE ticket_id = ANY($1::bigint[])
+          AND "deletedAt" IS NULL
+        ORDER BY ticket_id, "createdAt" DESC`,
+      [ticketIds],
+    );
+    return new Map(rows.map((r) => [String(r.ticket_id), r]));
   }
 }
 
