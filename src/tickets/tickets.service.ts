@@ -98,8 +98,10 @@ export class TicketsService {
 
   /**
    * Numbers for the member top strip:
-   *   teamQueueCount  — total tickets parked on BOT (i.e. genuinely
-   *                     unassigned), across every channel
+   *   teamQueueCount  — BOT-parked tickets in teams the caller is a
+   *                     non-paused member of. NOT unscoped — a member
+   *                     shouldn't see the queue of a team they aren't
+   *                     part of, so this filters through team_member.
    *   activeOnMe      — my tickets that aren't RESOLVED
    *   resolvedTodayByMe — my resolves since IST midnight
    *
@@ -115,10 +117,22 @@ export class TicketsService {
     const bot = await this.users.findOne({ where: { role: UserRole.BOT } });
     const botId = bot?.id ?? null;
 
+    // Scope by team_member: caller only counts BOT-parked tickets in
+    // teams they're actually part of and haven't been paused from.
+    // Zero if botId isn't seeded (defensive — shouldn't happen at MVP).
     const teamQueueCount = botId
-      ? await this.tickets.count({
-          where: { assignee: botId, status: In(OPEN_STATUSES) },
-        })
+      ? await this.tickets
+          .createQueryBuilder('t')
+          .innerJoin(
+            'team_member',
+            'tm',
+            'tm.team_id = t.team_id AND tm.user_id = :userId AND tm.paused_in_team = false',
+            { userId: actingUser.id },
+          )
+          .where('t.assignee = :botId', { botId })
+          .andWhere('t.status IN (:...open)', { open: OPEN_STATUSES })
+          .andWhere('t."deletedAt" IS NULL')
+          .getCount()
       : 0;
 
     const activeOnMe = await this.tickets.count({
@@ -142,6 +156,49 @@ export class TicketsService {
     const resolvedTodayByMe = Number(resolvedRows[0]?.count ?? 0);
 
     return { teamQueueCount, activeOnMe, resolvedTodayByMe };
+  }
+
+  /**
+   * Per-status counts respecting the same scope + channel filters as
+   * `list`. Backs the "N behind each filter" counts on the inbox UI.
+   * A single grouped SELECT with the same scope predicates — cheap
+   * enough that we call it on every scope change.
+   */
+  async counts(
+    query: ListTicketsQuery,
+    actingUser: AuthenticatedUser,
+  ): Promise<{
+    all: number;
+    open: number;
+    in_followup: number;
+    waiting: number;
+    resolved: number;
+  }> {
+    const qb = this.tickets
+      .createQueryBuilder('t')
+      .select('t.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('t.status');
+
+    if (query.channelId) {
+      qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
+    }
+    await this.applyScope(qb, query.scope ?? 'all', actingUser);
+
+    const rows: Array<{ status: TicketStatus; count: string }> =
+      await qb.getRawMany();
+    const by = new Map(rows.map((r) => [r.status, Number(r.count)]));
+    const open = by.get(TicketStatus.OPEN) ?? 0;
+    const in_followup = by.get(TicketStatus.IN_FOLLOWUP) ?? 0;
+    const waiting = by.get(TicketStatus.WAITING) ?? 0;
+    const resolved = by.get(TicketStatus.RESOLVED) ?? 0;
+    return {
+      all: open + in_followup + waiting + resolved,
+      open,
+      in_followup,
+      waiting,
+      resolved,
+    };
   }
 
   /**

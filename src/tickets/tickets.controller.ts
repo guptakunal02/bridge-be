@@ -41,6 +41,26 @@ export class TicketsController {
   }
 
   /**
+   * Per-status counts respecting the same scope/channel filters as
+   * GET /tickets. Backs the "N behind each filter" counts on the
+   * inbox UI so agents (and admins) can see workload distribution at
+   * a glance before switching tabs.
+   */
+  @Get('counts')
+  counts(
+    @Query() query: ListTicketsQuery,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{
+    all: number;
+    open: number;
+    in_followup: number;
+    waiting: number;
+    resolved: number;
+  }> {
+    return this.tickets.counts(query, user);
+  }
+
+  /**
    * Every distinct tag ever attached to a ticket — powers the
    * autocomplete in the tag chip editor.
    */
