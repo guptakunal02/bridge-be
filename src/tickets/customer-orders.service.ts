@@ -85,23 +85,22 @@ export class CustomerOrdersService {
     // as the canonical placed-at timestamp — verified against
     // surma-common-data-backend/src/orders/order.entity.ts.
     //
-    // Performance note: ops `orders` has no functional index on any
-    // of the email JSON paths, so this WHERE alone would full-scan
-    // the table. Two guardrails:
+    // Index alignment: the three WHERE clauses each match one of
+    // idx_orders_shipping_email / idx_orders_customer_email /
+    // idx_orders_top_level_email (see the ops-side db/indexes.sql).
+    // Each is a bare `lower(json_path->>'email')` with no coalesce
+    // wrapper, because Postgres matches expressions structurally —
+    // a coalesce wrapper would silently drop the index match and
+    // fall back to a seq scan. NULL comparisons return NULL (falsy),
+    // which is what we want anyway.
     //
-    //   1. `ordered_at >= NOW() - INTERVAL '3 years'` — cuts the row
-    //      set to what any support conversation could realistically
-    //      reference. Uses `idx_orders_ordered_at` as an anchor so
-    //      the seq-scan happens on a much smaller subset.
-    //
-    //   2. `SET LOCAL statement_timeout = 15s` — a runaway query
-    //      returns a real error instead of hanging the UI. Wrapped
-    //      in a txn so LOCAL sticks. Once the ops team lands the
-    //      expression indexes on the email paths (see docs), both
-    //      guardrails can loosen.
+    // Query timeout kept at 5s as a safety net — the indexed lookups
+    // return well under 100ms even at millions of rows; anything
+    // slower means the indexes weren't created or the plan went
+    // wrong, and we want a clean error rather than a hanging UI.
     const rows = await this.opsRead.transactional<OrdersRow>(
       async (q) => {
-        await q('SET LOCAL statement_timeout = 15000');
+        await q('SET LOCAL statement_timeout = 5000');
         return q(
           `SELECT
              id,
@@ -114,12 +113,9 @@ export class CustomerOrdersService {
              ordered_at
            FROM orders
            WHERE
-             ordered_at >= NOW() - INTERVAL '3 years'
-             AND (
-                    lower(coalesce(raw_shopify_response->'shippingAddress'->>'email','')) = lower($1)
-                 OR lower(coalesce(raw_shopify_response->'customer'->>'email','')) = lower($1)
-                 OR lower(coalesce(raw_shopify_response->>'email','')) = lower($1)
-                 )
+                  lower((raw_shopify_response->'shippingAddress'->>'email')) = $1
+               OR lower((raw_shopify_response->'customer'->>'email')) = $1
+               OR lower((raw_shopify_response->>'email')) = $1
            ORDER BY ordered_at DESC NULLS LAST
            LIMIT $2 OFFSET $3`,
           [email, limit + 1, offset],
