@@ -10,6 +10,11 @@ import {
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import {
+  CustomerOrdersPage,
+  CustomerOrdersService,
+} from './customer-orders.service';
+import { ListCustomerOrdersQuery } from './dto/list-customer-orders.dto';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
 import { ReplyTicketDto } from './dto/reply-ticket.dto';
 import { TicketDetail, TicketListItem } from './dto/ticket-response.dto';
@@ -18,7 +23,10 @@ import { TicketsService } from './tickets.service';
 
 @Controller('tickets')
 export class TicketsController {
-  constructor(private readonly tickets: TicketsService) {}
+  constructor(
+    private readonly tickets: TicketsService,
+    private readonly orders: CustomerOrdersService,
+  ) {}
 
   @Get()
   list(
@@ -81,6 +89,19 @@ export class TicketsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
     return this.tickets.update(String(id), dto, user);
+  }
+
+  /**
+   * Paginated list of orders belonging to the customer whose email
+   * opened this ticket. Matches against three JSON paths in the
+   * shopify export since the shape varies by source.
+   */
+  @Get(':id/customer-orders')
+  customerOrders(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: ListCustomerOrdersQuery,
+  ): Promise<CustomerOrdersPage> {
+    return this.orders.listForTicket(String(id), query);
   }
 
   /**

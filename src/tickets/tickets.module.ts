@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BotModule } from '../bot/bot.module';
+import { OpsModule } from '../bot/ops/ops.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { TagsModule } from '../tags/tags.module';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
+import { CustomerOrdersService } from './customer-orders.service';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
@@ -31,9 +33,12 @@ import { TicketsService } from './tickets.service';
     // TagsService — validates that every tag on a PATCH exists in
     // the admin-managed catalogue.
     TagsModule,
+    // OpsReadService — read-only doorway to the surma_common_ops DB
+    // for the customer-orders sidebar.
+    OpsModule,
   ],
   controllers: [TicketsController],
-  providers: [TicketsService, TicketLifecycleService],
+  providers: [TicketsService, TicketLifecycleService, CustomerOrdersService],
   // Lifecycle service exported so EmailInboxService can wake paused
   // tickets on customer reply inside its ingest transaction.
   exports: [TicketsService, TicketLifecycleService],
