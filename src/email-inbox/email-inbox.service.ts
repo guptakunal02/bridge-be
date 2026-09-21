@@ -169,19 +169,26 @@ export class EmailInboxService {
       },
     );
 
-    // Post-commit FIFO drain: move the oldest BOT-queued ticket
-    // (which might be the one we just created, or an older stranded
-    // one) to the round-robin-chosen agent. Skipped when picker
-    // returned BOT — nothing to drain to.
-    if (wasNewTicket && pickedAssigneeId) {
-      await this.lifecycle.onCapacityFreed(pickedAssigneeId);
-    }
-
-    // Post-commit bot dispatch. Failures here don't roll back the
-    // email — the ticket is already the source of truth for humans.
+    // Post-commit sequence — order matters:
+    //
+    //   1. Try to start a bot session first. If a flow matches the
+    //      TICKET_CREATED trigger and its trigger_conditions accept
+    //      the context, the bot takes ownership of the conversation
+    //      and the ticket must STAY on BOT while it drives. A
+    //      subsequent HANDOFF step will set team_id; the next
+    //      capacity-free event drains it to a human then.
+    //
+    //   2. If no flow matched (null returned), the ticket has no
+    //      bot driver — fall through to the FIFO drain so the
+    //      round-robin-chosen agent gets it.
+    //
+    // Reply on an existing ticket: hand to the runtime unconditionally.
+    // If a paused session was parked on a question, it'll advance;
+    // otherwise it's a no-op.
+    let botTookOver = false;
     try {
       if (wasNewTicket) {
-        await this.runtime.startSession({
+        const session = await this.runtime.startSession({
           ticketId: ticket.id,
           channelId,
           trigger: BotTrigger.TICKET_CREATED,
@@ -193,6 +200,7 @@ export class EmailInboxService {
             tags: ticket.tags ?? [],
           }),
         });
+        botTookOver = session !== null;
       } else {
         await this.runtime.handleCustomerReply({
           ticketId: ticket.id,
@@ -203,7 +211,15 @@ export class EmailInboxService {
     } catch {
       // Runtime errors already logged inside the service. Swallow
       // so the HTTP call still returns 2xx — the message is safely
-      // persisted regardless.
+      // persisted regardless. Fall through to the drain below so
+      // a bot failure doesn't strand the ticket on BOT forever.
+    }
+
+    // Only drain when the bot didn't take over. This preserves FIFO
+    // for the human queue while keeping the bot's ticket parked on
+    // BOT until its handoff step runs.
+    if (wasNewTicket && !botTookOver && pickedAssigneeId) {
+      await this.lifecycle.onCapacityFreed(pickedAssigneeId);
     }
 
     return message;
