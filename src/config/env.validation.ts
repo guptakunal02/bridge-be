@@ -76,6 +76,28 @@ export class EnvVars {
   // an Authorized redirect URI registered in the Google Cloud OAuth client.
   @IsUrl({ require_tld: false, require_protocol: true })
   GOOGLE_OAUTH_CALLBACK_URL!: string;
+
+  /**
+   * S3 credentials + bucket for inbound email attachment storage.
+   * The bucket is public-read (see infra runbook), so URLs the app
+   * returns are direct https://<bucket>.s3.<region>.amazonaws.com/<key>
+   * links — no presigning at read time.
+   */
+  @IsString()
+  @MinLength(16)
+  AWS_ACCESS_KEY_ID!: string;
+
+  @IsString()
+  @MinLength(1)
+  AWS_SECRET_ACCESS_KEY!: string;
+
+  @IsString()
+  @MinLength(1)
+  AWS_REGION!: string;
+
+  @IsString()
+  @MinLength(1)
+  S3_ATTACHMENTS_BUCKET!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

@@ -46,6 +46,14 @@ export interface TicketListItem {
   updatedAt: string;
 }
 
+export interface EmailAttachmentResponse {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  url: string;
+}
+
 export interface EmailMessageResponse {
   id: string;
   channelId: string;
@@ -57,6 +65,7 @@ export interface EmailMessageResponse {
   content: string;
   contentHtml: string | null;
   externalMessageId: string;
+  attachments: EmailAttachmentResponse[];
   createdAt: string;
 }
 
@@ -142,6 +151,18 @@ function toEmailMessage(m: EmailMessage): EmailMessageResponse {
     content: m.content,
     contentHtml: m.content_html,
     externalMessageId: m.external_message_id,
+    // Attachments come in via the eager-loaded relation on the
+    // list() / get() paths. Older code paths that hand a plain
+    // message row will still render (empty array).
+    attachments: (m.attachments ?? []).map((a) => ({
+      id: a.id,
+      filename: a.filename,
+      contentType: a.content_type,
+      // size_bytes stores TypeORM's bigint-as-string; parse for the
+      // client.
+      sizeBytes: Number(a.size_bytes),
+      url: a.storage_url,
+    })),
     createdAt: m.createdAt.toISOString(),
   };
 }

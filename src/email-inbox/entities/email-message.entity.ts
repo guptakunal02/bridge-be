@@ -13,12 +13,14 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Channel } from '../../channels/entities/channel.entity';
 import { Ticket } from '../../tickets/entities/ticket.entity';
 import { MessageDirection } from '../../database/enums';
+import { EmailMessageAttachment } from './email-message-attachment.entity';
 
 @Entity({ name: 'email_message' })
 @Index(['channelId', 'createdAt'])
@@ -81,4 +83,7 @@ export class EmailMessage {
 
   @DeleteDateColumn({ type: 'timestamptz' })
   deletedAt!: Date | null;
+
+  @OneToMany(() => EmailMessageAttachment, (a) => a.message)
+  attachments!: EmailMessageAttachment[];
 }

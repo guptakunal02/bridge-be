@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
+import { S3StorageService } from '../common/storage/s3-storage.service';
 import {
   BotTrigger,
   ChannelType,
@@ -17,12 +18,18 @@ import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entit
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
 import { User } from '../users/entities/user.entity';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
-import type { IngestEmailInbox } from './dto/req.dto';
+import type {
+  IngestEmailAttachment,
+  IngestEmailInbox,
+} from './dto/req.dto';
 import { EmailMessage } from './entities/email-message.entity';
+import { EmailMessageAttachment } from './entities/email-message-attachment.entity';
 import { EmailMessageRepository } from './providers/email-message.repository';
 
 @Injectable()
 export class EmailInboxService {
+  private readonly logger = new Logger(EmailInboxService.name);
+
   constructor(
     private readonly emails: EmailMessageRepository,
     private readonly dataSource: DataSource,
@@ -31,6 +38,7 @@ export class EmailInboxService {
     private readonly router: RoutingService,
     private readonly runtime: BotRuntimeService,
     private readonly lifecycle: TicketLifecycleService,
+    private readonly storage: S3StorageService,
   ) {}
 
   /**
@@ -165,6 +173,16 @@ export class EmailInboxService {
           }),
         );
 
+        // Attachments — upload to S3 then persist the metadata row.
+        // Done inside the txn so a partial failure (S3 up, DB down)
+        // doesn't leave orphan objects referenced by nothing on our
+        // side. Failure is caught per-attachment so a single 5xx
+        // from S3 doesn't lose the whole email — the message row
+        // still commits, and the affected attachment is logged.
+        if (req.attachments && req.attachments.length > 0) {
+          await this.persistAttachments(saved.id, req.attachments, mgr);
+        }
+
         return { message: saved, ticket, wasNewTicket: isNew };
       },
     );
@@ -223,5 +241,44 @@ export class EmailInboxService {
     }
 
     return message;
+  }
+
+  /**
+   * Upload the given attachments to S3 and persist the metadata
+   * rows in the caller's transaction. Per-attachment try/catch so a
+   * single upload failure logs and drops that one attachment,
+   * rather than aborting the entire message ingest.
+   */
+  private async persistAttachments(
+    messageId: string,
+    attachments: IngestEmailAttachment[],
+    mgr: import('typeorm').EntityManager,
+  ): Promise<void> {
+    const repo = mgr.getRepository(EmailMessageAttachment);
+    for (const a of attachments) {
+      try {
+        const uploaded = await this.storage.upload({
+          filename: a.filename,
+          contentType: a.contentType,
+          body: a.body,
+        });
+        await repo.save(
+          repo.create({
+            message_id: messageId,
+            filename: a.filename,
+            content_type: a.contentType,
+            size_bytes: String(a.size),
+            storage_key: uploaded.key,
+            storage_url: uploaded.url,
+          }),
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Failed to persist attachment "${a.filename}" on message=${messageId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
   }
 }

@@ -11,11 +11,12 @@ import { EmailInboxController } from './email-inbox.controller';
 import { EmailInboxService } from './email-inbox.service';
 import { EmailInboxWorker } from './email-inbox.worker';
 import { EmailMessage } from './entities/email-message.entity';
+import { EmailMessageAttachment } from './entities/email-message-attachment.entity';
 import { EmailMessageRepository } from './providers/email-message.repository';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmailMessage, Channel]),
+    TypeOrmModule.forFeature([EmailMessage, EmailMessageAttachment, Channel]),
     ChannelsModule,
     // AssignmentPickerService for round-robining new tickets to
     // Online agents at ingest time.

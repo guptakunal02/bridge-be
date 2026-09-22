@@ -1,10 +1,36 @@
 import {
   ArrayNotEmpty,
   IsEmail,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+/**
+ * One inbound-email attachment as seen by the IMAP loop (post-parse,
+ * pre-upload). Uploaded to S3 during ingest; the resulting metadata
+ * is persisted as an email_message_attachment row. Never crosses
+ * the HTTP boundary — populated only in server-to-server calls.
+ */
+export class IngestEmailAttachment {
+  @IsString()
+  @IsNotEmpty()
+  filename!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  contentType!: string;
+
+  /** Byte size — surfaced on the FE as "invoice.pdf (240 KB)". */
+  @IsInt()
+  size!: number;
+
+  /** Raw bytes; the DTO carries a Buffer straight from mailparser. */
+  body!: Buffer;
+}
 
 /**
  * Body payload for ingesting a single inbound email into Bridge.
@@ -42,4 +68,15 @@ export class IngestEmailInbox {
   @IsString()
   @IsNotEmpty()
   external_message_id!: string;
+
+  /**
+   * Any file attachments the sender included. Parsed by mailparser
+   * in the IMAP loop; EmailInboxService uploads them to S3 during
+   * ingest and persists the metadata rows. Optional because most
+   * inbound emails carry no attachments.
+   */
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => IngestEmailAttachment)
+  attachments?: IngestEmailAttachment[];
 }

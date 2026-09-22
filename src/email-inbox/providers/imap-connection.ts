@@ -267,6 +267,20 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
       ? parsed.html
       : undefined;
 
+  // mailparser hands back attachments as a flat array of
+  // {filename, contentType, size, content: Buffer}. Skip inline
+  // image parts that show up embedded in the HTML body (cid: refs)
+  // — those already render inside MessageBody's iframe and would
+  // otherwise appear twice, once as a chip and once inline.
+  const attachments = (parsed.attachments ?? [])
+    .filter((a) => a.contentDisposition !== 'inline')
+    .map((a) => ({
+      filename: (a.filename ?? 'attachment').trim() || 'attachment',
+      contentType: a.contentType ?? 'application/octet-stream',
+      size: Number(a.size ?? a.content?.length ?? 0),
+      body: a.content,
+    }));
+
   return {
     sender,
     receiver,
@@ -274,6 +288,7 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
     content: parsed.text?.trim() || '',
     contentHtml: html,
     external_message_id: externalMessageId,
+    attachments: attachments.length > 0 ? attachments : undefined,
   };
 }
 

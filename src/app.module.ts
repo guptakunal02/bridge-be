@@ -6,6 +6,7 @@ import { BotModule } from './bot/bot.module';
 import { ChannelsModule } from './channels/channels.module';
 import { HttpModule } from './common/http/http.module';
 import { LoggerModule } from './common/logger/logger.module';
+import { StorageModule } from './common/storage/storage.module';
 import { ThrottlerModule } from './common/throttler/throttler.module';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
@@ -26,6 +27,7 @@ import { UsersModule } from './users/users.module';
     }),
     LoggerModule,
     HttpModule,
+    StorageModule,
     ThrottlerModule,
     EventEmitterModule.forRoot({ wildcard: false, maxListeners: 20 }),
     DatabaseModule,

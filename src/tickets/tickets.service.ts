@@ -228,8 +228,11 @@ export class TicketsService {
     if (!ticket) throw new NotFoundException('Ticket not found');
 
     const [messages, activity] = await Promise.all([
+      // Eager-load attachments so the FE can render chips inline.
+      // Bounded by messages-per-thread; cheap.
       this.emails.find({
         where: { ticket_id: id },
+        relations: { attachments: true },
         order: { createdAt: 'ASC' },
       }),
       this.activity.find({
