@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,7 +8,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Express } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import {
@@ -116,5 +121,36 @@ export class TicketsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
     return this.tickets.reply(String(id), dto, user);
+  }
+
+  /**
+   * Upload one file for a pending reply. Returns the S3 metadata the
+   * composer keeps in local state; the persisted attachment row is
+   * only written when POST :id/reply succeeds. Multer holds bytes in
+   * memory — capped at 25 MB per file, matching Gmail's max message
+   * size headroom so we don't accept files that would bounce.
+   */
+  @Post(':id/attachments/upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 25 * 1024 * 1024 },
+    }),
+  )
+  uploadReplyAttachment(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ): Promise<{
+    storageKey: string;
+    storageUrl: string;
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+  }> {
+    if (!file) {
+      throw new BadRequestException(
+        'No file received. Use multipart/form-data with a "file" field.',
+      );
+    }
+    return this.tickets.uploadReplyAttachment(String(id), file);
   }
 }

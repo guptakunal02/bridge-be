@@ -74,6 +74,7 @@
     "@types/jest": "^30.0.0",
     "@types/mailparser": "^3.4.6",
     "@types/ms": "^2.1.0",
+    "@types/multer": "^2.2.0",
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^8.0.1",
     "@types/passport-google-oauth20": "^2.0.17",

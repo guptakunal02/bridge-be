@@ -9,6 +9,7 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailSenderService } from '../channels/email/email-sender.service';
+import { S3StorageService } from '../common/storage/s3-storage.service';
 import { Team } from '../teams/entities/team.entity';
 import {
   BotTrigger,
@@ -18,6 +19,7 @@ import {
   UserRole,
 } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
+import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
@@ -64,7 +66,49 @@ export class TicketsService {
     private readonly lifecycle: TicketLifecycleService,
     private readonly sender: EmailSenderService,
     private readonly tagsService: TagsService,
+    private readonly storage: S3StorageService,
   ) {}
+
+  /**
+   * Upload a single reply attachment to S3 and return the metadata
+   * the FE hands back on Send. Ticket existence is verified so a
+   * bogus id can't be used to burn S3 quota; no DB row is written
+   * here — the persisted EmailMessageAttachment is created inside
+   * the reply() txn once send succeeds.
+   */
+  async uploadReplyAttachment(
+    ticketId: string,
+    file: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+      size: number;
+    },
+  ): Promise<{
+    storageKey: string;
+    storageUrl: string;
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+  }> {
+    const ticket = await this.tickets.findOne({
+      where: { id: ticketId },
+      select: { id: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    const uploaded = await this.storage.upload({
+      filename: file.originalname,
+      contentType: file.mimetype,
+      body: file.buffer,
+    });
+    return {
+      storageKey: uploaded.key,
+      storageUrl: uploaded.url,
+      filename: file.originalname,
+      contentType: file.mimetype,
+      sizeBytes: file.size,
+    };
+  }
 
   async list(
     query: ListTicketsQuery,
@@ -555,23 +599,46 @@ export class TicketsService {
       .map((m) => m.external_message_id)
       .filter((s): s is string => Boolean(s));
 
+    // Normalise CC / BCC:
+    //   - lowercase + trim so dedupe is real
+    //   - drop anything that duplicates the primary To
+    //   - enforce a combined cap (matches the FE-declared "20 total")
+    // BCC intentionally NOT persisted on the timeline — that's its
+    // whole point. CC gets appended to the receiver array so the
+    // timeline shows every visible recipient of the outbound.
+    const cc = normaliseAddressList(dto.cc, to);
+    const bcc = normaliseAddressList(dto.bcc, [...to, ...cc]);
+    if (cc.length + bcc.length > 20) {
+      throw new BadRequestException(
+        'Combined CC + BCC recipients cannot exceed 20 addresses.',
+      );
+    }
+
     // 1. SMTP send (outside the txn).
     const { externalMessageId } = await this.sender.sendReply({
       channel,
       to,
+      cc,
+      bcc,
       subject,
       body: dto.body,
       bodyHtml: dto.bodyHtml ?? null,
       inReplyTo: lastInbound.external_message_id,
       references,
+      attachments: (dto.attachments ?? []).map((a) => ({
+        filename: a.filename,
+        contentType: a.contentType,
+        url: a.storageUrl,
+      })),
     });
 
-    // 2. Persist message row + activity log in one txn.
+    // 2. Persist message row + attachments + activity log in one txn.
     await this.dataSource.transaction(async (mgr) => {
       const emailRepo = mgr.getRepository(EmailMessage);
+      const attachmentRepo = mgr.getRepository(EmailMessageAttachment);
       const logRepo = mgr.getRepository(TicketActivityLog);
 
-      await emailRepo.save(
+      const savedMessage = await emailRepo.save(
         emailRepo.create({
           channelId: ticket.channel_id,
           ticket_id: id,
@@ -580,15 +647,34 @@ export class TicketsService {
           content: dto.body,
           content_html: dto.bodyHtml ?? null,
           sender: channel.inbox_contact,
-          receiver: to,
+          // Store every visible recipient on the timeline row. BCC
+          // stays out on purpose (invisible by definition).
+          receiver: [...to, ...cc],
           external_message_id: externalMessageId,
         }),
       );
+
+      if (dto.attachments && dto.attachments.length > 0) {
+        await attachmentRepo.save(
+          dto.attachments.map((a) =>
+            attachmentRepo.create({
+              message_id: savedMessage.id,
+              filename: a.filename,
+              content_type: a.contentType,
+              size_bytes: String(a.sizeBytes),
+              storage_key: a.storageKey,
+              storage_url: a.storageUrl,
+            }),
+          ),
+        );
+      }
+
+      const recipientSummary = [...to, ...cc, ...bcc].join(', ');
       await logRepo.save({
         ticket_id: id,
         event: TicketActivity.AGENT_REPLIED,
         actor_id: actingUser.id,
-        log: `Replied to ${to.join(', ')} by ${actingUser.email ?? actingUser.id}`,
+        log: `Replied to ${recipientSummary} by ${actingUser.email ?? actingUser.id}`,
       });
     });
 
@@ -749,7 +835,36 @@ function applyMessageSearch(
  */
 function replySubject(original: string | null): string {
   const trimmed = (original ?? '').trim();
-  if (!trimmed) return 'Support reply';
   if (/^re:\s/i.test(trimmed)) return trimmed;
+  if (!trimmed) return 'Support reply';
   return `Re: ${trimmed}`;
+}
+
+/**
+ * Normalise a raw CC / BCC list from the FE:
+ *   - lowercase + trim each address
+ *   - drop empty strings
+ *   - drop anything already in `excludeLower` (used to keep CC / BCC
+ *     from redundantly re-including the primary To recipient, or
+ *     BCC from duplicating CC).
+ * Order preserved so admins see their intent reflected in the
+ * activity log.
+ */
+function normaliseAddressList(
+  raw: string[] | undefined,
+  exclude: string[],
+): string[] {
+  if (!raw || raw.length === 0) return [];
+  const excludeLower = new Set(exclude.map((e) => e.toLowerCase()));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const addr = entry.trim().toLowerCase();
+    if (!addr) continue;
+    if (excludeLower.has(addr)) continue;
+    if (seen.has(addr)) continue;
+    seen.add(addr);
+    out.push(addr);
+  }
+  return out;
 }

@@ -9,9 +9,22 @@ import { EmailCredentialsService } from './email-credentials.service';
  * service) resolves the ticket + channel + thread context and hands
  * this shape over — the sender stays stateless.
  */
+export interface OutboundEmailAttachment {
+  filename: string;
+  contentType: string;
+  /**
+   * Public HTTPS URL — nodemailer's `path` field accepts URLs and
+   * streams the object at send time. Our S3 bucket is public-read,
+   * so the SMTP relay can fetch without credentials.
+   */
+  url: string;
+}
+
 export interface OutboundEmailReply {
   channel: Channel;
   to: string[];
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   body: string;
   bodyHtml?: string | null;
@@ -27,6 +40,11 @@ export interface OutboundEmailReply {
    * Cheap to build from EmailMessage rows on the ticket.
    */
   references?: string[];
+  /**
+   * Files to inline as SMTP attachments. Empty / undefined → no
+   * attachments part on the message.
+   */
+  attachments?: OutboundEmailAttachment[];
 }
 
 export interface OutboundEmailResult {
@@ -81,6 +99,8 @@ export class EmailSenderService {
     const info: SMTPTransport.SentMessageInfo = await transport.sendMail({
       from,
       to: input.to,
+      cc: input.cc && input.cc.length > 0 ? input.cc : undefined,
+      bcc: input.bcc && input.bcc.length > 0 ? input.bcc : undefined,
       subject: input.subject,
       text: input.body,
       html: input.bodyHtml ?? undefined,
@@ -88,6 +108,18 @@ export class EmailSenderService {
       references:
         input.references && input.references.length > 0
           ? input.references
+          : undefined,
+      // nodemailer accepts `path` as an HTTPS URL — it streams the
+      // object into the multipart body at send time. Bucket policy
+      // grants s3:GetObject to *, so the SMTP relay fetches without
+      // credentials.
+      attachments:
+        input.attachments && input.attachments.length > 0
+          ? input.attachments.map((a) => ({
+              filename: a.filename,
+              contentType: a.contentType,
+              path: a.url,
+            }))
           : undefined,
     });
 

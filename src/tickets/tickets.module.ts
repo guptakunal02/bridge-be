@@ -4,7 +4,9 @@ import { BotModule } from '../bot/bot.module';
 import { OpsModule } from '../bot/ops/ops.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
+import { StorageModule } from '../common/storage/storage.module';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
+import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { TagsModule } from '../tags/tags.module';
 import { Team } from '../teams/entities/team.entity';
 import { User } from '../users/entities/user.entity';
@@ -22,6 +24,7 @@ import { TicketsService } from './tickets.service';
       Ticket,
       TicketActivityLog,
       EmailMessage,
+      EmailMessageAttachment,
       User,
       Channel,
       Team,
@@ -38,6 +41,8 @@ import { TicketsService } from './tickets.service';
     // OpsReadService — read-only doorway to the surma_common_ops DB
     // for the customer-orders sidebar.
     OpsModule,
+    // S3StorageService — reply-attachment uploads.
+    StorageModule,
   ],
   controllers: [TicketsController],
   providers: [TicketsService, TicketLifecycleService, CustomerOrdersService],
