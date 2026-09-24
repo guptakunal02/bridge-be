@@ -281,6 +281,13 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
       body: a.content,
     }));
 
+  // References is a whitespace-separated Message-ID chain per RFC
+  // 5322. mailparser sometimes hands us an array, sometimes a
+  // single joined string — normalise both into a clean array of
+  // angle-bracket-wrapped MIDs so the threading lookup can iterate.
+  const references = normaliseReferences(parsed.references);
+  const inReplyTo = parsed.inReplyTo?.trim() || undefined;
+
   return {
     sender,
     receiver,
@@ -288,8 +295,16 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
     content: parsed.text?.trim() || '',
     contentHtml: html,
     external_message_id: externalMessageId,
+    inReplyTo,
+    references: references.length > 0 ? references : undefined,
     attachments: attachments.length > 0 ? attachments : undefined,
   };
+}
+
+function normaliseReferences(raw: string | string[] | undefined): string[] {
+  if (!raw) return [];
+  const items = Array.isArray(raw) ? raw : raw.split(/\s+/);
+  return items.map((s) => s.trim()).filter(Boolean);
 }
 
 function firstAddress(header: ParsedMail['from']): string | null {

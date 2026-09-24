@@ -75,9 +75,23 @@ export class EmailInboxService {
         const logRepo = mgr.getRepository(TicketActivityLog);
         const userRepo = mgr.getRepository(User);
 
-        let ticket = await ticketRepo.findOne({
-          where: { channel_id: channelId, thread_key: threadKey },
-        });
+        // Thread stitching order:
+        //   1. Look up any prior message we've stored whose
+        //      Message-ID appears in this email's References or
+        //      In-Reply-To chain — that message's ticket is the
+        //      one this reply belongs to.
+        //   2. Fall back to matching thread_key = own Message-ID,
+        //      which handles the pre-References fallback case and
+        //      IMAP replay idempotency.
+        // Every code path afterwards treats a hit as "this email
+        // extends an existing thread" and a miss as "brand new
+        // thread, mint a ticket".
+        let ticket = await this.findTicketFromReferences(mgr, channelId, req);
+        if (!ticket) {
+          ticket = await ticketRepo.findOne({
+            where: { channel_id: channelId, thread_key: threadKey },
+          });
+        }
         const isNew = !ticket;
 
         // Reply to an existing paused ticket → wake it now so the
@@ -241,6 +255,49 @@ export class EmailInboxService {
     }
 
     return message;
+  }
+
+  /**
+   * Walk the incoming email's References + In-Reply-To chain and
+   * return the ticket its ancestor message belongs to, if any.
+   *
+   * Order matters: References is oldest → newest per RFC 5322,
+   * and the OLDEST ancestor is the most reliable anchor because
+   * it survives forwards and multi-level replies where the
+   * intermediate MIDs might have been dropped. We walk from oldest
+   * to newest and stop at the first match.
+   *
+   * Returns null when nothing in the chain matches — the caller
+   * then falls through to the thread_key match / new-ticket path.
+   */
+  private async findTicketFromReferences(
+    mgr: import('typeorm').EntityManager,
+    channelId: string,
+    req: IngestEmailInbox,
+  ): Promise<Ticket | null> {
+    const chain: string[] = [];
+    if (req.references && req.references.length > 0) {
+      chain.push(...req.references);
+    }
+    if (req.inReplyTo && !chain.includes(req.inReplyTo)) {
+      chain.push(req.inReplyTo);
+    }
+    if (chain.length === 0) return null;
+
+    const msgRepo = mgr.getRepository(EmailMessage);
+    for (const mid of chain) {
+      const prior = await msgRepo.findOne({
+        where: { external_message_id: mid, channelId },
+        select: { id: true, ticket_id: true },
+      });
+      if (prior) {
+        const ticket = await mgr.getRepository(Ticket).findOne({
+          where: { id: prior.ticket_id },
+        });
+        if (ticket) return ticket;
+      }
+    }
+    return null;
   }
 
   /**

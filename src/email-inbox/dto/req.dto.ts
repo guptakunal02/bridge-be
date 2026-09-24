@@ -70,6 +70,25 @@ export class IngestEmailInbox {
   external_message_id!: string;
 
   /**
+   * The parent Message-ID this email is replying to (In-Reply-To
+   * header). Optional — absent on brand-new threads. Together with
+   * `references`, drives thread stitching so a chain of replies
+   * ends up on one ticket instead of a fresh one per message.
+   */
+  @IsOptional()
+  @IsString()
+  inReplyTo?: string;
+
+  /**
+   * Full References chain, oldest → newest. RFC 5322 §3.6.4 guarantees
+   * this carries every ancestor Message-ID in the thread up to and
+   * including In-Reply-To. Used to find the root of the conversation.
+   */
+  @IsOptional()
+  @IsString({ each: true })
+  references?: string[];
+
+  /**
    * Any file attachments the sender included. Parsed by mailparser
    * in the IMAP loop; EmailInboxService uploads them to S3 during
    * ingest and persists the metadata rows. Optional because most
