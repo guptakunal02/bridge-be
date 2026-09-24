@@ -1,4 +1,13 @@
-import { IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { TicketStatus } from '../../database/enums';
 
 /**
@@ -32,4 +41,14 @@ export class ListTicketsQuery {
   @IsInt()
   @Min(0)
   offset?: number;
+
+  /**
+   * Case-insensitive substring match against any email_message on
+   * the ticket — matches on sender address or subject line.
+   * Length-capped to keep the ILIKE cheap.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
 }

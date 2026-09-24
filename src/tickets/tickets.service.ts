@@ -86,6 +86,7 @@ export class TicketsService {
     if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
     }
+    applyMessageSearch(qb, query.q);
     await this.applyScope(qb, query.scope ?? 'all', actingUser);
 
     const rows = await qb.getMany();
@@ -186,6 +187,7 @@ export class TicketsService {
     if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
     }
+    applyMessageSearch(qb, query.q);
     await this.applyScope(qb, query.scope ?? 'all', actingUser);
 
     const rows: Array<{ status: TicketStatus; count: string }> =
@@ -704,6 +706,38 @@ function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Attach a "search this ticket's messages" predicate to the given
+ * ticket query builder. Matches case-insensitive substrings on
+ * sender OR subject across every email_message belonging to the
+ * ticket — EXISTS keeps it a semi-join so tickets don't multiply
+ * when multiple messages match.
+ *
+ * No-op for empty / whitespace-only strings; callers can safely
+ * pass through unfiltered inputs.
+ *
+ * Performance note: no functional indexes on sender/subject today,
+ * so this scans email_message for each query. Fine at MVP scale
+ * (thousands of rows); add pg_trgm + GIN indexes if the inbox
+ * grows past ~50k messages.
+ */
+function applyMessageSearch(
+  qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
+  raw: string | undefined,
+): void {
+  const q = raw?.trim();
+  if (!q) return;
+  qb.andWhere(
+    `EXISTS (
+       SELECT 1 FROM public.email_message m
+        WHERE m.ticket_id = t.id
+          AND m."deletedAt" IS NULL
+          AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
+     )`,
+    { bridgeQ: `%${q}%` },
+  );
 }
 
 /**
