@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import type { EnvVars } from '../../config/env.validation';
 
 export interface UploadedFile {
@@ -92,6 +96,42 @@ export class S3StorageService {
    */
   publicUrl(key: string): string {
     return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+  }
+
+  /**
+   * Pull the entire object body into memory. Used by outbound SMTP
+   * so nodemailer gets a `content: Buffer` rather than a `path: URL`
+   * — that removes an SSRF surface (FE-supplied URLs can no longer
+   * decide what the SMTP relay fetches) and gives us predictable
+   * timeout / retry behaviour via the AWS SDK's own controls.
+   *
+   * `key` must belong to our own attachments prefix — reject
+   * anything else defensively so a compromised caller can't point
+   * this at, say, a credentials object elsewhere in the bucket.
+   */
+  async download(key: string): Promise<{
+    body: Buffer;
+    contentType: string | null;
+  }> {
+    if (!key.startsWith('attachments/')) {
+      throw new Error(
+        `Refused to download S3 key outside the attachments/ prefix: ${key}`,
+      );
+    }
+    const res = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    if (!res.Body) {
+      throw new Error(`S3 object has no body: ${key}`);
+    }
+    // The SDK v3 hands back a Node.js Readable via transformToByteArray()
+    // on Node; using the officially-supported helper keeps us clear of
+    // internal typing quirks.
+    const bytes = await res.Body.transformToByteArray();
+    return {
+      body: Buffer.from(bytes),
+      contentType: res.ContentType ?? null,
+    };
   }
 }
 

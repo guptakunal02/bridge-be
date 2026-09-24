@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { S3StorageService } from '../common/storage/s3-storage.service';
 import {
@@ -104,17 +104,44 @@ export class EmailInboxService {
         //     old thread_key is taken by the RESOLVED ticket, so we
         //     drop the match and let the mint path below own it
         //     with a fresh thread_key derived from this email's MID.
+        //
+        // Row-lock the ticket for the full check-then-write so two
+        // concurrent inbound messages to the same RESOLVED ticket
+        // don't both silently attach — the loser waits, then re-reads
+        // the fresh state (post-winner-reopen or post-drop) and
+        // proceeds accordingly. The lock is released when the outer
+        // txn commits or rolls back.
         if (ticket && ticket.status === TicketStatus.RESOLVED) {
-          const withinWindow = await this.isWithinReopenWindow(
-            ticket.resolved_at,
-          );
-          if (withinWindow) {
-            await this.reopenResolved(ticket.id, mgr);
-            // Refresh the row so the message linkage below sees the
-            // post-reopen status/flags.
-            ticket = await ticketRepo.findOne({ where: { id: ticket.id } });
-          } else {
+          const locked = await ticketRepo.findOne({
+            where: { id: ticket.id },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!locked) {
             ticket = null;
+          } else if (locked.status !== TicketStatus.RESOLVED) {
+            // Another worker already flipped it (e.g. reopened via
+            // an earlier concurrent reply). Use the fresh row and
+            // let the wake-if-paused path below take it from here.
+            ticket = locked;
+          } else {
+            const withinWindow = await this.isWithinReopenWindow(
+              locked.resolved_at,
+            );
+            if (!withinWindow) {
+              ticket = null;
+            } else {
+              const flipped = await this.reopenResolved(locked.id, mgr);
+              if (!flipped) {
+                // Should be unreachable under the row lock, but if
+                // the UPDATE affected zero rows we don't know the
+                // real state — err on the safe side and mint fresh.
+                ticket = null;
+              } else {
+                ticket = await ticketRepo.findOne({
+                  where: { id: locked.id },
+                });
+              }
+            }
           }
         }
         const isNew = !ticket;
@@ -309,18 +336,27 @@ export class EmailInboxService {
     }
     if (chain.length === 0) return null;
 
+    // One batched IN query instead of one round trip per chain hop.
+    // Then walk the chain in order (oldest → newest per RFC 5322 §3.6.4)
+    // and pick the first ancestor we've stored — that's the most
+    // reliable anchor because it survives forwards and multi-level
+    // replies where intermediate MIDs may have been dropped.
     const msgRepo = mgr.getRepository(EmailMessage);
+    const priors = await msgRepo.find({
+      where: { external_message_id: In(chain), channelId },
+      select: { external_message_id: true, ticket_id: true },
+    });
+    if (priors.length === 0) return null;
+    const ticketIdByMid = new Map(
+      priors.map((p) => [p.external_message_id, p.ticket_id]),
+    );
     for (const mid of chain) {
-      const prior = await msgRepo.findOne({
-        where: { external_message_id: mid, channelId },
-        select: { id: true, ticket_id: true },
-      });
-      if (prior) {
-        const ticket = await mgr.getRepository(Ticket).findOne({
-          where: { id: prior.ticket_id },
-        });
-        if (ticket) return ticket;
-      }
+      const ticketId = ticketIdByMid.get(mid);
+      if (!ticketId) continue;
+      const ticket = await mgr
+        .getRepository(Ticket)
+        .findOne({ where: { id: ticketId } });
+      if (ticket) return ticket;
     }
     return null;
   }
@@ -354,14 +390,15 @@ export class EmailInboxService {
    * a REOPENED activity entry for the audit trail.
    *
    * Conditional UPDATE on status = RESOLVED — if the row already
-   * flipped away in a race (unlikely since we're inside the ingest
-   * txn, but cheap defense), the write is a no-op and we skip the
-   * log.
+   * flipped away in a race (unlikely since the caller holds a row
+   * lock, but cheap defense), the write is a no-op and we skip the
+   * log. Returns true iff a row was actually updated so the caller
+   * can decide whether to attach or mint fresh.
    */
   private async reopenResolved(
     ticketId: string,
     mgr: import('typeorm').EntityManager,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const ticketRepo = mgr.getRepository(Ticket);
     const logRepo = mgr.getRepository(TicketActivityLog);
     const result = await ticketRepo
@@ -375,7 +412,8 @@ export class EmailInboxService {
       .where('id = :id', { id: ticketId })
       .andWhere('status = :resolved', { resolved: TicketStatus.RESOLVED })
       .execute();
-    if ((result.affected ?? 0) > 0) {
+    const affected = result.affected ?? 0;
+    if (affected > 0) {
       await logRepo.save({
         ticket_id: ticketId,
         event: TicketActivity.REOPENED,
@@ -383,6 +421,7 @@ export class EmailInboxService {
         log: 'Auto-reopened — customer replied within the reopen window',
       });
     }
+    return affected > 0;
   }
 
   /**

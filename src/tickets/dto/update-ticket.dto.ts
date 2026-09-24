@@ -33,7 +33,7 @@ export class UpdateTicketDto {
    * 30 days.
    */
   @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 4 })
+  @IsNumber({ maxDecimalPlaces: 6 })
   @Min(1 / 60)
   @Max(RESUME_MAX_HOURS)
   resumeAtHours?: number;

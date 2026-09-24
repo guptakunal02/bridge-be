@@ -50,15 +50,19 @@ export class AppSettingsService {
 
   /**
    * INSERT ... ON CONFLICT so callers don't have to check-then-write.
-   * The row's `updatedAt` gets bumped by the DEFAULT clause on write.
+   * `updatedAt` is included in the overwrite set with an explicit
+   * `NOW()` because raw QueryBuilder inserts bypass TypeORM's
+   * lifecycle hooks — @UpdateDateColumn wouldn't fire on the
+   * conflict path otherwise, leaving the timestamp stuck at the
+   * original insert time.
    */
   private async setRaw(key: string, value: string): Promise<void> {
     await this.repo
       .createQueryBuilder()
       .insert()
       .into(AppSetting)
-      .values({ key, value })
-      .orUpdate(['value'], ['key'])
+      .values({ key, value, updatedAt: () => 'NOW()' })
+      .orUpdate(['value', 'updatedAt'], ['key'])
       .execute();
   }
 }

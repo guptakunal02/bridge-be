@@ -25,3 +25,10 @@ export const AUTH_REFRESH_THROTTLE = {
 export const INVITATION_ACCEPT_THROTTLE = {
   default: { ttl: 60_000, limit: 10 },
 } as const;
+
+/** Reply-attachment upload — 30 files/min per user is generous
+ *  for legit workflows (up to 3 replies × 10 attachments) but
+ *  keeps abuse in check. */
+export const REPLY_ATTACHMENT_UPLOAD_THROTTLE = {
+  default: { ttl: 60_000, limit: 30 },
+} as const;

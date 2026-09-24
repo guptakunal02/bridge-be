@@ -4,7 +4,6 @@ import {
   Controller,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -12,7 +11,11 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import type { Express } from 'express';
+import { ParseBigintIdPipe } from '../common/pipes/parse-bigint-id.pipe';
+import { REPLY_ATTACHMENT_UPLOAD_THROTTLE } from '../common/throttler/throttler.module';
+import { REPLY_ATTACHMENT_UPLOAD_OPTIONS } from './attachment-upload-config';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import {
@@ -83,17 +86,17 @@ export class TicketsController {
   }
 
   @Get(':id')
-  get(@Param('id', ParseIntPipe) id: number): Promise<TicketDetail> {
-    return this.tickets.get(String(id));
+  get(@Param('id', ParseBigintIdPipe) id: string): Promise<TicketDetail> {
+    return this.tickets.get(id);
   }
 
   @Patch(':id')
   update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: UpdateTicketDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
-    return this.tickets.update(String(id), dto, user);
+    return this.tickets.update(id, dto, user);
   }
 
   /**
@@ -103,10 +106,10 @@ export class TicketsController {
    */
   @Get(':id/customer-orders')
   customerOrders(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Query() query: ListCustomerOrdersQuery,
   ): Promise<CustomerOrdersPage> {
-    return this.orders.listForTicket(String(id), query);
+    return this.orders.listForTicket(id, query);
   }
 
   /**
@@ -116,28 +119,30 @@ export class TicketsController {
    */
   @Post(':id/reply')
   reply(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: ReplyTicketDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
-    return this.tickets.reply(String(id), dto, user);
+    return this.tickets.reply(id, dto, user);
   }
 
   /**
    * Upload one file for a pending reply. Returns the S3 metadata the
    * composer keeps in local state; the persisted attachment row is
    * only written when POST :id/reply succeeds. Multer holds bytes in
-   * memory — capped at 25 MB per file, matching Gmail's max message
-   * size headroom so we don't accept files that would bounce.
+   * memory — capped at 25 MB per file, single-file per request, with
+   * a MIME allowlist that excludes executables and SVG so the public
+   * S3 bucket doesn't become a phishing/XSS host.
+   *
+   * Per-user rate limit (see REPLY_ATTACHMENT_UPLOAD_THROTTLE) caps
+   * abuse; the ThrottlerGuard is already global so this decorator
+   * just tightens the limit for this route.
    */
   @Post(':id/attachments/upload')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      limits: { fileSize: 25 * 1024 * 1024 },
-    }),
-  )
+  @Throttle(REPLY_ATTACHMENT_UPLOAD_THROTTLE)
+  @UseInterceptors(FileInterceptor('file', REPLY_ATTACHMENT_UPLOAD_OPTIONS))
   uploadReplyAttachment(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseBigintIdPipe) id: string,
     @UploadedFile() file: Express.Multer.File | undefined,
   ): Promise<{
     storageKey: string;
@@ -151,6 +156,6 @@ export class TicketsController {
         'No file received. Use multipart/form-data with a "file" field.',
       );
     }
-    return this.tickets.uploadReplyAttachment(String(id), file);
+    return this.tickets.uploadReplyAttachment(id, file);
   }
 }

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import nodemailer, { type Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
+import { S3StorageService } from '../../common/storage/s3-storage.service';
 import { Channel } from '../entities/channel.entity';
 import { EmailCredentialsService } from './email-credentials.service';
 
@@ -13,11 +14,13 @@ export interface OutboundEmailAttachment {
   filename: string;
   contentType: string;
   /**
-   * Public HTTPS URL — nodemailer's `path` field accepts URLs and
-   * streams the object at send time. Our S3 bucket is public-read,
-   * so the SMTP relay can fetch without credentials.
+   * S3 object key inside our own attachments/ prefix. The sender
+   * downloads bytes server-side and hands nodemailer `content:
+   * Buffer` — that means the FE never gets to influence what URL
+   * the SMTP relay fetches, closing the SSRF surface that a raw
+   * `path: <URL>` would open.
    */
-  url: string;
+  storageKey: string;
 }
 
 export interface OutboundEmailReply {
@@ -65,7 +68,10 @@ export interface OutboundEmailResult {
 export class EmailSenderService {
   private readonly logger = new Logger(EmailSenderService.name);
 
-  constructor(private readonly credentials: EmailCredentialsService) {}
+  constructor(
+    private readonly credentials: EmailCredentialsService,
+    private readonly storage: S3StorageService,
+  ) {}
 
   async sendReply(input: OutboundEmailReply): Promise<OutboundEmailResult> {
     const envelope = input.channel.credentials_encrypted;
@@ -109,18 +115,11 @@ export class EmailSenderService {
         input.references && input.references.length > 0
           ? input.references
           : undefined,
-      // nodemailer accepts `path` as an HTTPS URL — it streams the
-      // object into the multipart body at send time. Bucket policy
-      // grants s3:GetObject to *, so the SMTP relay fetches without
-      // credentials.
-      attachments:
-        input.attachments && input.attachments.length > 0
-          ? input.attachments.map((a) => ({
-              filename: a.filename,
-              contentType: a.contentType,
-              path: a.url,
-            }))
-          : undefined,
+      // Fetch each object into memory and hand nodemailer a Buffer.
+      // Sequential to keep the peak memory footprint bounded (10
+      // attachments × 25 MB cap = ≤ 250 MB worst case); parallelising
+      // wouldn't save wall-clock on the SMTP-bound path anyway.
+      attachments: await this.materialiseAttachments(input.attachments),
     });
 
     // Close the socket promptly; reusing across requests is riskier
@@ -138,5 +137,31 @@ export class EmailSenderService {
     }
 
     return { externalMessageId: info.messageId };
+  }
+
+  /**
+   * Download each attachment's bytes from S3 and pack them into the
+   * shape nodemailer wants. `storageKey` is validated by the storage
+   * service (must live under attachments/) so a malformed reference
+   * bounces here rather than reaching the SMTP relay.
+   */
+  private async materialiseAttachments(
+    inputs: OutboundEmailAttachment[] | undefined,
+  ): Promise<
+    | Array<{ filename: string; contentType: string; content: Buffer }>
+    | undefined
+  > {
+    if (!inputs || inputs.length === 0) return undefined;
+    const out: Array<{ filename: string; contentType: string; content: Buffer }> =
+      [];
+    for (const a of inputs) {
+      const { body } = await this.storage.download(a.storageKey);
+      out.push({
+        filename: a.filename,
+        contentType: a.contentType,
+        content: body,
+      });
+    }
+    return out;
   }
 }

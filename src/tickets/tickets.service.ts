@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -52,6 +53,8 @@ const OPEN_STATUSES: TicketStatus[] = [
 
 @Injectable()
 export class TicketsService {
+  private readonly logger = new Logger(TicketsService.name);
+
   constructor(
     @InjectRepository(Ticket) private readonly tickets: Repository<Ticket>,
     @InjectRepository(TicketActivityLog)
@@ -625,7 +628,11 @@ export class TicketsService {
       );
     }
 
-    // 1. SMTP send (outside the txn).
+    // 1. SMTP send (outside the txn). The sender re-derives each
+    //    attachment's URL server-side from `storageKey`, so a
+    //    malicious storageUrl on the DTO can't influence the SMTP
+    //    fetch path — the FE-supplied URL is only used for on-disk
+    //    persistence below (and is derived from the same key).
     const { externalMessageId } = await this.sender.sendReply({
       channel,
       to,
@@ -639,55 +646,80 @@ export class TicketsService {
       attachments: (dto.attachments ?? []).map((a) => ({
         filename: a.filename,
         contentType: a.contentType,
-        url: a.storageUrl,
+        storageKey: a.storageKey,
       })),
     });
 
     // 2. Persist message row + attachments + activity log in one txn.
-    await this.dataSource.transaction(async (mgr) => {
-      const emailRepo = mgr.getRepository(EmailMessage);
-      const attachmentRepo = mgr.getRepository(EmailMessageAttachment);
-      const logRepo = mgr.getRepository(TicketActivityLog);
+    //    If persist fails after send, the customer already got the
+    //    email — write a compensating activity row via a fresh
+    //    connection so admins can spot the divergence.
+    try {
+      await this.dataSource.transaction(async (mgr) => {
+        const emailRepo = mgr.getRepository(EmailMessage);
+        const attachmentRepo = mgr.getRepository(EmailMessageAttachment);
+        const logRepo = mgr.getRepository(TicketActivityLog);
 
-      const savedMessage = await emailRepo.save(
-        emailRepo.create({
-          channelId: ticket.channel_id,
-          ticket_id: id,
-          type: MessageDirection.SENT,
-          subject,
-          content: dto.body,
-          content_html: dto.bodyHtml ?? null,
-          sender: channel.inbox_contact,
-          // Store every visible recipient on the timeline row. BCC
-          // stays out on purpose (invisible by definition).
-          receiver: [...to, ...cc],
-          external_message_id: externalMessageId,
-        }),
-      );
-
-      if (dto.attachments && dto.attachments.length > 0) {
-        await attachmentRepo.save(
-          dto.attachments.map((a) =>
-            attachmentRepo.create({
-              message_id: savedMessage.id,
-              filename: a.filename,
-              content_type: a.contentType,
-              size_bytes: String(a.sizeBytes),
-              storage_key: a.storageKey,
-              storage_url: a.storageUrl,
-            }),
-          ),
+        const savedMessage = await emailRepo.save(
+          emailRepo.create({
+            channelId: ticket.channel_id,
+            ticket_id: id,
+            type: MessageDirection.SENT,
+            subject,
+            content: dto.body,
+            content_html: dto.bodyHtml ?? null,
+            sender: channel.inbox_contact,
+            // Store every visible recipient on the timeline row. BCC
+            // stays out on purpose (invisible by definition).
+            receiver: [...to, ...cc],
+            external_message_id: externalMessageId,
+          }),
         );
-      }
 
-      const recipientSummary = [...to, ...cc, ...bcc].join(', ');
-      await logRepo.save({
-        ticket_id: id,
-        event: TicketActivity.AGENT_REPLIED,
-        actor_id: actingUser.id,
-        log: `Replied to ${recipientSummary} by ${actingUser.email ?? actingUser.id}`,
+        if (dto.attachments && dto.attachments.length > 0) {
+          await attachmentRepo.save(
+            dto.attachments.map((a) =>
+              attachmentRepo.create({
+                message_id: savedMessage.id,
+                filename: a.filename,
+                content_type: a.contentType,
+                size_bytes: String(a.sizeBytes),
+                storage_key: a.storageKey,
+                storage_url: a.storageUrl,
+              }),
+            ),
+          );
+        }
+
+        const recipientSummary = [...to, ...cc, ...bcc].join(', ');
+        await logRepo.save({
+          ticket_id: id,
+          event: TicketActivity.AGENT_REPLIED,
+          actor_id: actingUser.id,
+          log: `Replied to ${recipientSummary} by ${actingUser.email ?? actingUser.id}`,
+        });
       });
-    });
+    } catch (persistErr) {
+      const errMsg =
+        persistErr instanceof Error ? persistErr.message : String(persistErr);
+      this.logger.error(
+        `SMTP send succeeded but DB persist failed. ticket=${id} externalMessageId=${externalMessageId} error=${errMsg}`,
+      );
+      // Best-effort compensating log so the audit trail flags the
+      // divergence even when the primary write failed. If even this
+      // fails, we swallow — the original error is the important one.
+      try {
+        await this.activity.save({
+          ticket_id: id,
+          event: TicketActivity.AGENT_REPLIED,
+          actor_id: actingUser.id,
+          log: `SMTP send succeeded but DB persist failed. External Message-ID: ${externalMessageId}. Error: ${errMsg}`,
+        });
+      } catch {
+        // ignore
+      }
+      throw persistErr;
+    }
 
     try {
       await this.presence.slideOnActivity(actingUser.id);
@@ -839,16 +871,31 @@ function applyMessageSearch(
 }
 
 /**
- * Build the outbound Subject: prepend "Re: " unless the original
- * already starts with one (case-insensitive). Empty / null falls
- * back to a neutral "Support reply" so the mail isn't rejected by
- * strict MTAs.
+ * Build the outbound Subject: strip any known reply/forward prefix
+ * (English + common European variants) and prepend a clean "Re: ".
+ * Empty / null falls back to a neutral "Support reply" so the mail
+ * isn't rejected by strict MTAs.
+ *
+ * Handles:
+ *   - "Re:", "re:", "RE:" (with or without trailing space)
+ *   - "Fwd:", "Fw:"
+ *   - "AW:" (German), "SV:" / "VS:" (Nordic), "Rép:" (French),
+ *     "Res:" / "Rif:" (Italian), "Rv:" (Spanish)
  */
+const SUBJECT_PREFIX_RE =
+  /^\s*(re|fwd?|fw|aw|sv|vs|rv|rép|res|rif)\s*:\s*/i;
+
 function replySubject(original: string | null): string {
   const trimmed = (original ?? '').trim();
-  if (/^re:\s/i.test(trimmed)) return trimmed;
   if (!trimmed) return 'Support reply';
-  return `Re: ${trimmed}`;
+  // Iteratively strip layered prefixes like "Re: Fwd: Re: original"
+  // so we don't end up with "Re: Re: Fwd: Re: …".
+  let stripped = trimmed;
+  while (SUBJECT_PREFIX_RE.test(stripped)) {
+    stripped = stripped.replace(SUBJECT_PREFIX_RE, '');
+  }
+  const body = stripped.trim();
+  return body ? `Re: ${body}` : 'Support reply';
 }
 
 /**
