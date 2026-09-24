@@ -36,6 +36,7 @@ import {
 import type { UpdateTicketDto } from './dto/update-ticket.dto';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { normaliseAddressList, replySubject } from './reply-utils';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
 
 const DEFAULT_LIMIT = 50;
@@ -870,59 +871,3 @@ function applyMessageSearch(
   );
 }
 
-/**
- * Build the outbound Subject: strip any known reply/forward prefix
- * (English + common European variants) and prepend a clean "Re: ".
- * Empty / null falls back to a neutral "Support reply" so the mail
- * isn't rejected by strict MTAs.
- *
- * Handles:
- *   - "Re:", "re:", "RE:" (with or without trailing space)
- *   - "Fwd:", "Fw:"
- *   - "AW:" (German), "SV:" / "VS:" (Nordic), "Rép:" (French),
- *     "Res:" / "Rif:" (Italian), "Rv:" (Spanish)
- */
-const SUBJECT_PREFIX_RE =
-  /^\s*(re|fwd?|fw|aw|sv|vs|rv|rép|res|rif)\s*:\s*/i;
-
-function replySubject(original: string | null): string {
-  const trimmed = (original ?? '').trim();
-  if (!trimmed) return 'Support reply';
-  // Iteratively strip layered prefixes like "Re: Fwd: Re: original"
-  // so we don't end up with "Re: Re: Fwd: Re: …".
-  let stripped = trimmed;
-  while (SUBJECT_PREFIX_RE.test(stripped)) {
-    stripped = stripped.replace(SUBJECT_PREFIX_RE, '');
-  }
-  const body = stripped.trim();
-  return body ? `Re: ${body}` : 'Support reply';
-}
-
-/**
- * Normalise a raw CC / BCC list from the FE:
- *   - lowercase + trim each address
- *   - drop empty strings
- *   - drop anything already in `excludeLower` (used to keep CC / BCC
- *     from redundantly re-including the primary To recipient, or
- *     BCC from duplicating CC).
- * Order preserved so admins see their intent reflected in the
- * activity log.
- */
-function normaliseAddressList(
-  raw: string[] | undefined,
-  exclude: string[],
-): string[] {
-  if (!raw || raw.length === 0) return [];
-  const excludeLower = new Set(exclude.map((e) => e.toLowerCase()));
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of raw) {
-    const addr = entry.trim().toLowerCase();
-    if (!addr) continue;
-    if (excludeLower.has(addr)) continue;
-    if (seen.has(addr)) continue;
-    seen.add(addr);
-    out.push(addr);
-  }
-  return out;
-}
