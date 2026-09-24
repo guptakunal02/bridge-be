@@ -146,7 +146,11 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         await ticketRepo
           .createQueryBuilder()
           .update()
-          .set({ status: TicketStatus.RESOLVED, resume_at: null })
+          .set({
+            status: TicketStatus.RESOLVED,
+            resume_at: null,
+            resolved_at: () => 'NOW()',
+          })
           .whereInIds(ids)
           .execute();
 

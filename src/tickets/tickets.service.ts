@@ -391,6 +391,17 @@ export class TicketsService {
           patch.is_reopened = true;
         }
 
+        // resolved_at bookkeeping. Set on the write that enters
+        // RESOLVED so the ingest path can cheaply gate its
+        // "reopen if reply within window" rule; clear on any
+        // transition away so a stale timestamp can't trip us up
+        // if the ticket is closed and reopened multiple times.
+        if (dto.status === TicketStatus.RESOLVED) {
+          patch.resolved_at = new Date();
+        } else if (ticket.status === TicketStatus.RESOLVED) {
+          patch.resolved_at = null;
+        }
+
         // Timer field: set when entering WAITING/IN_FOLLOWUP,
         // clear otherwise. resumeAtHours is required for the two
         // paused statuses and rejected for the others.

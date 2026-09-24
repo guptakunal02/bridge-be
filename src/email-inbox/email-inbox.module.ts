@@ -4,6 +4,7 @@ import { BotModule } from '../bot/bot.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { RulesModule } from '../rules/rules.module';
+import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
 import { TicketsModule } from '../tickets/tickets.module';
 import { UsersModule } from '../users/users.module';
@@ -31,6 +32,9 @@ import { EmailMessageRepository } from './providers/email-message.repository';
     // TicketLifecycleService — wakes WAITING/IN_FOLLOWUP tickets when
     // the customer replies (inside the ingest transaction).
     TicketsModule,
+    // AppSettingsService — configurable reopen window for RESOLVED
+    // tickets that receive a fresh reply.
+    SettingsModule,
   ],
   controllers: [EmailInboxController],
   providers: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],

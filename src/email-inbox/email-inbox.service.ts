@@ -11,6 +11,7 @@ import {
   UserRole,
 } from '../database/enums';
 import { RoutingService } from '../rules/routing.service';
+import { AppSettingsService } from '../settings/app-settings.service';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TeamsService } from '../teams/teams.service';
 import { Ticket } from '../tickets/entities/ticket.entity';
@@ -39,6 +40,7 @@ export class EmailInboxService {
     private readonly runtime: BotRuntimeService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly storage: S3StorageService,
+    private readonly appSettings: AppSettingsService,
   ) {}
 
   /**
@@ -91,6 +93,29 @@ export class EmailInboxService {
           ticket = await ticketRepo.findOne({
             where: { channel_id: channelId, thread_key: threadKey },
           });
+        }
+
+        // Resolved-ticket rule: if the found ticket is RESOLVED,
+        // consult the configured reopen window.
+        //   * within window → reopen this ticket (status → OPEN,
+        //     is_reopened = true, resolved_at cleared). The reply
+        //     lands on the same thread.
+        //   * past window → treat as a brand-new conversation. The
+        //     old thread_key is taken by the RESOLVED ticket, so we
+        //     drop the match and let the mint path below own it
+        //     with a fresh thread_key derived from this email's MID.
+        if (ticket && ticket.status === TicketStatus.RESOLVED) {
+          const withinWindow = await this.isWithinReopenWindow(
+            ticket.resolved_at,
+          );
+          if (withinWindow) {
+            await this.reopenResolved(ticket.id, mgr);
+            // Refresh the row so the message linkage below sees the
+            // post-reopen status/flags.
+            ticket = await ticketRepo.findOne({ where: { id: ticket.id } });
+          } else {
+            ticket = null;
+          }
         }
         const isNew = !ticket;
 
@@ -298,6 +323,66 @@ export class EmailInboxService {
       }
     }
     return null;
+  }
+
+  /**
+   * True when `resolvedAt` sits within the admin-configured reopen
+   * window (in hours). A null timestamp is a data anomaly for a
+   * RESOLVED ticket — treat it as "past window" so we err on the
+   * side of creating a fresh ticket rather than silently attaching
+   * to something we can't verify age of.
+   *
+   * A configured window of 0 disables the reopen behaviour: every
+   * reply to a RESOLVED ticket becomes a new ticket. That's a valid
+   * choice for teams that want closed-means-closed.
+   */
+  private async isWithinReopenWindow(
+    resolvedAt: Date | null,
+  ): Promise<boolean> {
+    if (!resolvedAt) return false;
+    const windowHours = await this.appSettings.getResolvedReopenWindowHours();
+    if (windowHours <= 0) return false;
+    const ageMs = Date.now() - resolvedAt.getTime();
+    return ageMs <= windowHours * 60 * 60 * 1000;
+  }
+
+  /**
+   * Flip a RESOLVED ticket back to OPEN because a fresh customer
+   * reply arrived within the reopen window. Sets is_reopened so
+   * the queue UI can flag it, clears resolved_at so a repeat cycle
+   * (resolve → reopen → resolve → reopen) keeps working, and logs
+   * a REOPENED activity entry for the audit trail.
+   *
+   * Conditional UPDATE on status = RESOLVED — if the row already
+   * flipped away in a race (unlikely since we're inside the ingest
+   * txn, but cheap defense), the write is a no-op and we skip the
+   * log.
+   */
+  private async reopenResolved(
+    ticketId: string,
+    mgr: import('typeorm').EntityManager,
+  ): Promise<void> {
+    const ticketRepo = mgr.getRepository(Ticket);
+    const logRepo = mgr.getRepository(TicketActivityLog);
+    const result = await ticketRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: TicketStatus.OPEN,
+        is_reopened: true,
+        resolved_at: null,
+      })
+      .where('id = :id', { id: ticketId })
+      .andWhere('status = :resolved', { resolved: TicketStatus.RESOLVED })
+      .execute();
+    if ((result.affected ?? 0) > 0) {
+      await logRepo.save({
+        ticket_id: ticketId,
+        event: TicketActivity.REOPENED,
+        actor_id: null,
+        log: 'Auto-reopened — customer replied within the reopen window',
+      });
+    }
   }
 
   /**

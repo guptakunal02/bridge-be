@@ -77,6 +77,16 @@ export class Ticket {
   @Column({ type: 'timestamptz', nullable: true, name: 'resume_at' })
   resume_at!: Date | null;
 
+  /**
+   * Timestamp of the transition into RESOLVED. Set on the write
+   * that flips status to RESOLVED; cleared to null on any
+   * transition away. Powers the "reopen if the customer replies
+   * within N hours" rule the email ingest applies — cheaper than
+   * walking the activity log for every incoming message.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'resolved_at' })
+  resolved_at!: Date | null;
+
   @Column({ type: 'text', name: 'thread_key' })
   thread_key!: string;
 
