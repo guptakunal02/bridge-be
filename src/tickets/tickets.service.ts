@@ -129,11 +129,27 @@ export class TicketsService {
       .take(limit)
       .skip(offset);
 
-    if (query.status) {
+    // Multi-value filters win over the legacy singular ones — the
+    // FE always uses the plurals; the singulars stick around for
+    // external callers hitting the endpoint directly.
+    if (query.statuses && query.statuses.length > 0) {
+      qb.andWhere('t.status IN (:...statuses)', {
+        statuses: query.statuses,
+      });
+    } else if (query.status) {
       qb.andWhere('t.status = :status', { status: query.status });
     }
-    if (query.channelId) {
+    if (query.channelIds && query.channelIds.length > 0) {
+      qb.andWhere('t.channel_id IN (:...channelIds)', {
+        channelIds: query.channelIds,
+      });
+    } else if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
+    }
+    if (query.assigneeIds && query.assigneeIds.length > 0) {
+      qb.andWhere('t.assignee IN (:...assigneeIds)', {
+        assigneeIds: query.assigneeIds,
+      });
     }
     applyMessageSearch(qb, query.q);
     await this.applyScope(qb, query.scope ?? 'all', actingUser);
@@ -233,9 +249,22 @@ export class TicketsService {
       .addSelect('COUNT(*)', 'count')
       .groupBy('t.status');
 
-    if (query.channelId) {
+    if (query.channelIds && query.channelIds.length > 0) {
+      qb.andWhere('t.channel_id IN (:...channelIds)', {
+        channelIds: query.channelIds,
+      });
+    } else if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
     }
+    if (query.assigneeIds && query.assigneeIds.length > 0) {
+      qb.andWhere('t.assignee IN (:...assigneeIds)', {
+        assigneeIds: query.assigneeIds,
+      });
+    }
+    // NOTE: status filters are intentionally NOT applied to the
+    // counts endpoint — the count-by-status is the whole point of
+    // this response, so applying a status filter would collapse
+    // every row to zero except the picked one.
     applyMessageSearch(qb, query.q);
     await this.applyScope(qb, query.scope ?? 'all', actingUser);
 
