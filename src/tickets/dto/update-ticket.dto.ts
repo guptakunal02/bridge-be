@@ -3,18 +3,21 @@ import {
   ArrayUnique,
   IsArray,
   IsEnum,
-  IsIn,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import { TicketStatus } from '../../database/enums';
 
-/** Values allowed in the resumeAtHours dropdown. Keep in sync with FE. */
-export const RESUME_HOUR_OPTIONS = [1, 2, 4, 8, 24] as const;
+/** Hard upper bound on ticket timers — 30 days feels comfortable
+ * for followups/waiting; anything longer usually means "close it". */
+export const RESUME_MAX_HOURS = 24 * 30;
 
 export class UpdateTicketDto {
   @IsOptional()
@@ -24,10 +27,15 @@ export class UpdateTicketDto {
   /**
    * How many hours from now until the ticket's timer fires.
    * Required when `status` is WAITING or IN_FOLLOWUP; ignored
-   * otherwise. Values match the FE dropdown.
+   * otherwise. Fractional values are allowed so the FE can send
+   * a combined hrs+min picker as decimal hours (e.g. 1h 15m → 1.25).
+   * Minimum ~1 minute so a fat-finger 0 is rejected; capped at
+   * 30 days.
    */
   @IsOptional()
-  @IsIn(RESUME_HOUR_OPTIONS as unknown as number[])
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(1 / 60)
+  @Max(RESUME_MAX_HOURS)
   resumeAtHours?: number;
 
   @IsOptional()
