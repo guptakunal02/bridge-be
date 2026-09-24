@@ -22,6 +22,10 @@ import {
   CustomerOrdersPage,
   CustomerOrdersService,
 } from './customer-orders.service';
+import {
+  BulkUpdateResult,
+  BulkUpdateTicketsDto,
+} from './dto/bulk-update-tickets.dto';
 import { ListCustomerOrdersQuery } from './dto/list-customer-orders.dto';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
 import { ReplyTicketDto } from './dto/reply-ticket.dto';
@@ -83,6 +87,23 @@ export class TicketsController {
   @Get('tags/all')
   listTags(): Promise<string[]> {
     return this.tickets.listTags();
+  }
+
+  /**
+   * Apply the same patch (status / assignee / team / add tags) to
+   * up to 100 tickets in one request. Best-effort per-ticket:
+   * response lists succeeded + failed ids so the FE can show a
+   * partial-success toast rather than a whole-batch error.
+   *
+   * Sits before `:id` on purpose — Nest routes `POST /tickets/bulk`
+   * to this before it can be greedy-matched by any `:id` variant.
+   */
+  @Post('bulk')
+  bulkUpdate(
+    @Body() dto: BulkUpdateTicketsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<BulkUpdateResult> {
+    return this.tickets.bulkUpdate(dto, user);
   }
 
   @Get(':id')

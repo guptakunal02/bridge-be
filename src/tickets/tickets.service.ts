@@ -542,6 +542,71 @@ export class TicketsService {
   }
 
   /**
+   * Apply the same patch to a batch of tickets. Best-effort:
+   * each ticket runs update() in its own txn, so a single row
+   * failing (already-terminal status, missing team, etc.) doesn't
+   * roll back the rest. The response lists successes + per-ticket
+   * failure reasons so the FE can show a partial-success toast.
+   *
+   * Tag semantics: `addTags` is unioned onto each ticket's
+   * existing tag set — set-with-union rather than replace, since
+   * a bulk operation should never silently erase per-ticket tags.
+   */
+  async bulkUpdate(
+    dto: import('./dto/bulk-update-tickets.dto').BulkUpdateTicketsDto,
+    actingUser: AuthenticatedUser,
+  ): Promise<
+    import('./dto/bulk-update-tickets.dto').BulkUpdateResult
+  > {
+    // Load the current tags for every requested ticket in one round
+    // trip so we can compute per-ticket union without one SELECT per
+    // patch when the caller supplied addTags.
+    const tagOverlay = new Map<string, string[]>();
+    if (dto.addTags && dto.addTags.length > 0) {
+      const rows = await this.tickets.find({
+        where: { id: In(dto.ticketIds) },
+        select: { id: true, tags: true },
+      });
+      for (const r of rows) tagOverlay.set(r.id, r.tags ?? []);
+    }
+
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+
+    for (const id of dto.ticketIds) {
+      try {
+        const perTicketPatch: {
+          status?: TicketStatus;
+          assigneeId?: string;
+          teamId?: string;
+          tags?: string[];
+        } = {};
+        if (dto.status !== undefined) perTicketPatch.status = dto.status;
+        if (dto.assigneeId !== undefined)
+          perTicketPatch.assigneeId = dto.assigneeId;
+        if (dto.teamId !== undefined) perTicketPatch.teamId = dto.teamId;
+        if (dto.addTags && dto.addTags.length > 0) {
+          const existing = tagOverlay.get(id) ?? [];
+          const merged = Array.from(new Set([...existing, ...dto.addTags]));
+          perTicketPatch.tags = merged;
+        }
+        if (Object.keys(perTicketPatch).length === 0) {
+          failed.push({ id, reason: 'No fields to update' });
+          continue;
+        }
+        await this.update(id, perTicketPatch, actingUser);
+        succeeded.push(id);
+      } catch (err) {
+        const reason =
+          err instanceof Error ? err.message : 'Unknown error';
+        failed.push({ id, reason });
+      }
+    }
+
+    return { succeeded, failed };
+  }
+
+  /**
    * Send an outbound reply from an agent. Flow:
    *
    *   1. Load the ticket, its channel, and every message on the
