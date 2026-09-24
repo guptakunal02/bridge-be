@@ -13,6 +13,7 @@ import {
 } from 'typeorm';
 import { ChannelType, TicketStatus } from '../../database/enums';
 import { Channel } from '../../channels/entities/channel.entity';
+import { Team } from '../../teams/entities/team.entity';
 import { User } from '../../users/entities/user.entity';
 import { TicketActivityLog } from './ticket-activity-log.entity';
 
@@ -44,6 +45,10 @@ export class Ticket {
    */
   @Column({ type: 'uuid', name: 'team_id' })
   team_id!: string;
+
+  @ManyToOne(() => Team)
+  @JoinColumn({ name: 'team_id' })
+  team!: Team;
 
   @Column({ type: 'uuid' })
   assignee!: string;

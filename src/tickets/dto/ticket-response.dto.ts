@@ -34,6 +34,8 @@ export interface TicketListItem {
   tags: string[];
   assignee: TicketAssigneeSummary | null;
   teamId: string;
+  /** Name of the team this ticket belongs to. Null if the row couldn't be resolved. */
+  teamName: string | null;
   latestMessage: TicketLatestMessage | null;
   /**
    * Only set for WAITING / IN_FOLLOWUP tickets. The FE renders it
@@ -104,6 +106,7 @@ export function toTicketListItem(
         }
       : null,
     teamId: ticket.team_id,
+    teamName: ticket.team?.name ?? null,
     latestMessage: latest ? toLatestMessage(latest) : null,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
     createdAt: ticket.createdAt.toISOString(),

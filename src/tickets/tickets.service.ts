@@ -76,6 +76,7 @@ export class TicketsService {
     const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.assigneeUser', 'assignee')
+      .leftJoinAndSelect('t.team', 'team')
       .orderBy('t.createdAt', 'DESC')
       .take(limit)
       .skip(offset);
@@ -225,7 +226,7 @@ export class TicketsService {
   async get(id: string): Promise<TicketDetail> {
     const ticket = await this.tickets.findOne({
       where: { id },
-      relations: { assigneeUser: true },
+      relations: { assigneeUser: true, team: true },
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
 
