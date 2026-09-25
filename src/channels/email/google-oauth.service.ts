@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OAuth2Client } from 'google-auth-library';
-import { google } from 'googleapis';
 import type { EnvVars } from '../../config/env.validation';
 
 /**
@@ -95,8 +94,10 @@ export class GoogleOAuthService {
     }
 
     // Pull the mailbox address off the id_token (which comes back
-    // because we requested openid + userinfo.email). Fall back to
-    // an explicit userinfo call if the id_token is missing.
+    // because we requested openid + userinfo.email). Fall back to a
+    // raw userinfo fetch only if the id_token was missing — avoids
+    // pulling in the full `googleapis` package for one call, which
+    // blows up type-check memory on small EC2 boxes.
     let address: string | null = null;
     if (tokens.id_token) {
       const ticket = await client.verifyIdToken({
@@ -106,10 +107,20 @@ export class GoogleOAuthService {
       address = ticket.getPayload()?.email ?? null;
     }
     if (!address) {
-      client.setCredentials(tokens);
-      const oauth2 = google.oauth2({ version: 'v2', auth: client });
-      const { data } = await oauth2.userinfo.get();
-      address = data.email ?? null;
+      const res = await fetch(
+        'https://openidconnect.googleapis.com/v1/userinfo',
+        {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        },
+      );
+      if (res.ok) {
+        const data = (await res.json()) as { email?: string };
+        address = data.email ?? null;
+      } else {
+        this.logger.warn(
+          `Userinfo fetch failed with ${res.status}; will fail below.`,
+        );
+      }
     }
     if (!address) {
       throw new Error(
