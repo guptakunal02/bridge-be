@@ -1,9 +1,16 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import nodemailer, { type Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { S3StorageService } from '../../common/storage/s3-storage.service';
+import type { EnvVars } from '../../config/env.validation';
 import { Channel } from '../entities/channel.entity';
+import { AccessTokenCache } from './access-token-cache';
 import { EmailCredentialsService } from './email-credentials.service';
+import {
+  GMAIL_SMTP_HOST,
+  GMAIL_SMTP_PORT,
+} from './email-credentials';
 
 /**
  * Parameters for a single outbound reply. The caller (tickets
@@ -71,25 +78,44 @@ export class EmailSenderService {
   constructor(
     private readonly credentials: EmailCredentialsService,
     private readonly storage: S3StorageService,
+    private readonly tokens: AccessTokenCache,
+    private readonly config: ConfigService<EnvVars, true>,
   ) {}
 
   async sendReply(input: OutboundEmailReply): Promise<OutboundEmailResult> {
     const envelope = input.channel.credentials_encrypted;
     if (!envelope) {
       throw new BadRequestException(
-        'This channel has no SMTP credentials configured. Set them in Inboxes → Credentials before replying.',
+        'This channel has no OAuth credentials yet. Connect Gmail from Inboxes → Connect first.',
       );
     }
 
     const creds = this.credentials.open(envelope);
+    const accessToken = await this.tokens.get(
+      input.channel.id,
+      creds.refreshToken,
+    );
     const transport: Transporter<SMTPTransport.SentMessageInfo> =
       nodemailer.createTransport({
-        host: creds.smtp.host,
-        port: creds.smtp.port,
-        secure: creds.smtp.secure,
+        host: GMAIL_SMTP_HOST,
+        port: GMAIL_SMTP_PORT,
+        secure: true,
         auth: {
-          user: creds.smtp.username,
-          pass: creds.smtp.password,
+          type: 'OAuth2',
+          user: creds.address,
+          clientId: this.config.get('EMAIL_INBOX_GOOGLE_CLIENT_ID', {
+            infer: true,
+          }),
+          clientSecret: this.config.get('EMAIL_INBOX_GOOGLE_CLIENT_SECRET', {
+            infer: true,
+          }),
+          refreshToken: creds.refreshToken,
+          // Pass the already-cached access token so nodemailer skips
+          // its own refresh dance on the hot path. If Gmail rejects
+          // it (e.g. token was revoked between refresh and send),
+          // nodemailer will still try to mint a new one from the
+          // clientId + clientSecret + refreshToken triple.
+          accessToken,
         },
       });
 

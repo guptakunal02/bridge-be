@@ -78,6 +78,24 @@ export class EnvVars {
   GOOGLE_OAUTH_CALLBACK_URL!: string;
 
   /**
+   * Second Google OAuth client — separate from the sign-in client
+   * above because this one requests the mail.google.com scope and
+   * has its own redirect URI. Kept apart so the sign-in client
+   * stays scoped to userinfo only; a leaked sign-in token can
+   * never touch mailbox data.
+   */
+  @IsString()
+  @MinLength(1)
+  EMAIL_INBOX_GOOGLE_CLIENT_ID!: string;
+
+  @IsString()
+  @MinLength(1)
+  EMAIL_INBOX_GOOGLE_CLIENT_SECRET!: string;
+
+  @IsUrl({ require_tld: false, require_protocol: true })
+  EMAIL_INBOX_GOOGLE_CALLBACK_URL!: string;
+
+  /**
    * S3 credentials + bucket for inbound email attachment storage.
    * The bucket is public-read (see infra runbook), so URLs the app
    * returns are direct https://<bucket>.s3.<region>.amazonaws.com/<key>

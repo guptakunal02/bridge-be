@@ -13,6 +13,7 @@ import type {
   ChannelDeletedEvent,
   ChannelStatusChangedEvent,
 } from '../channels/channels.service';
+import { AccessTokenCache } from '../channels/email/access-token-cache';
 import { EmailCredentialsService } from '../channels/email/email-credentials.service';
 import { Channel } from '../channels/entities/channel.entity';
 import { ChannelStatus, ChannelType } from '../database/enums';
@@ -33,16 +34,27 @@ import { ImapConnection } from './providers/imap-connection';
  *   channel.deleted           → stop the worker
  *   channel.status.changed    → start on CONNECTED / stop on DISCONNECTED
  */
+interface ChannelWorkers {
+  inbox: ImapConnection;
+  sent: ImapConnection;
+}
+
 @Injectable()
 export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EmailInboxWorker.name);
-  private readonly connections = new Map<string, ImapConnection>();
+  // Two ImapConnection instances per channel — one for INBOX (customer
+  // inbound), one for [Gmail]/Sent Mail (agent replies from Gmail
+  // directly). Both authenticate via XOAUTH2 using the same channel
+  // refresh token; the AccessTokenCache dedupes refreshes across
+  // both connections.
+  private readonly connections = new Map<string, ChannelWorkers>();
 
   constructor(
     @InjectRepository(Channel)
     private readonly channels: Repository<Channel>,
     private readonly credentials: EmailCredentialsService,
     private readonly inbox: EmailInboxService,
+    private readonly tokens: AccessTokenCache,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -68,7 +80,12 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await Promise.all([...this.connections.values()].map((c) => c.stop()));
+    await Promise.all(
+      [...this.connections.values()].flatMap((w) => [
+        w.inbox.stop(),
+        w.sent.stop(),
+      ]),
+    );
     this.connections.clear();
   }
 
@@ -120,15 +137,39 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
     if (!channel.credentials_encrypted) return;
 
     const creds = this.credentials.open(channel.credentials_encrypted);
-    const conn = new ImapConnection(channel.id, creds, this.inbox, this.logger);
-    await conn.start();
-    this.connections.set(channel.id, conn);
+    const inboxConn = new ImapConnection(
+      channel.id,
+      creds,
+      this.inbox,
+      this.tokens,
+      this.logger,
+      'inbox',
+    );
+    const sentConn = new ImapConnection(
+      channel.id,
+      creds,
+      this.inbox,
+      this.tokens,
+      this.logger,
+      'sent',
+    );
+    await inboxConn.start();
+    try {
+      await sentConn.start();
+    } catch (err) {
+      // If Sent Mail can't open (translated locale + missing \Sent
+      // flag, weird account), inbound still works. Log and move on.
+      this.logger.warn(
+        `[imap:${channel.id}:sent] failed to start: ${(err as Error).message}`,
+      );
+    }
+    this.connections.set(channel.id, { inbox: inboxConn, sent: sentConn });
   }
 
   async stopForChannel(channelId: string): Promise<void> {
-    const conn = this.connections.get(channelId);
-    if (!conn) return;
-    await conn.stop();
+    const workers = this.connections.get(channelId);
+    if (!workers) return;
+    await Promise.all([workers.inbox.stop(), workers.sent.stop()]);
     this.connections.delete(channelId);
   }
 }

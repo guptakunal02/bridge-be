@@ -122,43 +122,58 @@ export class ChannelsService {
     id: string,
     dto: SetCredentialsDto,
   ): Promise<ChannelResponse> {
+    // The old password-based path is gone. Email channels connect
+    // exclusively via the OAuth flow now — see the OAuth authorize +
+    // callback endpoints on this controller. This method stays for
+    // future non-Gmail channel types (WhatsApp, Instagram) that'll
+    // need their own credential shape.
+    void dto;
     const channel = await this.channels.findOne({ where: { id } });
     if (!channel) throw new NotFoundException('Channel not found');
-
     if (channel.type === ChannelType.EMAIL) {
-      if (!dto.email) {
-        throw new BadRequestException(
-          'Email credentials required for EMAIL channel',
-        );
-      }
-      const envelope = this.emailCredentials.seal(dto.email);
-      await this.channels.update(
-        { id },
-        {
-          credentials_encrypted: envelope,
-          // Human-readable "Connected as X" display value.
-          inbox_contact: dto.email.smtp.username,
-          // Saving creds means the admin wants this inbox active — flip
-          // status so the IMAP worker actually starts. Status can still
-          // be toggled off via PATCH /channels/:id if they want to pause.
-          status: ChannelStatus.CONNECTED,
-          // Rotating creds invalidates any prior verification — the frontend
-          // should surface the Test button again once rebuilt.
-          credentialsVerifiedAt: null,
-        },
+      throw new BadRequestException(
+        'Email channels connect via OAuth. Start the flow at GET /channels/:id/email/oauth/authorize.',
       );
-      const updated = await this.channels.findOneOrFail({ where: { id } });
-
-      // Tell the IMAP worker to (re)start on the new credentials.
-      this.events.emit(CHANNEL_EVENTS.CREDENTIALS_SAVED, {
-        channelId: id,
-      } satisfies ChannelCredentialsSavedEvent);
-
-      return toChannelResponse(updated);
     }
     throw new BadRequestException(
       `Credentials management is not implemented for ${channel.type} channels`,
     );
+  }
+
+  /**
+   * Persist the tokens Google returned from the OAuth callback and
+   * flip the channel to CONNECTED so the IMAP + Sent workers pick
+   * it up on the next event tick.
+   */
+  async saveEmailOAuthCredentials(
+    id: string,
+    input: { address: string; refreshToken: string },
+  ): Promise<ChannelResponse> {
+    const channel = await this.channels.findOne({ where: { id } });
+    if (!channel) throw new NotFoundException('Channel not found');
+    if (channel.type !== ChannelType.EMAIL) {
+      throw new BadRequestException(
+        'OAuth credentials only apply to EMAIL channels.',
+      );
+    }
+    const envelope = this.emailCredentials.seal({
+      address: input.address,
+      refreshToken: input.refreshToken,
+    });
+    await this.channels.update(
+      { id },
+      {
+        credentials_encrypted: envelope,
+        inbox_contact: input.address,
+        status: ChannelStatus.CONNECTED,
+        credentialsVerifiedAt: new Date(),
+      },
+    );
+    const updated = await this.channels.findOneOrFail({ where: { id } });
+    this.events.emit(CHANNEL_EVENTS.CREDENTIALS_SAVED, {
+      channelId: id,
+    } satisfies ChannelCredentialsSavedEvent);
+    return toChannelResponse(updated);
   }
 }
 

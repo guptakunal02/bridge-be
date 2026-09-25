@@ -362,6 +362,122 @@ export class EmailInboxService {
   }
 
   /**
+   * Persist an outbound email that was sent from Gmail directly
+   * (bypassing Bridge's own reply flow). Idempotent on
+   * external_message_id — replies we sent through Bridge already
+   * live under that id, so the first branch below is a no-op for
+   * them. Only Gmail-originating sends fall through and get
+   * persisted here.
+   *
+   * Threading: same References + In-Reply-To walk as inbound so an
+   * agent's Gmail-side reply lands on the right ticket. If no
+   * ticket matches (fresh outbound to a customer we haven't heard
+   * from), we mint one so the conversation still has a home.
+   *
+   * Actor: NULL — we can't tell which agent sent from Gmail (they
+   * all share the mailbox address). Activity log says "(from Gmail)".
+   */
+  async ingestSent(
+    channelId: string,
+    req: IngestEmailInbox,
+  ): Promise<EmailMessage | null> {
+    const existing = await this.emails.findOne({
+      where: { external_message_id: req.external_message_id },
+    });
+    if (existing) return existing;
+
+    return this.dataSource.transaction(async (mgr) => {
+      const ticketRepo = mgr.getRepository(Ticket);
+      const logRepo = mgr.getRepository(TicketActivityLog);
+      const userRepo = mgr.getRepository(User);
+      const messageRepo = mgr.getRepository(EmailMessage);
+
+      // Try to attach to an existing thread. Sent-from-Gmail is
+      // usually a reply, so the References/In-Reply-To chain will
+      // match. If it doesn't, this is a proactive send to a new
+      // customer — mint a ticket so the outbound is still tracked.
+      let ticket = await this.findTicketFromReferences(mgr, channelId, req);
+
+      if (ticket && ticket.status === TicketStatus.RESOLVED) {
+        const withinWindow = await this.isWithinReopenWindow(
+          ticket.resolved_at,
+        );
+        if (withinWindow) {
+          await this.reopenResolved(ticket.id, mgr);
+          ticket = await ticketRepo.findOne({ where: { id: ticket.id } });
+        } else {
+          ticket = null;
+        }
+      }
+
+      if (!ticket) {
+        // Proactive outbound. Route on the RECIPIENT since that's
+        // the customer side of this thread.
+        const primaryRecipient = req.receiver[0] ?? req.sender;
+        const routed = await this.router.routeFacts(
+          {
+            createdAt: new Date(),
+            channelType: ChannelType.EMAIL,
+            senderEmail: primaryRecipient,
+            subject: req.subject ?? null,
+            tags: [],
+          },
+          mgr,
+        );
+        const targetTeamId =
+          routed?.teamId ?? (await this.teams.getDefault()).id;
+        const bot = await userRepo.findOneOrFail({
+          where: { role: UserRole.BOT },
+        });
+        ticket = await ticketRepo.save(
+          ticketRepo.create({
+            channel_id: channelId,
+            channel_type: ChannelType.EMAIL,
+            team_id: targetTeamId,
+            thread_key: req.external_message_id,
+            assignee: bot.id,
+            status: TicketStatus.OPEN,
+          }),
+        );
+        await logRepo.save({
+          ticket_id: ticket.id,
+          event: TicketActivity.CREATED,
+          actor_id: null,
+          log: `Ticket opened by outbound reply to ${primaryRecipient} (sent from Gmail)`,
+        });
+      }
+
+      const saved = await messageRepo.save(
+        messageRepo.create({
+          channelId,
+          ticket_id: ticket.id,
+          type: MessageDirection.SENT,
+          subject: req.subject ?? null,
+          content: req.content,
+          content_html: req.contentHtml ?? null,
+          // sender is the mailbox address on the outbound side
+          sender: req.sender,
+          receiver: req.receiver,
+          external_message_id: req.external_message_id,
+        }),
+      );
+
+      if (req.attachments && req.attachments.length > 0) {
+        await this.persistAttachments(saved.id, req.attachments, mgr);
+      }
+
+      await logRepo.save({
+        ticket_id: ticket.id,
+        event: TicketActivity.AGENT_REPLIED,
+        actor_id: null,
+        log: `Reply sent from Gmail to ${req.receiver.join(', ')}`,
+      });
+
+      return saved;
+    });
+  }
+
+  /**
    * True when `resolvedAt` sits within the admin-configured reopen
    * window (in hours). A null timestamp is a data anomaly for a
    * RESOLVED ticket — treat it as "past window" so we err on the
