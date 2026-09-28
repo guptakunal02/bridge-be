@@ -8,6 +8,11 @@ import {
 import { EmailMessage } from '../../email-inbox/entities/email-message.entity';
 import { Ticket } from '../entities/ticket.entity';
 import { TicketActivityLog } from '../entities/ticket-activity-log.entity';
+import {
+  parseQuotedThread,
+  shouldShowSubjectHeader,
+  splitBody,
+} from '../message-view-utils';
 
 export interface TicketAssigneeSummary {
   id: string;
@@ -70,6 +75,18 @@ export interface EmailAttachmentResponse {
   url: string;
 }
 
+/**
+ * Reconstructed ancestor from the quoted history of a message.
+ * Populated only when the quoted content had at least one
+ * "On <date>, <name> wrote:" preamble; empty otherwise. Backs the
+ * "expanded prior thread" view.
+ */
+export interface PseudoMessageResponse {
+  sender: string;
+  date: string;
+  body: string;
+}
+
 export interface EmailMessageResponse {
   id: string;
   channelId: string;
@@ -78,11 +95,51 @@ export interface EmailMessageResponse {
   subject: string | null;
   sender: string | null;
   receiver: string[];
+  /** Raw body — kept for legacy consumers. New FE renders `newContent`. */
   content: string;
+  /** Raw HTML — kept for legacy consumers. */
   contentHtml: string | null;
   externalMessageId: string;
   attachments: EmailAttachmentResponse[];
   createdAt: string;
+
+  /* -------------------------- View fields ------------------------- */
+  /**
+   * Fresh reply portion of the body — quoted history stripped. Every
+   * split strategy (Gmail "On <date> wrote:", "> " prefix, Outlook
+   * marker, prior-content substring match) tried server-side; the
+   * FE just renders this string. Equal to `content` when no quoted
+   * history was detected.
+   */
+  newContent: string;
+  /** HTML mirror of `newContent`. Null when the message had no HTML body. */
+  newContentHtml: string | null;
+  /**
+   * Quoted history — the customer's mail client's copy of prior
+   * messages. Rendered behind a "Show earlier messages" toggle on
+   * the FE. Null when nothing was split off.
+   */
+  quotedContent: string | null;
+  /** HTML mirror of `quotedContent`. Null when no HTML quote was found. */
+  quotedContentHtml: string | null;
+  /** True iff quotedContent or quotedContentHtml is non-null. Cached
+   *  for the FE's "Show earlier messages" render check. */
+  hasQuoted: boolean;
+  /**
+   * True when the per-message subject genuinely differs from the
+   * ticket's overall subject (a mid-thread rename). False when the
+   * message subject is just a Re/Fwd-prefixed variant — the sticky
+   * ticket header already shows the subject, no need to repeat it
+   * on every message card.
+   */
+  showSubjectHeader: boolean;
+  /**
+   * Ancestor pseudo-messages parsed out of the quoted content. Empty
+   * when the quoted content had no "On <date> wrote:" preamble to
+   * split on — the FE falls back to rendering the raw quoted content
+   * in that case.
+   */
+  reconstructedThread: PseudoMessageResponse[];
 }
 
 export interface TicketActivityResponse {
@@ -153,9 +210,20 @@ export function toTicketDetail(
   const latest = messages.length
     ? (messages[messages.length - 1] ?? null)
     : null;
+  // View-field computation is contextual: showSubjectHeader compares
+  // against the ticket subject, and the quoted-content fallback
+  // matches against every prior message's body. Thread the context
+  // in here so the mapper stays pure downstream.
+  const ticketSubject = messages[0]?.subject ?? null;
+  const priorBodies: string[] = [];
+  const mappedMessages: EmailMessageResponse[] = [];
+  for (const m of messages) {
+    mappedMessages.push(toEmailMessage(m, ticketSubject, priorBodies));
+    priorBodies.push(m.content ?? '');
+  }
   return {
     ...toTicketListItem(ticket, latest),
-    messages: messages.map(toEmailMessage),
+    messages: mappedMessages,
     activity: activity.map(toActivity),
   };
 }
@@ -173,7 +241,15 @@ function toLatestMessage(m: EmailMessage): TicketLatestMessage {
   };
 }
 
-function toEmailMessage(m: EmailMessage): EmailMessageResponse {
+function toEmailMessage(
+  m: EmailMessage,
+  ticketSubject: string | null,
+  priorBodies: string[],
+): EmailMessageResponse {
+  const split = splitBody(m.content ?? '', m.content_html ?? null, priorBodies);
+  const reconstructedThread = split.quotedContent
+    ? parseQuotedThread(split.quotedContent)
+    : [];
   return {
     id: m.id,
     channelId: m.channelId,
@@ -198,6 +274,16 @@ function toEmailMessage(m: EmailMessage): EmailMessageResponse {
       url: a.storage_url,
     })),
     createdAt: m.createdAt.toISOString(),
+    // Server-computed view fields — see message-view-utils.ts for
+    // the strategy stack (heuristics → prior-content fallback).
+    newContent: split.newContent,
+    newContentHtml: split.newContentHtml,
+    quotedContent: split.quotedContent,
+    quotedContentHtml: split.quotedContentHtml,
+    hasQuoted:
+      split.quotedContent !== null || split.quotedContentHtml !== null,
+    showSubjectHeader: shouldShowSubjectHeader(m.subject, ticketSubject),
+    reconstructedThread,
   };
 }
 
