@@ -182,11 +182,24 @@ function splitTextByPrior(
 }
 
 /**
- * Split HTML into fresh vs quoted. Recognises Gmail's gmail_quote
- * wrapper and a trailing <blockquote> as a fallback. No prior-content
- * heuristic on the HTML side yet — HTML replies almost always carry
- * a gmail_quote or blockquote marker, so the coverage from these two
- * paths is very high.
+ * Split HTML into fresh vs quoted. Strategies in order:
+ *
+ *   1. Gmail's gmail_quote div — the canonical marker across Gmail
+ *      web and Android. Trivially detectable, near 100% precision.
+ *
+ *   2. Apple / iPhone Mail preamble div — a "<div>On [date], [sender]
+ *      wrote:</div>" line that sits just before the blockquote in
+ *      iOS Mail HTML. Splitting here (instead of at the blockquote
+ *      below it) captures the preamble as part of the quoted section,
+ *      matching what Gmail's UI does visually.
+ *
+ *   3. Trailing <blockquote> — the fallback most other clients use.
+ *      We reject only very small intro blockquotes (< 200 chars AND
+ *      near the top of the doc — < 40 chars in), which would be
+ *      pull-quote style openings a user might type. Real
+ *      quoted-history blockquotes wrap the full prior message and
+ *      are always substantial, so this widens coverage without
+ *      false-positiving on legitimate intro quotes.
  */
 function splitHtmlBody(html: string): {
   newHtml: string;
@@ -196,15 +209,40 @@ function splitHtmlBody(html: string): {
   if (gmail !== -1) {
     return { newHtml: html.slice(0, gmail), quotedHtml: html.slice(gmail) };
   }
-  // Fallback — a blockquote late in the body. Only treat as quoted
-  // if it starts past 20% of the doc so an intro-blockquote at the
-  // top of the reply isn't wrongly hidden.
-  const blockquote = html.search(/<blockquote/i);
-  if (blockquote !== -1 && blockquote > html.length * 0.2) {
+
+  // Apple / iPhone Mail's "<div>On <date> ... wrote:</div>" preamble.
+  // Case-insensitive, tolerant of nested spans / attributes on the
+  // div. Matched separately from the blockquote so the preamble
+  // itself ends up on the quoted side of the split.
+  const preambleMatch = html.match(
+    /<div[^>]*>\s*(?:<[^>]+>\s*)*On\s+[^<]+wrote:\s*(?:<[^>]+>\s*)*<\/div>/i,
+  );
+  if (preambleMatch && preambleMatch.index !== undefined) {
     return {
-      newHtml: html.slice(0, blockquote),
-      quotedHtml: html.slice(blockquote),
+      newHtml: html.slice(0, preambleMatch.index),
+      quotedHtml: html.slice(preambleMatch.index),
     };
+  }
+
+  const blockquote = html.search(/<blockquote/i);
+  if (blockquote !== -1) {
+    const blockquoteEnd = html.indexOf('</blockquote>', blockquote);
+    const blockquoteSize =
+      blockquoteEnd !== -1
+        ? blockquoteEnd - blockquote
+        : html.length - blockquote;
+    // Only reject a blockquote when it's a small pull-quote sitting
+    // at the very top of the reply — that's what the old 20%-position
+    // guard was really trying to catch. Real quoted-history blockquotes
+    // wrap the full prior message and always exceed 200 chars, so this
+    // never rejects the case we actually care about.
+    const isSmallIntroQuote = blockquoteSize < 200 && blockquote < 40;
+    if (!isSmallIntroQuote) {
+      return {
+        newHtml: html.slice(0, blockquote),
+        quotedHtml: html.slice(blockquote),
+      };
+    }
   }
   return { newHtml: html, quotedHtml: null };
 }

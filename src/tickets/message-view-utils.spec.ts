@@ -154,6 +154,47 @@ describe('splitBody — HTML', () => {
     expect(out.newContentHtml).toBe('<p>just my message</p>');
     expect(out.quotedContentHtml).toBeNull();
   });
+
+  it('splits at the Apple/iPhone Mail "On <date> wrote:" preamble div', () => {
+    const priorBody =
+      'Hi Anjali, we have reverted to your previous email. Regards, Nausheen';
+    const html = [
+      '<div>Could you please give me an update on my exchange order?</div>',
+      '<div><br></div>',
+      '<div>On Sat, 26 Sep 2026 at 1:46 PM, Surma &lt;team@x.com&gt; wrote:</div>',
+      `<blockquote>${priorBody}</blockquote>`,
+    ].join('');
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('Could you please give me an update');
+    expect(out.newContentHtml).not.toContain('On Sat');
+    expect(out.quotedContentHtml).toContain('On Sat');
+    expect(out.quotedContentHtml).toContain(priorBody);
+  });
+
+  it('splits short-new + long-blockquote (the #556 case)', () => {
+    // Reply body: ~200 chars of new content followed by 3000+ chars
+    // of quoted history in a blockquote. Old 20%-position guard
+    // would have rejected because blockquote sits at ~6% of the doc.
+    const newContent =
+      '<div>Could you please give me an update on my exchange order, order number 230050? It has reached Shimla today.</div>';
+    const longQuoted = '<blockquote>' + 'a'.repeat(3000) + '</blockquote>';
+    const html = newContent + longQuoted;
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toBe(newContent);
+    expect(out.quotedContentHtml).toContain('<blockquote>');
+    expect(out.quotedContentHtml?.length).toBeGreaterThan(2000);
+  });
+
+  it('still ignores a tiny intro blockquote (pull-quote pattern)', () => {
+    // A user opens their reply with a short pull-quote at the top.
+    // We should NOT treat that as the quoted-history boundary —
+    // the blockquote is small AND at the very start.
+    const html =
+      '<blockquote>brief pull quote</blockquote><p>Here is my long thoughtful reply that continues on and provides substantial context and value to the reader.</p>';
+    const out = splitBody('', html, []);
+    expect(out.quotedContentHtml).toBeNull();
+    expect(out.newContentHtml).toBe(html);
+  });
 });
 
 describe('parseQuotedThread', () => {
