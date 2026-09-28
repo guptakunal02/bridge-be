@@ -14,6 +14,7 @@ import { UsersModule } from '../users/users.module';
 import { CustomerOrdersService } from './customer-orders.service';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { TicketReadState } from './entities/ticket-read-state.entity';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
 import { TicketsController } from './tickets.controller';
 import { TicketsService } from './tickets.service';
@@ -23,6 +24,7 @@ import { TicketsService } from './tickets.service';
     TypeOrmModule.forFeature([
       Ticket,
       TicketActivityLog,
+      TicketReadState,
       EmailMessage,
       EmailMessageAttachment,
       User,

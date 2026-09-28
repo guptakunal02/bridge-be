@@ -51,6 +51,13 @@ export interface TicketListItem {
    * here to render the full ancestor thread.
    */
   previousTicketId: string | null;
+  /**
+   * Number of RECEIVED messages that arrived after the caller's
+   * last-read timestamp on this ticket. Meaningful only when the
+   * caller is the ticket's assignee — non-mine tickets are always
+   * zero. Backs the badge on the navigation rail.
+   */
+  unreadCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -109,6 +116,7 @@ const PREVIEW_MAX = 140;
 export function toTicketListItem(
   ticket: Ticket,
   latest: EmailMessage | null,
+  unreadCount: number = 0,
 ): TicketListItem {
   return {
     id: ticket.id,
@@ -131,6 +139,7 @@ export function toTicketListItem(
     latestMessage: latest ? toLatestMessage(latest) : null,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
     previousTicketId: ticket.previous_ticket_id ?? null,
+    unreadCount,
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
   };

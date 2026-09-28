@@ -111,8 +111,19 @@ export class TicketsController {
   }
 
   @Get(':id')
-  get(@Param('id', ParseBigintIdPipe) id: string): Promise<TicketDetail> {
-    return this.tickets.get(id);
+  async get(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    const detail = await this.tickets.get(id);
+    // Best-effort mark-as-read side effect — only bumps the read
+    // timestamp when the caller is the assignee (service guards
+    // this). We swallow any failure so a read-state hiccup can't
+    // block the ticket from rendering.
+    this.tickets.markRead(id, user.id).catch(() => {
+      /* ignore */
+    });
+    return detail;
   }
 
   /**

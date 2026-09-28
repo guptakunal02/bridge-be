@@ -37,6 +37,7 @@ import {
 import type { UpdateTicketDto } from './dto/update-ticket.dto';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { TicketReadState } from './entities/ticket-read-state.entity';
 import { normaliseAddressList, replySubject } from './reply-utils';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
 
@@ -63,6 +64,8 @@ export class TicketsService {
     private readonly activity: Repository<TicketActivityLog>,
     @InjectRepository(EmailMessage)
     private readonly emails: Repository<EmailMessage>,
+    @InjectRepository(TicketReadState)
+    private readonly readStates: Repository<TicketReadState>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly dataSource: DataSource,
@@ -126,7 +129,11 @@ export class TicketsService {
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.assigneeUser', 'assignee')
       .leftJoinAndSelect('t.team', 'team')
-      .orderBy('t.createdAt', 'DESC')
+      // Latest activity first — a reply bumps a ticket to the top of
+      // the navigation rail, matching what LimeChat / Zendesk /
+      // Freshdesk do. updatedAt bumps on any status/assignee/tag
+      // change AND on new message ingest via the entity update path.
+      .orderBy('t.updatedAt', 'DESC')
       .take(limit)
       .skip(offset);
 
@@ -158,11 +165,24 @@ export class TicketsService {
     const rows = await qb.getMany();
     if (rows.length === 0) return [];
 
-    const latestByTicket = await this.fetchLatestMessages(
-      rows.map((t) => t.id),
-    );
+    // Unread counts are per-assignee — only meaningful when the row
+    // belongs to the caller. Filter the ids we query for so an admin
+    // browsing all tickets doesn't get unread numbers computed
+    // against their own read state on someone else's row. Non-mine
+    // tickets get unreadCount: 0 in the response.
+    const myTicketIds = rows
+      .filter((t) => t.assignee === actingUser.id)
+      .map((t) => t.id);
+    const [latestByTicket, unreadByTicket] = await Promise.all([
+      this.fetchLatestMessages(rows.map((t) => t.id)),
+      this.unreadCountsFor(myTicketIds, actingUser.id),
+    ]);
     return rows.map((t) =>
-      toTicketListItem(t, latestByTicket.get(t.id) ?? null),
+      toTicketListItem(
+        t,
+        latestByTicket.get(t.id) ?? null,
+        unreadByTicket.get(t.id) ?? 0,
+      ),
     );
   }
 
@@ -379,6 +399,65 @@ export class TicketsService {
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
     }));
+  }
+
+  /**
+   * Bump last_read_at for (user, ticket) ONLY when the user is the
+   * current assignee. Read state is a per-assignee affordance — an
+   * admin drilling into someone else's ticket shouldn't inadvertently
+   * mark it read for the assignee. Upsert is atomic; no race with
+   * concurrent opens.
+   */
+  async markRead(ticketId: string, userId: string): Promise<void> {
+    const ticket = await this.tickets.findOne({
+      where: { id: ticketId },
+      select: { id: true, assignee: true },
+    });
+    if (!ticket || ticket.assignee !== userId) return;
+    await this.readStates
+      .createQueryBuilder()
+      .insert()
+      .into(TicketReadState)
+      .values({
+        user_id: userId,
+        ticket_id: ticketId,
+        last_read_at: () => 'now()',
+      })
+      .orUpdate(['last_read_at', 'updatedAt'], ['user_id', 'ticket_id'])
+      .execute();
+  }
+
+  /**
+   * Batch unread counts for a set of ticket ids, for one user. Only
+   * counts RECEIVED (inbound) messages that arrived after the user's
+   * last read timestamp — outbound replies the user just sent aren't
+   * "new to me". Missing read-state rows mean "never opened", which
+   * counts every inbound message on the ticket.
+   *
+   * Returns a map keyed by ticket id → count (defaults to 0 if the
+   * ticket had no inbound activity for this user).
+   */
+  private async unreadCountsFor(
+    ticketIds: string[],
+    userId: string,
+  ): Promise<Map<string, number>> {
+    if (ticketIds.length === 0) return new Map();
+    const rows: Array<{ ticket_id: string; unread: string }> =
+      await this.emails.query(
+        `SELECT m.ticket_id, COUNT(*)::text AS unread
+           FROM public.email_message m
+           LEFT JOIN public.ticket_read_state rs
+                  ON rs.ticket_id = m.ticket_id
+                 AND rs.user_id = $1
+          WHERE m.ticket_id = ANY($2::bigint[])
+            AND m."deletedAt" IS NULL
+            AND m.type = 'RECEIVED'
+            AND (rs.last_read_at IS NULL
+                 OR m."createdAt" > rs.last_read_at)
+          GROUP BY m.ticket_id`,
+        [userId, ticketIds],
+      );
+    return new Map(rows.map((r) => [String(r.ticket_id), Number(r.unread)]));
   }
 
   async get(id: string): Promise<TicketDetail> {
