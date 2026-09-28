@@ -87,6 +87,16 @@ export class Ticket {
   @Column({ type: 'timestamptz', nullable: true, name: 'resolved_at' })
   resolved_at!: Date | null;
 
+  /**
+   * When a customer replies to a RESOLVED ticket AFTER the reopen
+   * window, we mint a fresh ticket and set this to the id of the
+   * one it continues. Detail view walks backwards to show the full
+   * ancestral thread with "New ticket started here" dividers at
+   * each boundary. Null on brand-new tickets (no prior context).
+   */
+  @Column({ type: 'bigint', nullable: true, name: 'previous_ticket_id' })
+  previous_ticket_id!: string | null;
+
   @Column({ type: 'text', name: 'thread_key' })
   thread_key!: string;
 

@@ -29,7 +29,11 @@ import {
 import { ListCustomerOrdersQuery } from './dto/list-customer-orders.dto';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
 import { ReplyTicketDto } from './dto/reply-ticket.dto';
-import { TicketDetail, TicketListItem } from './dto/ticket-response.dto';
+import {
+  RelatedTicketSummary,
+  TicketDetail,
+  TicketListItem,
+} from './dto/ticket-response.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { TicketsService } from './tickets.service';
 
@@ -109,6 +113,19 @@ export class TicketsController {
   @Get(':id')
   get(@Param('id', ParseBigintIdPipe) id: string): Promise<TicketDetail> {
     return this.tickets.get(id);
+  }
+
+  /**
+   * Jump list of every other ticket from the same customer as this
+   * one. Identifies the customer by the sender of the earliest
+   * RECEIVED message on the ticket. Backs the "Tickets" section of
+   * the sidebar Overview.
+   */
+  @Get(':id/related')
+  related(
+    @Param('id', ParseBigintIdPipe) id: string,
+  ): Promise<RelatedTicketSummary[]> {
+    return this.tickets.listRelatedForCustomer(id);
   }
 
   @Patch(':id')

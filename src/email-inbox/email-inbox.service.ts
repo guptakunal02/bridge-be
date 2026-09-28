@@ -95,6 +95,12 @@ export class EmailInboxService {
           });
         }
 
+        // If we drop the RESOLVED match below (past-window path),
+        // stash the ticket id so the mint branch can wire it up as
+        // the new ticket's previous_ticket_id — that's what carries
+        // the ancestor thread forward on the detail view.
+        let continuedFromTicketId: string | null = null;
+
         // Resolved-ticket rule: if the found ticket is RESOLVED,
         // consult the configured reopen window.
         //   * within window → reopen this ticket (status → OPEN,
@@ -104,6 +110,8 @@ export class EmailInboxService {
         //     old thread_key is taken by the RESOLVED ticket, so we
         //     drop the match and let the mint path below own it
         //     with a fresh thread_key derived from this email's MID.
+        //     We remember the old ticket id as previous_ticket_id
+        //     so the detail view still shows the ancestor thread.
         //
         // Row-lock the ticket for the full check-then-write so two
         // concurrent inbound messages to the same RESOLVED ticket
@@ -128,13 +136,17 @@ export class EmailInboxService {
               locked.resolved_at,
             );
             if (!withinWindow) {
+              continuedFromTicketId = locked.id;
               ticket = null;
             } else {
               const flipped = await this.reopenResolved(locked.id, mgr);
               if (!flipped) {
                 // Should be unreachable under the row lock, but if
                 // the UPDATE affected zero rows we don't know the
-                // real state — err on the safe side and mint fresh.
+                // real state — err on the safe side and mint fresh
+                // with the old id remembered so continuation still
+                // works.
+                continuedFromTicketId = locked.id;
                 ticket = null;
               } else {
                 ticket = await ticketRepo.findOne({
@@ -197,6 +209,11 @@ export class EmailInboxService {
               thread_key: threadKey,
               assignee: initialAssigneeId,
               status: TicketStatus.OPEN,
+              // Non-null only in the past-window continuation path.
+              // Detail view walks this backwards to render the
+              // ancestor thread with a "New ticket started here"
+              // divider between each ancestor and the next.
+              previous_ticket_id: continuedFromTicketId,
             }),
           );
 

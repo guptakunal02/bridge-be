@@ -14,6 +14,7 @@ import { S3StorageService } from '../common/storage/s3-storage.service';
 import { Team } from '../teams/entities/team.entity';
 import {
   BotTrigger,
+  ChannelType,
   MessageDirection,
   TicketActivity,
   TicketStatus,
@@ -300,6 +301,86 @@ export class TicketsService {
     return rows.map((r) => r.tag);
   }
 
+  /**
+   * All tickets from the same customer as the given ticket, newest
+   * first. Identifies "the customer" by the sender of the earliest
+   * RECEIVED message on the ticket — same rule the sidebar uses for
+   * the Customer field. Excludes the current ticket from the list
+   * (no point rendering "this ticket" in a jump list of others).
+   *
+   * Capped at 50 rows — a real customer with more than that is a
+   * pathological case we can page through later if it comes up.
+   */
+  async listRelatedForCustomer(
+    ticketId: string,
+  ): Promise<
+    import('./dto/ticket-response.dto').RelatedTicketSummary[]
+  > {
+    // Two-step because Postgres wants scalar subqueries when we mix
+    // window functions with joins on the same message table — cleaner
+    // to just resolve the customer email first, then a plain SELECT.
+    const customerRow: Array<{ sender: string | null }> = await this.emails
+      .query(
+        `SELECT sender
+           FROM public.email_message
+          WHERE ticket_id = $1
+            AND type = 'RECEIVED'
+            AND "deletedAt" IS NULL
+          ORDER BY "createdAt" ASC
+          LIMIT 1`,
+        [ticketId],
+      );
+    const customerEmail = customerRow[0]?.sender;
+    if (!customerEmail) return [];
+
+    // DISTINCT ON keeps one row per ticket while joining email_message.
+    // Subject comes from the earliest message on each ticket so it
+    // matches the header the ticket detail page shows.
+    const rows: Array<{
+      id: string;
+      status: TicketStatus;
+      is_reopened: boolean;
+      channel_type: ChannelType;
+      createdAt: Date;
+      updatedAt: Date;
+      subject: string | null;
+    }> = await this.emails.query(
+      `SELECT DISTINCT ON (t.id)
+              t.id, t.status, t.is_reopened, t.channel_type,
+              t."createdAt", t."updatedAt",
+              (SELECT m2.subject
+                 FROM public.email_message m2
+                WHERE m2.ticket_id = t.id
+                  AND m2."deletedAt" IS NULL
+                ORDER BY m2."createdAt" ASC
+                LIMIT 1) AS subject
+         FROM public.ticket t
+         INNER JOIN public.email_message m
+                 ON m.ticket_id = t.id
+                AND m."deletedAt" IS NULL
+                AND m.type = 'RECEIVED'
+                AND m.sender = $1
+        WHERE t.id <> $2
+          AND t."deletedAt" IS NULL
+        ORDER BY t.id, t."updatedAt" DESC
+        LIMIT 50`,
+      [customerEmail, ticketId],
+    );
+    // The DISTINCT ON pass sorted by ticket id (Postgres requires the
+    // dedupe column to lead the ORDER BY). Re-sort by updatedAt DESC
+    // for the FE list order.
+    rows.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    return rows.map((r) => ({
+      id: r.id,
+      subject: r.subject,
+      status: r.status,
+      isReopened: r.is_reopened,
+      channelType: r.channel_type,
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+    }));
+  }
+
   async get(id: string): Promise<TicketDetail> {
     const ticket = await this.tickets.findOne({
       where: { id },
@@ -307,14 +388,28 @@ export class TicketsService {
     });
     if (!ticket) throw new NotFoundException('Ticket not found');
 
+    // Walk previous_ticket_id backwards to collect the ancestor chain
+    // so the detail view can render the full conversation with a
+    // "New ticket started here" divider between each ancestor and
+    // the next. Chain length is bounded in practice (customer replies
+    // → resolve → past-window continuation, N cycles); cap at 20
+    // defensively so a pathological loop can't stall the request.
+    const chainIds = await this.collectAncestorChain(id, 20);
+
     const [messages, activity] = await Promise.all([
-      // Eager-load attachments so the FE can render chips inline.
-      // Bounded by messages-per-thread; cheap.
+      // Ancestor messages come along too — the FE groups by ticketId
+      // and inserts a divider at each boundary. Ordering by createdAt
+      // works because ancestor tickets resolved before the current
+      // one was created, so message timestamps stay monotonic across
+      // the chain.
       this.emails.find({
-        where: { ticket_id: id },
+        where: { ticket_id: In(chainIds) },
         relations: { attachments: true },
         order: { createdAt: 'ASC' },
       }),
+      // Activity log stays scoped to THIS ticket. Ancestor activity
+      // is operational (assignments, timers, etc.) and belongs to
+      // each ticket individually.
       this.activity.find({
         where: { ticket_id: id },
         order: { createdAt: 'ASC' },
@@ -322,6 +417,32 @@ export class TicketsService {
     ]);
 
     return toTicketDetail(ticket, messages, activity);
+  }
+
+  /**
+   * Returns [id, previous_ticket_id, ancestor_of_previous, …] up to
+   * `maxDepth`. Guards against cycles by tracking seen ids — a
+   * malformed chain terminates cleanly instead of spinning forever.
+   */
+  private async collectAncestorChain(
+    startId: string,
+    maxDepth: number,
+  ): Promise<string[]> {
+    const seen = new Set<string>([startId]);
+    const out: string[] = [startId];
+    let cursor: string | null = startId;
+    while (out.length < maxDepth && cursor !== null) {
+      const row = await this.tickets.findOne({
+        where: { id: cursor },
+        select: { id: true, previous_ticket_id: true },
+      });
+      const prev = row?.previous_ticket_id ?? null;
+      if (prev === null || seen.has(prev)) break;
+      seen.add(prev);
+      out.push(prev);
+      cursor = prev;
+    }
+    return out;
   }
 
   /**

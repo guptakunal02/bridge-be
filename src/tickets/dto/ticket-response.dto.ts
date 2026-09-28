@@ -44,6 +44,13 @@ export interface TicketListItem {
    * to OPEN or RESOLVED.
    */
   resumeAt: string | null;
+  /**
+   * Non-null when this ticket was minted as a continuation of a
+   * RESOLVED ticket that received a customer reply AFTER the reopen
+   * window. Points at the parent — detail view walks backwards from
+   * here to render the full ancestor thread.
+   */
+  previousTicketId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,6 +90,20 @@ export interface TicketDetail extends TicketListItem {
   activity: TicketActivityResponse[];
 }
 
+/**
+ * One entry in the "all tickets from this customer" sidebar list.
+ * Small on purpose — it's a jump-list, not a full ticket view.
+ */
+export interface RelatedTicketSummary {
+  id: string;
+  subject: string | null;
+  status: TicketStatus;
+  isReopened: boolean;
+  channelType: ChannelType;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const PREVIEW_MAX = 140;
 
 export function toTicketListItem(
@@ -109,6 +130,7 @@ export function toTicketListItem(
     teamName: ticket.team?.name ?? null,
     latestMessage: latest ? toLatestMessage(latest) : null,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
+    previousTicketId: ticket.previous_ticket_id ?? null,
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
   };
