@@ -13,10 +13,17 @@
  *                        stripped quoted content so the FE can
  *                        render each ancestor as its own card
  *
+ * HTML splitting uses `cheerio` (server-side jQuery on top of parse5)
+ * — real DOM traversal, not regex heuristics. See splitHtmlBody for
+ * the CSS-selector strategy stack.
+ *
  * Every function is pure so unit tests cover them end-to-end without
  * a DI container. The mapper in ticket-response.dto.ts wires them in
  * at response time.
  */
+
+import * as cheerio from 'cheerio';
+import type { AnyNode } from 'domhandler';
 
 /**
  * Layered reply/forward prefixes across English + common European
@@ -97,12 +104,50 @@ export function splitBody(
 ): SplitBodyResult {
   const textSplit = splitTextByHeuristics(text) ?? splitTextByPrior(text, priorBodies);
   const htmlSplit = html ? splitHtmlBody(html) : { newHtml: null, quotedHtml: null };
-  return {
+  const result: SplitBodyResult = {
     newContent: textSplit ? textSplit.newText : text,
     newContentHtml: htmlSplit.newHtml,
     quotedContent: textSplit ? textSplit.quotedText : null,
     quotedContentHtml: htmlSplit.quotedHtml,
   };
+  // Safety net: if newContent still contains a prior body verbatim,
+  // our split missed the mark. Rather than silently showing the
+  // agent a mixed new+quoted blob, fall back to "everything is
+  // fresh" so no content is hidden. Better to over-show than
+  // under-show — the "Show earlier messages" toggle disappears
+  // for this message, and the agent sees the full body inline.
+  if (containsPriorContent(result.newContent, priorBodies)) {
+    return {
+      newContent: text,
+      newContentHtml: html,
+      quotedContent: null,
+      quotedContentHtml: null,
+    };
+  }
+  return result;
+}
+
+/**
+ * True when `newContent` contains any prior body as a substring of
+ * meaningful length. Used as the safety-net cross-check.
+ */
+function containsPriorContent(
+  newContent: string,
+  priorBodies: string[],
+): boolean {
+  const trimmedNew = newContent.trim();
+  if (trimmedNew.length === 0) return false;
+  for (const prior of priorBodies) {
+    const trimmedPrior = prior.trim();
+    if (trimmedPrior.length < 80) continue;
+    // Sample the middle 200 chars of the prior body — avoids false
+    // positives on generic openers ("Hi,") or closers ("Thanks!")
+    // while catching bodies that were meaningfully quoted.
+    const mid = Math.max(0, Math.floor(trimmedPrior.length / 2) - 100);
+    const sample = trimmedPrior.slice(mid, mid + 200);
+    if (trimmedNew.includes(sample)) return true;
+  }
+  return false;
 }
 
 /**
@@ -182,69 +227,176 @@ function splitTextByPrior(
 }
 
 /**
- * Split HTML into fresh vs quoted. Strategies in order:
+ * Selector list matched against the DOM to find quote boundaries.
+ * The FIRST element in document order that matches ANY of these is
+ * treated as the boundary — everything from it onward is quoted
+ * history, everything before is fresh reply content.
  *
- *   1. Gmail's gmail_quote div — the canonical marker across Gmail
- *      web and Android. Trivially detectable, near 100% precision.
+ * Extending for a new email client = add a selector here + a test.
+ * Selectors intentionally tolerate class-list variations because a
+ * DOM query on `.gmail_quote` matches both `class="gmail_quote"` and
+ * `class="gmail_quote gmail_quote_container"` naturally.
+ */
+const QUOTE_BOUNDARY_SELECTORS = [
+  // Gmail — web + Android. Also matches gmail_quote_container.
+  '.gmail_quote',
+  '.gmail_attr',
+  '.gmail_extra',
+  // Apple Mail / iPhone Mail
+  'blockquote[type="cite"]',
+  '.AppleMailQuote',
+  // Outlook desktop
+  '.OutlookMessageHeader',
+  '#divRplyFwdMsg',
+  // Outlook web
+  '#appendonsend',
+  '[id="mail-editor-reference-message-container"]',
+  // Yahoo
+  '.yahoo_quoted',
+  // Zoho
+  '.zmail_signature ~ blockquote',
+  // Generic — any blockquote that's not just a tiny pull-quote at
+  // the very top. We filter with a length check in JS after the
+  // selector match, since CSS can't express "large enough."
+  'blockquote',
+].join(', ');
+
+/**
+ * Split HTML into fresh vs quoted using cheerio DOM traversal.
  *
- *   2. Apple / iPhone Mail preamble div — a "<div>On [date], [sender]
- *      wrote:</div>" line that sits just before the blockquote in
- *      iOS Mail HTML. Splitting here (instead of at the blockquote
- *      below it) captures the preamble as part of the quoted section,
- *      matching what Gmail's UI does visually.
+ * Strategy:
+ *   1. Parse HTML into a DOM tree.
+ *   2. Find every element matching QUOTE_BOUNDARY_SELECTORS.
+ *   3. Filter out obvious false positives (tiny intro blockquotes).
+ *   4. Pick the FIRST remaining match in document order.
+ *   5. Serialize the pre-boundary DOM as newHtml and the boundary +
+ *      everything after as quotedHtml.
  *
- *   3. Trailing <blockquote> — the fallback most other clients use.
- *      We reject only very small intro blockquotes (< 200 chars AND
- *      near the top of the doc — < 40 chars in), which would be
- *      pull-quote style openings a user might type. Real
- *      quoted-history blockquotes wrap the full prior message and
- *      are always substantial, so this widens coverage without
- *      false-positiving on legitimate intro quotes.
+ * Why cheerio not regex:
+ *   - Attribute order doesn't matter — `class="foo gmail_quote bar"`
+ *     matches `.gmail_quote` naturally.
+ *   - Malformed markup is tolerated (parse5 handles it like Chrome does).
+ *   - Nested boundaries handled by "first in document order wins."
+ *   - Adding a new client is one line in QUOTE_BOUNDARY_SELECTORS.
  */
 function splitHtmlBody(html: string): {
   newHtml: string;
   quotedHtml: string | null;
 } {
-  const gmail = html.search(/<div[^>]*class=["'][^"']*gmail_quote[^"']*["']/i);
-  if (gmail !== -1) {
-    return { newHtml: html.slice(0, gmail), quotedHtml: html.slice(gmail) };
+  if (!html || html.trim().length === 0) {
+    return { newHtml: html, quotedHtml: null };
+  }
+  const $ = cheerio.load(`<div id="__msg_root">${html}</div>`, null, false);
+  const root = $('#__msg_root');
+  if (root.length === 0) return { newHtml: html, quotedHtml: null };
+
+  // Find first candidate boundary in document order.
+  const candidates = root.find(QUOTE_BOUNDARY_SELECTORS);
+  const boundary = candidates.filter((_, el) => !isTinyPullQuote($, el)).first();
+  if (boundary.length === 0) {
+    return { newHtml: html, quotedHtml: null };
   }
 
-  // Apple / iPhone Mail's "<div>On <date> ... wrote:</div>" preamble.
-  // Case-insensitive, tolerant of nested spans / attributes on the
-  // div. Matched separately from the blockquote so the preamble
-  // itself ends up on the quoted side of the split.
-  const preambleMatch = html.match(
-    /<div[^>]*>\s*(?:<[^>]+>\s*)*On\s+[^<]+wrote:\s*(?:<[^>]+>\s*)*<\/div>/i,
-  );
-  if (preambleMatch && preambleMatch.index !== undefined) {
-    return {
-      newHtml: html.slice(0, preambleMatch.index),
-      quotedHtml: html.slice(preambleMatch.index),
-    };
+  // Split the DOM: everything at or after `boundary` (in document
+  // order, considering all ancestors) is quoted content. We walk
+  // upward from the boundary until we reach a child of the root,
+  // then take that node + all its following siblings as quoted, and
+  // reserialize the root's remaining children as newHtml.
+  const topLevelAncestor = getTopLevelAncestor($, boundary, root);
+  if (!topLevelAncestor) {
+    return { newHtml: html, quotedHtml: null };
   }
 
-  const blockquote = html.search(/<blockquote/i);
-  if (blockquote !== -1) {
-    const blockquoteEnd = html.indexOf('</blockquote>', blockquote);
-    const blockquoteSize =
-      blockquoteEnd !== -1
-        ? blockquoteEnd - blockquote
-        : html.length - blockquote;
-    // Only reject a blockquote when it's a small pull-quote sitting
-    // at the very top of the reply — that's what the old 20%-position
-    // guard was really trying to catch. Real quoted-history blockquotes
-    // wrap the full prior message and always exceed 200 chars, so this
-    // never rejects the case we actually care about.
-    const isSmallIntroQuote = blockquoteSize < 200 && blockquote < 40;
-    if (!isSmallIntroQuote) {
-      return {
-        newHtml: html.slice(0, blockquote),
-        quotedHtml: html.slice(blockquote),
-      };
+  // Collect quoted: topLevelAncestor and every subsequent sibling.
+  const quotedParts: string[] = [];
+  quotedParts.push($.html(topLevelAncestor) ?? '');
+  const following = $(topLevelAncestor).nextAll();
+  following.each((_, el) => {
+    quotedParts.push($.html(el) ?? '');
+  });
+  const quotedHtml = quotedParts.join('');
+
+  // Remove the quoted portion from the root and serialize the rest.
+  $(topLevelAncestor).nextAll().remove();
+  $(topLevelAncestor).remove();
+  const newHtml = root.html() ?? '';
+
+  // Trim empty tail (trailing <br>, <div><br></div>, etc.) so
+  // newHtml doesn't render a big empty space above the fold.
+  const trimmedNewHtml = trimTailingEmpty(newHtml);
+
+  return {
+    newHtml: trimmedNewHtml,
+    quotedHtml: quotedHtml.length > 0 ? quotedHtml : null,
+  };
+}
+
+/**
+ * A tiny blockquote near the top of the reply is likely a pull-quote
+ * the user opened with, not the quote-history boundary. Same intuition
+ * as the old 40-char / 200-char guard but expressed against the DOM
+ * for clarity.
+ */
+function isTinyPullQuote(
+  $: cheerio.CheerioAPI,
+  el: AnyNode,
+): boolean {
+  const node = $(el);
+  // Only apply the guard to bare <blockquote> — clients with an
+  // explicit gmail_quote / OutlookMessageHeader class are always
+  // legitimate boundaries regardless of size.
+  const tagName = 'tagName' in el ? String(el.tagName).toLowerCase() : '';
+  if (tagName !== 'blockquote') return false;
+  const className = node.attr('class') ?? '';
+  if (className.includes('gmail_quote') || className.includes('yahoo_quoted')) {
+    return false;
+  }
+  if (node.attr('type') === 'cite') return false;
+  const text = node.text().trim();
+  if (text.length >= 200) return false;
+  // Near the top? Check that no substantial content precedes it.
+  const before = $.html(node.prevAll()) ?? '';
+  // Strip tags to get just text-ish length.
+  const beforeText = cheerio.load(before).text().trim();
+  return beforeText.length < 40;
+}
+
+/**
+ * Walk up from `el` until we reach a direct child of `root`. That
+ * top-level ancestor + everything after it at the top level is what
+ * becomes the quoted section. Returns null when we somehow can't
+ * reach a top-level ancestor (shouldn't happen for cheerio-parsed
+ * DOMs, but defensive).
+ */
+function getTopLevelAncestor(
+  $: cheerio.CheerioAPI,
+  el: cheerio.Cheerio<AnyNode>,
+  root: cheerio.Cheerio<AnyNode>,
+): AnyNode | null {
+  let current: cheerio.Cheerio<AnyNode> = el;
+  const rootNode = root.get(0);
+  if (!rootNode) return null;
+  for (let i = 0; i < 100; i++) {
+    const parent = current.parent();
+    if (parent.length === 0) return current.get(0) ?? null;
+    const parentNode = parent.get(0);
+    if (parentNode === rootNode) {
+      return current.get(0) ?? null;
     }
+    current = parent;
   }
-  return { newHtml: html, quotedHtml: null };
+  return null;
+}
+
+/**
+ * Strip trailing empty <br>, whitespace, and empty <div><br></div>
+ * wrappers from the end of newHtml — those get left behind by the
+ * split and would render an ugly gap above the "···" toggle button.
+ */
+function trimTailingEmpty(html: string): string {
+  return html
+    .replace(/(?:\s|<br\s*\/?>|<div[^>]*>\s*(?:<br\s*\/?>\s*)*<\/div>)+$/gi, '')
+    .trimEnd();
 }
 
 /* ------------------------------------------------------------------ */

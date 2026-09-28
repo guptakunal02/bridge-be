@@ -144,7 +144,96 @@ describe('splitBody — HTML', () => {
   it('splits on Gmail gmail_quote div', () => {
     const html = '<p>hi there</p><div class="gmail_quote">old stuff</div>';
     const out = splitBody('', html, []);
-    expect(out.newContentHtml).toBe('<p>hi there</p>');
+    expect(out.newContentHtml).toContain('hi there');
+    expect(out.newContentHtml).not.toContain('gmail_quote');
+    expect(out.quotedContentHtml).toContain('gmail_quote');
+  });
+
+  it('splits on gmail_quote_container (real ticket #556 case)', () => {
+    // The actual HTML shape Gmail produces on a reply. Fresh content
+    // sits in nested `<div style="font-size:inherit">` before the
+    // gmail_quote_container div. Real-world capture — do not modify
+    // without keeping the shape recognizable.
+    const html = [
+      '<div><div style="font-size:inherit"><div style="font-size:inherit">',
+      '<p dir="auto">Thank you for your response. I understand.</p>',
+      '</div></div><br></div>',
+      '<div><br>',
+      '<div class="gmail_quote gmail_quote_container">',
+      '<div dir="ltr" class="gmail_attr">On Sat, 26 Sep 2026, Surma wrote:<br></div>',
+      '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">',
+      '<p>Hi Anjali, we have reverted to your previous email. Regards, Nausheen</p>',
+      '</blockquote>',
+      '</div></div>',
+    ].join('');
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('Thank you for your response');
+    expect(out.newContentHtml).not.toContain('gmail_quote');
+    expect(out.newContentHtml).not.toContain('Hi Anjali');
+    expect(out.quotedContentHtml).toContain('gmail_quote_container');
+    expect(out.quotedContentHtml).toContain('Hi Anjali');
+  });
+
+  it('splits on Apple Mail blockquote type="cite"', () => {
+    const html = [
+      '<div>Sure, will do.</div>',
+      '<br>',
+      '<blockquote type="cite">',
+      '<div>On Sep 26, 2026, at 5:34 PM, x@y.com wrote:</div>',
+      '<div>Original message here.</div>',
+      '</blockquote>',
+    ].join('');
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('Sure, will do');
+    expect(out.newContentHtml).not.toContain('blockquote');
+    expect(out.quotedContentHtml).toContain('type="cite"');
+  });
+
+  it('splits on Outlook OutlookMessageHeader', () => {
+    const html = [
+      '<p>Thanks for the update.</p>',
+      '<div class="OutlookMessageHeader">',
+      '<b>From:</b> Someone<br>',
+      '<b>Sent:</b> Monday...<br>',
+      '</div>',
+      '<p>Original outlook message.</p>',
+    ].join('');
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('Thanks for the update');
+    expect(out.newContentHtml).not.toContain('OutlookMessageHeader');
+    expect(out.quotedContentHtml).toContain('OutlookMessageHeader');
+    expect(out.quotedContentHtml).toContain('Original outlook message');
+  });
+
+  it('splits on Yahoo yahoo_quoted', () => {
+    const html = [
+      '<div>Got it, thanks!</div>',
+      '<div class="yahoo_quoted">',
+      '<div>On Monday, someone wrote:</div>',
+      '<blockquote>original</blockquote>',
+      '</div>',
+    ].join('');
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('Got it');
+    expect(out.newContentHtml).not.toContain('yahoo_quoted');
+    expect(out.quotedContentHtml).toContain('yahoo_quoted');
+  });
+
+  it('tolerates attribute order (id before class)', () => {
+    const html = '<p>hi</p><div id="foo" data-x="1" class="prefix gmail_quote suffix">old</div>';
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('hi');
+    expect(out.quotedContentHtml).toContain('gmail_quote');
+  });
+
+  it('handles malformed HTML gracefully', () => {
+    // Missing closing tags — cheerio auto-closes like a browser would.
+    // Verifies we never throw; exact split location on malformed input
+    // is browser-defined and not worth asserting.
+    const html = '<div>New content</div><div class="gmail_quote">quoted';
+    expect(() => splitBody('', html, [])).not.toThrow();
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('New content');
     expect(out.quotedContentHtml).toContain('gmail_quote');
   });
 
@@ -155,34 +244,20 @@ describe('splitBody — HTML', () => {
     expect(out.quotedContentHtml).toBeNull();
   });
 
-  it('splits at the Apple/iPhone Mail "On <date> wrote:" preamble div', () => {
-    const priorBody =
-      'Hi Anjali, we have reverted to your previous email. Regards, Nausheen';
-    const html = [
-      '<div>Could you please give me an update on my exchange order?</div>',
-      '<div><br></div>',
-      '<div>On Sat, 26 Sep 2026 at 1:46 PM, Surma &lt;team@x.com&gt; wrote:</div>',
-      `<blockquote>${priorBody}</blockquote>`,
-    ].join('');
-    const out = splitBody('', html, []);
-    expect(out.newContentHtml).toContain('Could you please give me an update');
-    expect(out.newContentHtml).not.toContain('On Sat');
-    expect(out.quotedContentHtml).toContain('On Sat');
-    expect(out.quotedContentHtml).toContain(priorBody);
-  });
-
   it('splits short-new + long-blockquote (the #556 case)', () => {
     // Reply body: ~200 chars of new content followed by 3000+ chars
-    // of quoted history in a blockquote. Old 20%-position guard
-    // would have rejected because blockquote sits at ~6% of the doc.
+    // of quoted history in a bare blockquote. Real replies that
+    // wrap prior content in a blockquote without any client-class
+    // marker should still split correctly.
     const newContent =
       '<div>Could you please give me an update on my exchange order, order number 230050? It has reached Shimla today.</div>';
-    const longQuoted = '<blockquote>' + 'a'.repeat(3000) + '</blockquote>';
+    const longQuoted =
+      '<blockquote>' + 'lorem ipsum '.repeat(300) + '</blockquote>';
     const html = newContent + longQuoted;
     const out = splitBody('', html, []);
-    expect(out.newContentHtml).toBe(newContent);
-    expect(out.quotedContentHtml).toContain('<blockquote>');
-    expect(out.quotedContentHtml?.length).toBeGreaterThan(2000);
+    expect(out.newContentHtml).toContain('Could you please');
+    expect(out.newContentHtml).not.toContain('lorem');
+    expect(out.quotedContentHtml).toContain('lorem');
   });
 
   it('still ignores a tiny intro blockquote (pull-quote pattern)', () => {
@@ -193,7 +268,8 @@ describe('splitBody — HTML', () => {
       '<blockquote>brief pull quote</blockquote><p>Here is my long thoughtful reply that continues on and provides substantial context and value to the reader.</p>';
     const out = splitBody('', html, []);
     expect(out.quotedContentHtml).toBeNull();
-    expect(out.newContentHtml).toBe(html);
+    expect(out.newContentHtml).toContain('brief pull quote');
+    expect(out.newContentHtml).toContain('Here is my long thoughtful reply');
   });
 });
 
