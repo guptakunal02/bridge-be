@@ -23,6 +23,13 @@ export interface TeamResponse {
   isDefault: boolean;
   assignmentPaused: boolean;
   memberCount: number;
+  /**
+   * Routing precedence — lower = higher priority. The list endpoint
+   * already sorts by this ASC so the FE can render in evaluation
+   * order without re-sorting. Admin drags to reorder from the /teams
+   * page (the number itself is a UI implementation detail).
+   */
+  priority: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -38,6 +45,7 @@ export function toTeamResponse(team: Team, memberCount: number): TeamResponse {
     isDefault: team.is_default,
     assignmentPaused: team.assignment_paused,
     memberCount,
+    priority: team.priority,
     createdAt: team.createdAt.toISOString(),
     updatedAt: team.updatedAt.toISOString(),
   };

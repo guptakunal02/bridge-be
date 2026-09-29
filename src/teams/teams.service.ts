@@ -35,7 +35,7 @@ export class TeamsService {
 
   async list(): Promise<TeamResponse[]> {
     const rows = await this.teams.find({
-      order: { is_default: 'DESC', createdAt: 'ASC' },
+      order: { priority: 'ASC', createdAt: 'ASC' },
     });
     if (rows.length === 0) return [];
     // Batch-fetch counts so we don't N+1
@@ -137,6 +137,26 @@ export class TeamsService {
     }
     const updated = await this.teams.findOneOrFail({ where: { id } });
     return toTeamResponse(updated, await this.countMembers(id));
+  }
+
+  /**
+   * Set every team's priority in one shot. The caller sends the
+   * complete team-id ordering; we assign 0, 1, 2… in that order.
+   * IDs missing from the list keep their current priority — a
+   * partial reorder is not a delete, and any subsequent drag will
+   * include every team anyway. IDs not found are ignored (idempotent
+   * behaviour for a stale FE cache).
+   */
+  async reorder(orderedIds: string[]): Promise<TeamResponse[]> {
+    const existing = await this.teams.find({ select: { id: true } });
+    const known = new Set(existing.map((t) => t.id));
+    let priority = 0;
+    for (const id of orderedIds) {
+      if (!known.has(id)) continue;
+      await this.teams.update({ id }, { priority });
+      priority++;
+    }
+    return this.list();
   }
 
   async remove(id: string): Promise<void> {

@@ -9,10 +9,12 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../database/enums';
 import { CreateTeamDto } from './dto/create-team.dto';
+import { ReorderTeamsDto } from './dto/reorder-teams.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/team-member.dto';
 import { TeamDetail, TeamResponse } from './dto/team-response.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
@@ -35,6 +37,15 @@ export class TeamsController {
   @Post()
   create(@Body() dto: CreateTeamDto): Promise<TeamResponse> {
     return this.teams.create(dto);
+  }
+
+  /**
+   * Replace the whole team priority ordering in one call. Body is
+   * the complete list of team ids in the new evaluation order.
+   */
+  @Put('reorder')
+  reorder(@Body() dto: ReorderTeamsDto): Promise<TeamResponse[]> {
+    return this.teams.reorder(dto.orderedIds);
   }
 
   @Get(':id')

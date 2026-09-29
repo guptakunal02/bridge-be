@@ -28,9 +28,18 @@ export class Team {
   @Column({ type: 'boolean', default: false, name: 'is_default' })
   is_default!: boolean;
 
-  /** Admin kill-switch — tickets pile up on BOT instead of routing to a live agent. */
+  /** Admin kill-switch — tickets pile up on BOT instead of routing to a live member. */
   @Column({ type: 'boolean', default: false, name: 'assignment_paused' })
   assignment_paused!: boolean;
+
+  /**
+   * Routing precedence. Lower value = earlier evaluation. At ingest
+   * the router walks teams in priority ASC; the first team with a
+   * rule that matches wins the ticket, else it falls through to
+   * the default team. Admin reorders via drag on the /teams list.
+   */
+  @Column({ type: 'integer', default: 1000 })
+  priority!: number;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
