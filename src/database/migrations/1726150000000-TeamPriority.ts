@@ -20,11 +20,12 @@ export class TeamPriority1726150000000 implements MigrationInterface {
     // Backfill create-order → priority so today's implicit "all rules
     // scanned, first match wins" behaviour stays continuous when the
     // routing engine flips to priority-ordered team iteration.
+    // NB: `team` has no soft-delete column (unlike `ticket`), so
+    // every row counts.
     await queryRunner.query(`
       WITH ranked AS (
         SELECT id, ROW_NUMBER() OVER (ORDER BY "createdAt" ASC) - 1 AS rn
         FROM public.team
-        WHERE "deletedAt" IS NULL
       )
       UPDATE public.team t
       SET priority = r.rn
