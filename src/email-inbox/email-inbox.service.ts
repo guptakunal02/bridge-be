@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { DataSource, In } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
+import { isMutedSender } from '../channels/channel-muted-senders';
+import { Channel } from '../channels/entities/channel.entity';
 import { S3StorageService } from '../common/storage/s3-storage.service';
 import {
   BotTrigger,
@@ -41,6 +44,7 @@ export class EmailInboxService {
     private readonly lifecycle: TicketLifecycleService,
     private readonly storage: S3StorageService,
     private readonly appSettings: AppSettingsService,
+    @InjectRepository(Channel) private readonly channels: Repository<Channel>,
   ) {}
 
   /**
@@ -60,11 +64,26 @@ export class EmailInboxService {
   async ingestInbound(
     channelId: string,
     req: IngestEmailInbox,
-  ): Promise<EmailMessage> {
+  ): Promise<EmailMessage | null> {
     const existing = await this.emails.findOne({
       where: { external_message_id: req.external_message_id },
     });
     if (existing) return existing;
+
+    // Muted-senders gate. Load the channel once — cheap PK lookup —
+    // and drop early if the sender matches. No ticket, no email row,
+    // no bot trigger. Log a structured line so audits can see what
+    // was skipped and why.
+    const channel = await this.channels.findOne({ where: { id: channelId } });
+    if (
+      channel &&
+      isMutedSender(req.sender, channel.muted_senders, channel.type)
+    ) {
+      this.logger.log(
+        `muted-sender drop: channel=${channelId} sender=${req.sender} external_message_id=${req.external_message_id}`,
+      );
+      return null;
+    }
 
     // Captured inside the txn, used AFTER commit for the drain hook.
     // Non-null only when we just created a fresh ticket AND the

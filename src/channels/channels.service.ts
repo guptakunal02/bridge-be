@@ -7,6 +7,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
+import { normalizeMutedSenders } from './channel-muted-senders';
 import { Channel } from './entities/channel.entity';
 import { ChannelStatus, ChannelType } from '../database/enums';
 import { ChannelResponse, toChannelResponse } from './dto/channel-response.dto';
@@ -105,6 +106,24 @@ export class ChannelsService {
       } satisfies ChannelStatusChangedEvent);
     }
 
+    return toChannelResponse(updated);
+  }
+
+  /**
+   * Replace the channel's mute list. Patterns are normalised
+   * (trim, lowercase, dedupe, drop empties) before persisting so
+   * the on-disk shape stays canonical no matter what the admin
+   * typed. Returns the fresh channel row for the FE to render.
+   */
+  async updateMutedSenders(
+    id: string,
+    patterns: string[],
+  ): Promise<ChannelResponse> {
+    const existing = await this.channels.findOne({ where: { id } });
+    if (!existing) throw new NotFoundException('Channel not found');
+    const clean = normalizeMutedSenders(patterns);
+    await this.channels.update({ id }, { muted_senders: clean });
+    const updated = await this.channels.findOneOrFail({ where: { id } });
     return toChannelResponse(updated);
   }
 

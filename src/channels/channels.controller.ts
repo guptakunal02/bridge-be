@@ -27,6 +27,7 @@ import { ChannelResponse } from './dto/channel-response.dto';
 import { CreateChannelDto } from './dto/create-channel.dto';
 import { SetCredentialsDto } from './dto/set-credentials.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
+import { UpdateMutedSendersDto } from './dto/update-muted-senders.dto';
 import { GoogleOAuthService } from './email/google-oauth.service';
 import {
   decodeOAuthState,
@@ -80,6 +81,20 @@ export class ChannelsController {
     @Body() dto: SetCredentialsDto,
   ): Promise<ChannelResponse> {
     return this.channels.setCredentials(id, dto);
+  }
+
+  /**
+   * Replace the channel's mute list. Any inbound message from a
+   * matching sender is silently dropped by the ingest pipeline —
+   * no ticket, no email_message row.
+   */
+  @Put(':id/muted-senders')
+  @Roles(UserRole.ADMIN)
+  updateMutedSenders(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateMutedSendersDto,
+  ): Promise<ChannelResponse> {
+    return this.channels.updateMutedSenders(id, dto.patterns);
   }
 
   /**
