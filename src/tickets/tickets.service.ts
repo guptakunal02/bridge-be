@@ -125,15 +125,19 @@ export class TicketsService {
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
     const offset = query.offset ?? 0;
 
+    // sortBy = 'latest' (default) → order by updatedAt DESC; a reply
+    //   bumps a ticket to the top. Matches Gmail / Zendesk / LimeChat.
+    // sortBy = 'created' → order by createdAt DESC; newly opened
+    //   tickets sit at the top regardless of subsequent activity.
+    // updatedAt bumps on any status/assignee/tag change AND on new
+    // message ingest via the entity update path.
+    const orderColumn =
+      query.sortBy === 'created' ? 't.createdAt' : 't.updatedAt';
     const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.assigneeUser', 'assignee')
       .leftJoinAndSelect('t.team', 'team')
-      // Latest activity first — a reply bumps a ticket to the top of
-      // the navigation rail, matching what LimeChat / Zendesk /
-      // Freshdesk do. updatedAt bumps on any status/assignee/tag
-      // change AND on new message ingest via the entity update path.
-      .orderBy('t.updatedAt', 'DESC')
+      .orderBy(orderColumn, 'DESC')
       .take(limit)
       .skip(offset);
 

@@ -22,6 +22,16 @@ import { TicketStatus } from '../../database/enums';
 export type TicketScope = 'mine' | 'unassigned' | 'all';
 
 /**
+ * How the list is ordered — the FE toggle picks between:
+ *   `latest`  — most recent activity first (uses updatedAt, which
+ *               bumps on any status/tag/assignee change AND on
+ *               new-message ingest). Default; matches Gmail /
+ *               Zendesk / LimeChat.
+ *   `created` — most recently opened ticket first (uses createdAt).
+ */
+export type TicketSortBy = 'latest' | 'created';
+
+/**
  * Query-string arrays arrive as either a single string (?statuses=OPEN)
  * or a comma-separated string (?statuses=OPEN,WAITING) or a
  * repeated key (?statuses=OPEN&statuses=WAITING). Normalise the
@@ -109,4 +119,8 @@ export class ListTicketsQuery {
   @IsString()
   @MaxLength(120)
   q?: string;
+
+  @IsOptional()
+  @IsEnum(['latest', 'created'])
+  sortBy?: TicketSortBy;
 }
