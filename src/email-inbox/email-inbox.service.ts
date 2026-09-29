@@ -405,12 +405,20 @@ export class EmailInboxService {
    * them. Only Gmail-originating sends fall through and get
    * persisted here.
    *
-   * Threading: same References + In-Reply-To walk as inbound so an
-   * agent's Gmail-side reply lands on the right ticket. If no
-   * ticket matches (fresh outbound to a customer we haven't heard
-   * from), we mint one so the conversation still has a home.
+   * Ticket-creation rule: outbound alone never opens a ticket. A
+   * thread must have started with an inbound customer message
+   * before we track its outbound side. Concretely:
+   *   * Existing thread matches (References / In-Reply-To walk) →
+   *     attach the sent message to that ticket, reopen if it was
+   *     RESOLVED within the reopen window.
+   *   * No existing thread matches → silently drop. This catches
+   *     workspace-issued system emails (invites, notifications) as
+   *     well as any proactive reach-out an agent makes to a
+   *     customer we've never heard from. If the customer replies
+   *     later, that reply becomes the first message on a fresh
+   *     ticket via the normal inbound path.
    *
-   * Actor: NULL — we can't tell which agent sent from Gmail (they
+   * Actor: NULL — we can't tell which member sent from Gmail (they
    * all share the mailbox address). Activity log says "(from Gmail)".
    */
   async ingestSent(
@@ -425,13 +433,14 @@ export class EmailInboxService {
     return this.dataSource.transaction(async (mgr) => {
       const ticketRepo = mgr.getRepository(Ticket);
       const logRepo = mgr.getRepository(TicketActivityLog);
-      const userRepo = mgr.getRepository(User);
       const messageRepo = mgr.getRepository(EmailMessage);
 
-      // Try to attach to an existing thread. Sent-from-Gmail is
-      // usually a reply, so the References/In-Reply-To chain will
-      // match. If it doesn't, this is a proactive send to a new
-      // customer — mint a ticket so the outbound is still tracked.
+      // Only stitch to an EXISTING thread. Never mint from an
+      // outbound — the rule is "tickets open on inbound, never on
+      // send." findTicketFromReferences walks References +
+      // In-Reply-To against messages we've already stored; any hit
+      // implies a prior inbound (or a Bridge-side reply threaded
+      // off one) exists for this conversation.
       let ticket = await this.findTicketFromReferences(mgr, channelId, req);
 
       if (ticket && ticket.status === TicketStatus.RESOLVED) {
@@ -447,40 +456,13 @@ export class EmailInboxService {
       }
 
       if (!ticket) {
-        // Proactive outbound. Route on the RECIPIENT since that's
-        // the customer side of this thread.
-        const primaryRecipient = req.receiver[0] ?? req.sender;
-        const routed = await this.router.routeFacts(
-          {
-            createdAt: new Date(),
-            channelType: ChannelType.EMAIL,
-            senderEmail: primaryRecipient,
-            subject: req.subject ?? null,
-            tags: [],
-          },
-          mgr,
+        // Outbound with no prior inbound thread — drop silently.
+        // Structured log so the drop is traceable if someone asks
+        // "why isn't my Gmail-side send showing up in Bridge?"
+        this.logger.log(
+          `outbound-only drop: channel=${channelId} to=${req.receiver.join(',')} external_message_id=${req.external_message_id}`,
         );
-        const targetTeamId =
-          routed?.teamId ?? (await this.teams.getDefault()).id;
-        const bot = await userRepo.findOneOrFail({
-          where: { role: UserRole.BOT },
-        });
-        ticket = await ticketRepo.save(
-          ticketRepo.create({
-            channel_id: channelId,
-            channel_type: ChannelType.EMAIL,
-            team_id: targetTeamId,
-            thread_key: req.external_message_id,
-            assignee: bot.id,
-            status: TicketStatus.OPEN,
-          }),
-        );
-        await logRepo.save({
-          ticket_id: ticket.id,
-          event: TicketActivity.CREATED,
-          actor_id: null,
-          log: `Ticket opened by outbound reply to ${primaryRecipient} (sent from Gmail)`,
-        });
+        return null;
       }
 
       const saved = await messageRepo.save(
