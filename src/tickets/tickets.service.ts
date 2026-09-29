@@ -125,21 +125,32 @@ export class TicketsService {
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
     const offset = query.offset ?? 0;
 
-    // sortBy = 'latest' (default) → order by updatedAt DESC; a reply
-    //   bumps a ticket to the top. Matches Gmail / Zendesk / LimeChat.
-    // sortBy = 'created' → order by createdAt DESC; newly opened
-    //   tickets sit at the top regardless of subsequent activity.
-    // updatedAt bumps on any status/assignee/tag change AND on new
-    // message ingest via the entity update path.
-    const orderColumn =
-      query.sortBy === 'created' ? 't.createdAt' : 't.updatedAt';
+    // sortBy = 'latest' (default) → order by the newest email_message
+    //   row on the ticket (or ticket.createdAt if it has no messages
+    //   yet). A customer reply bumps the ticket to the top; a
+    //   silent status/tag/assignee change does NOT — those bump
+    //   ticket.updatedAt but not the message stream, and this list
+    //   label is "Latest message", not "latest mutation."
+    // sortBy = 'created' → order by ticket.createdAt DESC. Newly
+    //   opened tickets sit at the top regardless of later activity.
     const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.assigneeUser', 'assignee')
       .leftJoinAndSelect('t.team', 'team')
-      .orderBy(orderColumn, 'DESC')
       .take(limit)
       .skip(offset);
+    if (query.sortBy === 'created') {
+      qb.orderBy('t.createdAt', 'DESC');
+    } else {
+      // Correlated subquery per row — MVP scale (thousands of
+      // tickets tops) makes this fine; if the row count grows a
+      // materialised `last_message_at` on ticket keeps the same
+      // sort key without the subquery per row.
+      qb.orderBy(
+        `COALESCE((SELECT MAX(m."createdAt") FROM email_message m WHERE m.ticket_id = t.id), t."createdAt")`,
+        'DESC',
+      );
+    }
 
     // Multi-value filters win over the legacy singular ones — the
     // FE always uses the plurals; the singulars stick around for
