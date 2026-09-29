@@ -122,6 +122,31 @@ export class UsersService {
   }
 
   /**
+   * Hard-delete a user row. Only allowed for PENDING invites — rows
+   * that were created via /users/invite but never claimed by a real
+   * Google sign-in (googleSub still null). Once someone has actually
+   * signed in they have downstream footprint (tickets, activity,
+   * read-state) and MUST go through deactivate instead.
+   *
+   * The admin uses this from the Team page's Revoke action to make a
+   * misdirected invite disappear entirely — vs deactivate, which
+   * would leave a "Deactivated" row cluttering the list forever.
+   */
+  async remove(id: string, actor: AuthenticatedUser): Promise<void> {
+    if (actor.id === id) {
+      throw new BadRequestException('You cannot delete your own account');
+    }
+    const target = await this.users.findOne({ where: { id } });
+    if (!target) throw new NotFoundException('User not found');
+    if (target.googleSub !== null) {
+      throw new BadRequestException(
+        'This user has already signed in — deactivate instead of deleting.',
+      );
+    }
+    await this.users.delete({ id });
+  }
+
+  /**
    * Admin adds an email to the workspace allowlist. Creates a
    * User row with `googleSub = null` and `isApproved = true` — a
    * placeholder that the Google OAuth strategy backfills with the

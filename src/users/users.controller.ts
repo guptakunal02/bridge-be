@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -93,5 +96,20 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   reactivate(@Param('id', ParseUUIDPipe) id: string): Promise<UserResponse> {
     return this.users.reactivate(id);
+  }
+
+  /**
+   * Hard-delete a pending invite. Allowed only when the target has
+   * never signed in (googleSub null). Rows with real activity get
+   * a 400 from the service layer and must be deactivated instead.
+   */
+  @Delete(':id')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    await this.users.remove(id, actor);
   }
 }

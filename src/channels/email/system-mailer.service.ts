@@ -55,7 +55,9 @@ export class SystemMailerService {
       inviteeName: input.inviteeName,
       inviterName: input.inviterName,
       role: input.role,
-      signInUrl: `${frontend}/sign-in`,
+      // The marketing landing page has the "Sign in with Google" CTA
+      // that kicks off the OAuth flow. No dedicated /sign-in route.
+      signInUrl: `${frontend}/`,
       inviteEmail: input.to,
     });
 
