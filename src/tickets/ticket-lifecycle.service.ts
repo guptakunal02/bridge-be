@@ -214,16 +214,25 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Customer just replied on this ticket. If it was paused (WAITING
-   * or IN_FOLLOWUP), flip it back to OPEN and drop the timer.
-   * Assignee stays the same — it's still their thread to close.
+   * Customer just replied on this ticket. WAITING is exactly the
+   * state that gets unblocked by a customer reply — flip it back
+   * to OPEN and drop the timer. Assignee unchanged.
+   *
+   * IN_FOLLOWUP is DELIBERATELY not woken here. Followup means "we
+   * told the customer we'd come back to them at a specific time";
+   * letting an anxious customer's follow-up mail keep yanking the
+   * ticket back into the live queue defeats the point. The followup
+   * timer stays authoritative — the ticket reopens only when the
+   * sweep + capacity hook decide it's ripe. The customer's reply is
+   * still stored on the ticket by the surrounding ingest transaction,
+   * so the member sees it in context the moment the followup expires.
    *
    * Caller passes the surrounding transaction's EntityManager so this
    * commits atomically with the inbound message row.
    *
-   * Uses a conditional UPDATE (WHERE status IN paused-set) so it's
-   * a no-op if the sweep already resolved the ticket, another
-   * concurrent reply woke it first, or an agent transitioned it
+   * Uses a conditional UPDATE (WHERE status = WAITING) so it's a
+   * no-op if the sweep already resolved the ticket, another
+   * concurrent reply woke it first, or a member transitioned it
    * manually between our read and write. That kills the duplicate-
    * log race + the sweep-vs-reply race in one move.
    */
@@ -238,21 +247,14 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, status: true },
     });
     if (!ticket) return;
-    if (
-      ticket.status !== TicketStatus.WAITING &&
-      ticket.status !== TicketStatus.IN_FOLLOWUP
-    ) {
-      return;
-    }
+    if (ticket.status !== TicketStatus.WAITING) return;
 
     const result = await ticketRepo
       .createQueryBuilder()
       .update()
-      .set({ status: TicketStatus.OPEN, resume_at: null })
+      .set({ status: TicketStatus.OPEN, resume_at: null, waiting_action: null })
       .where('id = :id', { id: ticketId })
-      .andWhere('status IN (:...paused)', {
-        paused: [TicketStatus.WAITING, TicketStatus.IN_FOLLOWUP],
-      })
+      .andWhere('status = :s', { s: TicketStatus.WAITING })
       .execute();
 
     // Only log if we were the transaction that actually flipped
@@ -264,7 +266,7 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         ticket_id: ticketId,
         event: TicketActivity.SENT_BACK_TO_QUEUE,
         actor_id: null,
-        log: `Auto-woken from ${ticket.status} — customer replied`,
+        log: 'Auto-woken from WAITING — customer replied',
       });
     }
   }
