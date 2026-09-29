@@ -4,6 +4,7 @@ import {
   TicketActivity,
   TicketStatus,
   UserRole,
+  WaitingAction,
 } from '../../database/enums';
 import { EmailMessage } from '../../email-inbox/entities/email-message.entity';
 import { Ticket } from '../entities/ticket.entity';
@@ -49,6 +50,13 @@ export interface TicketListItem {
    * to OPEN or RESOLVED.
    */
   resumeAt: string | null;
+  /**
+   * Only non-null while status === WAITING. Records what the sweep
+   * will do when the wait elapses without a customer reply:
+   * AUTO_RESOLVE (mark resolved) or REOPEN (flip back to OPEN).
+   * Chosen by the member/admin at WAITING transition time.
+   */
+  waitingAction: WaitingAction | null;
   /**
    * Non-null when this ticket was minted as a continuation of a
    * RESOLVED ticket that received a customer reply AFTER the reopen
@@ -195,6 +203,7 @@ export function toTicketListItem(
     teamName: ticket.team?.name ?? null,
     latestMessage: latest ? toLatestMessage(latest) : null,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
+    waitingAction: ticket.waiting_action,
     previousTicketId: ticket.previous_ticket_id ?? null,
     unreadCount,
     createdAt: ticket.createdAt.toISOString(),

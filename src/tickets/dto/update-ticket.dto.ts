@@ -13,7 +13,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { TicketStatus } from '../../database/enums';
+import { TicketStatus, WaitingAction } from '../../database/enums';
 
 /** Hard upper bound on ticket timers — 30 days feels comfortable
  * for followups/waiting; anything longer usually means "close it". */
@@ -37,6 +37,17 @@ export class UpdateTicketDto {
   @Min(1 / 60)
   @Max(RESUME_MAX_HOURS)
   resumeAtHours?: number;
+
+  /**
+   * Only meaningful when `status === WAITING`. Chooses what the
+   * timer sweep does when the wait elapses with no customer reply:
+   *   AUTO_RESOLVE — mark RESOLVED (historical default)
+   *   REOPEN       — flip back to OPEN so the member sees it again
+   * Required on WAITING transitions; rejected otherwise.
+   */
+  @IsOptional()
+  @IsEnum(WaitingAction)
+  waitingAction?: WaitingAction;
 
   @IsOptional()
   @IsUUID()

@@ -7,7 +7,12 @@ import {
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
-import { TicketActivity, TicketStatus, UserRole } from '../database/enums';
+import {
+  TicketActivity,
+  TicketStatus,
+  UserRole,
+  WaitingAction,
+} from '../database/enums';
 import { User } from '../users/entities/user.entity';
 import {
   PRESENCE_EVENTS,
@@ -142,28 +147,61 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
 
         if (ripeWaiting.length === 0) return 0;
 
-        const ids = ripeWaiting.map((t) => t.id);
-        await ticketRepo
-          .createQueryBuilder()
-          .update()
-          .set({
-            status: TicketStatus.RESOLVED,
-            resume_at: null,
-            resolved_at: () => 'NOW()',
-          })
-          .whereInIds(ids)
-          .execute();
+        // Split by waiting_action so we issue at most two UPDATEs per
+        // batch (one per branch) instead of one per ticket.
+        // NULL waiting_action → treat as AUTO_RESOLVE, preserving the
+        // historical behaviour for rows created before the picker.
+        const toReopen = ripeWaiting.filter(
+          (t) => t.waiting_action === WaitingAction.REOPEN,
+        );
+        const toResolve = ripeWaiting.filter(
+          (t) => t.waiting_action !== WaitingAction.REOPEN,
+        );
+
+        if (toResolve.length > 0) {
+          await ticketRepo
+            .createQueryBuilder()
+            .update()
+            .set({
+              status: TicketStatus.RESOLVED,
+              resume_at: null,
+              waiting_action: null,
+              resolved_at: () => 'NOW()',
+            })
+            .whereInIds(toResolve.map((t) => t.id))
+            .execute();
+        }
+        if (toReopen.length > 0) {
+          await ticketRepo
+            .createQueryBuilder()
+            .update()
+            .set({
+              status: TicketStatus.OPEN,
+              resume_at: null,
+              waiting_action: null,
+            })
+            .whereInIds(toReopen.map((t) => t.id))
+            .execute();
+        }
 
         // Activity log entries — one per ticket, actor NULL means
-        // "system." Ops UI already renders these gracefully.
-        await logRepo.save(
-          ripeWaiting.map((t) => ({
+        // "system." REOPEN branch uses REOPENED to match customer-
+        // triggered reopens semantically; the free-text log field
+        // disambiguates that this was the timer firing.
+        await logRepo.save([
+          ...toResolve.map((t) => ({
             ticket_id: t.id,
             event: TicketActivity.MARKED_RESOLVED,
             actor_id: null,
             log: 'Auto-resolved — waiting period elapsed with no customer reply',
           })),
-        );
+          ...toReopen.map((t) => ({
+            ticket_id: t.id,
+            event: TicketActivity.REOPENED,
+            actor_id: null,
+            log: 'Auto-reopened — waiting period elapsed with no customer reply',
+          })),
+        ]);
         return ripeWaiting.length;
       });
       if (swept === 0) break;

@@ -111,3 +111,15 @@ export enum TicketActivity {
   SENT_BACK_TO_QUEUE = 'SENT_BACK_TO_QUEUE',
   AGENT_REPLIED = 'AGENT_REPLIED',
 }
+
+/**
+ * Chosen at WAITING transition time — controls what the timer sweep
+ * does when the wait elapses with no customer reply. NULL on rows
+ * that are not currently WAITING (cleared on transition away).
+ * Legacy WAITING rows without a value are treated as AUTO_RESOLVE
+ * at read time so the sweep behaviour is unchanged for them.
+ */
+export enum WaitingAction {
+  AUTO_RESOLVE = 'AUTO_RESOLVE',
+  REOPEN = 'REOPEN',
+}

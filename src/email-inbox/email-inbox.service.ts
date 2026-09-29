@@ -255,7 +255,7 @@ export class EmailInboxService {
               ticket_id: ticket.id,
               event: TicketActivity.ASSIGNED_TO_BOT,
               actor_id: null,
-              log: 'Parked on the bot — no live agents were Online',
+              log: 'Parked on the bot — no live members were Online',
             });
           }
         }

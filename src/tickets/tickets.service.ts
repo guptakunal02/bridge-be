@@ -660,6 +660,25 @@ export class TicketsService {
           patch.resume_at = null;
         }
 
+        // waiting_action bookkeeping: required on WAITING transitions
+        // (so the sweep knows what to do), forbidden elsewhere, cleared
+        // on any transition away from WAITING.
+        if (dto.status === TicketStatus.WAITING) {
+          if (dto.waitingAction === undefined) {
+            throw new BadRequestException(
+              'waitingAction is required when moving a ticket to WAITING',
+            );
+          }
+          patch.waiting_action = dto.waitingAction;
+        } else {
+          if (dto.waitingAction !== undefined) {
+            throw new BadRequestException(
+              'waitingAction only applies to WAITING transitions',
+            );
+          }
+          patch.waiting_action = null;
+        }
+
         logs.push({
           event,
           log: `Status ${ticket.status} → ${dto.status} by ${actingUser.email ?? actingUser.id}`,
@@ -670,6 +689,10 @@ export class TicketsService {
         // transition. Rather than silently accept, be loud.
         throw new BadRequestException(
           `resumeAtHours only applies to WAITING or IN_FOLLOWUP transitions`,
+        );
+      } else if (dto.waitingAction !== undefined) {
+        throw new BadRequestException(
+          'waitingAction only applies to WAITING transitions',
         );
       }
 

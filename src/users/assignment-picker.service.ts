@@ -103,12 +103,12 @@ export class AssignmentPickerService {
     const bot = botRows[0];
     if (!bot) {
       throw new Error(
-        'BOT user is not seeded and no live agents are available',
+        'BOT user is not seeded and no live members are available',
       );
     }
     if (bot.paused === true) {
       throw new Error(
-        'No live agents and BOT is paused on this team — un-pause BOT or set an agent Online.',
+        'No live members and BOT is paused on this team — un-pause BOT or set a member Online.',
       );
     }
     return bot.id;

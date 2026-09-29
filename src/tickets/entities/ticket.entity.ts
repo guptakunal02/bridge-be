@@ -11,7 +11,7 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { ChannelType, TicketStatus } from '../../database/enums';
+import { ChannelType, TicketStatus, WaitingAction } from '../../database/enums';
 import { Channel } from '../../channels/entities/channel.entity';
 import { Team } from '../../teams/entities/team.entity';
 import { User } from '../../users/entities/user.entity';
@@ -76,6 +76,21 @@ export class Ticket {
    */
   @Column({ type: 'timestamptz', nullable: true, name: 'resume_at' })
   resume_at!: Date | null;
+
+  /**
+   * What the timer sweep does when this ticket's WAITING period
+   * ends with no customer reply. Set at the WAITING transition,
+   * cleared on any transition away. NULL is treated as AUTO_RESOLVE
+   * for backward compat with rows created before the picker landed.
+   */
+  @Column({
+    type: 'enum',
+    enum: WaitingAction,
+    enumName: 'ticket_waiting_action_enum',
+    nullable: true,
+    name: 'waiting_action',
+  })
+  waiting_action!: WaitingAction | null;
 
   /**
    * Timestamp of the transition into RESOLVED. Set on the write
