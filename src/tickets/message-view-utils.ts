@@ -44,7 +44,14 @@ function stripPrefixes(subject: string): string {
 
 export function normaliseSubject(raw: string | null): string {
   if (!raw) return '';
-  return stripPrefixes(raw).toLowerCase();
+  // Collapse runs of whitespace to a single space before comparing.
+  // Gmail rewrites "double  space" in subject lines to a single
+  // space on reply; iPhone Mail preserves the original. Without
+  // this, a customer who typed extra spaces in their subject (or
+  // pasted a multi-line paragraph into the Subject field — see
+  // ticket #556) trips a false "different subject" verdict and
+  // we redundantly render the full subject on every reply card.
+  return stripPrefixes(raw).replace(/\s+/g, ' ').toLowerCase();
 }
 
 /**

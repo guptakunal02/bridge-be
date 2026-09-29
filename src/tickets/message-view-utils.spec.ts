@@ -21,6 +21,15 @@ describe('normaliseSubject', () => {
     expect(normaliseSubject('')).toBe('');
     expect(normaliseSubject('   ')).toBe('');
   });
+  it('collapses whitespace runs (Gmail rewrites double spaces on reply)', () => {
+    // iPhone Mail preserves "same day.  Original" (2 spaces); Gmail
+    // collapses to "same day. Original" (1 space) on reply. Both
+    // must normalise to the same string so the reply's subject
+    // doesn't get flagged as a mid-thread rename.
+    expect(normaliseSubject('Hi, same day.  Original order')).toBe(
+      normaliseSubject('Re: Hi, same day. Original order'),
+    );
+  });
 });
 
 describe('shouldShowSubjectHeader', () => {
@@ -48,6 +57,16 @@ describe('shouldShowSubjectHeader', () => {
   });
   it('shows when the ticket subject itself is missing (data anomaly)', () => {
     expect(shouldShowSubjectHeader('Order refund', null)).toBe(true);
+  });
+  it('hides even when Gmail collapsed double-spaces on reply (ticket #556)', () => {
+    // Real-world capture: customer put their entire complaint into
+    // the Subject field from iPhone Mail (which preserved the
+    // double-space typo). Gmail collapsed it on the reply Re: line.
+    const ticketSubject =
+      'Hi, I purchased a Kurta Set, exchange request on the same day.  Original Order Number: 218780. Please look into this and let me know. Thank you!';
+    const replySubject =
+      'Re: Hi, I purchased a Kurta Set, exchange request on the same day. Original Order Number: 218780. Please look into this and let me know. Thank you!';
+    expect(shouldShowSubjectHeader(replySubject, ticketSubject)).toBe(false);
   });
 });
 
