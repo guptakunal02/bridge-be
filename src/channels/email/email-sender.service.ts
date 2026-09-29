@@ -63,6 +63,20 @@ export interface OutboundEmailResult {
 }
 
 /**
+ * Non-threaded, non-attachment outbound. Used for system-issued
+ * one-offs (invite emails, notifications) that aren't a reply to an
+ * existing customer thread — same SMTP path as sendReply, just
+ * without the threading and attachment plumbing.
+ */
+export interface OutboundSystemEmail {
+  channel: Channel;
+  to: string[];
+  subject: string;
+  body: string;
+  bodyHtml?: string | null;
+}
+
+/**
  * Owns nodemailer transport creation + the actual SMTP send. Kept
  * separate from EmailCredentialsService so the credential envelope
  * layer stays free of protocol concerns.
@@ -83,47 +97,7 @@ export class EmailSenderService {
   ) {}
 
   async sendReply(input: OutboundEmailReply): Promise<OutboundEmailResult> {
-    const envelope = input.channel.credentials_encrypted;
-    if (!envelope) {
-      throw new BadRequestException(
-        'This channel has no OAuth credentials yet. Connect Gmail from Inboxes → Connect first.',
-      );
-    }
-
-    const creds = this.credentials.open(envelope);
-    const accessToken = await this.tokens.get(
-      input.channel.id,
-      creds.refreshToken,
-    );
-    const transport: Transporter<SMTPTransport.SentMessageInfo> =
-      nodemailer.createTransport({
-        host: GMAIL_SMTP_HOST,
-        port: GMAIL_SMTP_PORT,
-        secure: true,
-        auth: {
-          type: 'OAuth2',
-          user: creds.address,
-          clientId: this.config.get('EMAIL_INBOX_GOOGLE_CLIENT_ID', {
-            infer: true,
-          }),
-          clientSecret: this.config.get('EMAIL_INBOX_GOOGLE_CLIENT_SECRET', {
-            infer: true,
-          }),
-          refreshToken: creds.refreshToken,
-          // Pass the already-cached access token so nodemailer skips
-          // its own refresh dance on the hot path. If Gmail rejects
-          // it (e.g. token was revoked between refresh and send),
-          // nodemailer will still try to mint a new one from the
-          // clientId + clientSecret + refreshToken triple.
-          accessToken,
-        },
-      });
-
-    // From honours the channel's configured display name so replies
-    // land as "Support <support@…>" rather than the raw address.
-    const from = input.channel.displayName
-      ? `"${input.channel.displayName}" <${creds.address}>`
-      : creds.address;
+    const { transport, from } = await this.openTransport(input.channel);
 
     // Threading headers. nodemailer accepts inReplyTo/references as
     // top-level fields — they get serialised into the RFC headers.
@@ -163,6 +137,76 @@ export class EmailSenderService {
     }
 
     return { externalMessageId: info.messageId };
+  }
+
+  /**
+   * Send a system-issued one-off — invite emails, notifications,
+   * anything that isn't tied to a customer thread. Same SMTP path as
+   * sendReply; skips threading + attachment plumbing.
+   */
+  async sendSystem(input: OutboundSystemEmail): Promise<OutboundEmailResult> {
+    const { transport, from } = await this.openTransport(input.channel);
+    const info: SMTPTransport.SentMessageInfo = await transport.sendMail({
+      from,
+      to: input.to,
+      subject: input.subject,
+      text: input.body,
+      html: input.bodyHtml ?? undefined,
+    });
+    transport.close();
+    if (!info.messageId) {
+      this.logger.error(
+        `SMTP system send returned no Message-ID (channel=${input.channel.id})`,
+      );
+      throw new Error('SMTP transport did not return a Message-ID');
+    }
+    return { externalMessageId: info.messageId };
+  }
+
+  /**
+   * Decrypt credentials, mint (or reuse) an access token, and build
+   * a fresh nodemailer transport wired for XOAUTH2. Returns the
+   * transport plus the RFC-formatted `From:` string so callers don't
+   * repeat the display-name plumbing.
+   */
+  private async openTransport(channel: Channel): Promise<{
+    transport: Transporter<SMTPTransport.SentMessageInfo>;
+    from: string;
+  }> {
+    const envelope = channel.credentials_encrypted;
+    if (!envelope) {
+      throw new BadRequestException(
+        'This channel has no OAuth credentials yet. Connect Gmail from Inboxes → Connect first.',
+      );
+    }
+    const creds = this.credentials.open(envelope);
+    const accessToken = await this.tokens.get(channel.id, creds.refreshToken);
+    const transport = nodemailer.createTransport({
+      host: GMAIL_SMTP_HOST,
+      port: GMAIL_SMTP_PORT,
+      secure: true,
+      auth: {
+        type: 'OAuth2',
+        user: creds.address,
+        clientId: this.config.get('EMAIL_INBOX_GOOGLE_CLIENT_ID', {
+          infer: true,
+        }),
+        clientSecret: this.config.get('EMAIL_INBOX_GOOGLE_CLIENT_SECRET', {
+          infer: true,
+        }),
+        refreshToken: creds.refreshToken,
+        // Pass the already-cached access token so nodemailer skips
+        // its own refresh dance on the hot path. If Gmail rejects
+        // it (e.g. token was revoked between refresh and send),
+        // nodemailer will still try to mint a new one from the
+        // clientId + clientSecret + refreshToken triple.
+        accessToken,
+      },
+    });
+    const from = channel.displayName
+      ? `"${channel.displayName}" <${creds.address}>`
+      : creds.address;
+    return { transport, from };
   }
 
   /**

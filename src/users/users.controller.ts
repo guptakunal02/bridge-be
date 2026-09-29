@@ -14,7 +14,11 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { SetStatusDto } from './dto/set-status.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UserResponse, toUserResponse } from './dto/user-response.dto';
+import {
+  InviteUserResponse,
+  UserResponse,
+  toUserResponse,
+} from './dto/user-response.dto';
 import { PresenceService } from './presence.service';
 import { UsersService } from './users.service';
 
@@ -46,13 +50,17 @@ export class UsersController {
   }
 
   /**
-   * Add a person to the workspace allowlist. Their next Google
-   * sign-in matches by email and lands them straight in the inbox.
+   * Add a person to the workspace allowlist and send them an
+   * invite email from the workspace's connected inbox. Their next
+   * Google sign-in matches by email and lands them in the inbox.
    */
   @Post('invite')
   @Roles(UserRole.ADMIN)
-  invite(@Body() dto: InviteUserDto): Promise<UserResponse> {
-    return this.users.invite(dto);
+  invite(
+    @Body() dto: InviteUserDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<InviteUserResponse> {
+    return this.users.invite(dto, actor);
   }
 
   @Get(':id')

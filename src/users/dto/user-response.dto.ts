@@ -23,6 +23,17 @@ export interface UserResponse {
   updatedAt: string;
 }
 
+/**
+ * Extends UserResponse with delivery status for the invite email.
+ * `emailSent = false` means the row was created (invitee will still
+ * be able to sign in) but the outbound mail failed or no eligible
+ * sender inbox exists — the FE should surface a "share the link"
+ * fallback message.
+ */
+export interface InviteUserResponse extends UserResponse {
+  emailSent: boolean;
+}
+
 export function toUserResponse(user: User): UserResponse {
   return {
     id: user.id,

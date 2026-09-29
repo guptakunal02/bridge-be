@@ -9,6 +9,7 @@ import { AccessTokenCache } from './email/access-token-cache';
 import { EmailCredentialsService } from './email/email-credentials.service';
 import { EmailSenderService } from './email/email-sender.service';
 import { GoogleOAuthService } from './email/google-oauth.service';
+import { SystemMailerService } from './email/system-mailer.service';
 
 @Module({
   imports: [
@@ -26,17 +27,21 @@ import { GoogleOAuthService } from './email/google-oauth.service';
     EmailSenderService,
     GoogleOAuthService,
     AccessTokenCache,
+    SystemMailerService,
   ],
   // EmailSenderService exported so TicketsService can reach it for
   // outbound replies without pulling in credential internals. The
   // OAuth pieces are exported so the email-inbox IMAP worker can
-  // reach them for XOAUTH2 auth on IMAP.
+  // reach them for XOAUTH2 auth on IMAP. SystemMailerService is
+  // exported so UsersModule can send invite emails without pulling
+  // in the whole channels internals.
   exports: [
     ChannelsService,
     EmailCredentialsService,
     EmailSenderService,
     GoogleOAuthService,
     AccessTokenCache,
+    SystemMailerService,
   ],
 })
 export class ChannelsModule {}

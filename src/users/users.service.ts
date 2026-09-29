@@ -8,16 +8,22 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { SystemMailerService } from '../channels/email/system-mailer.service';
 import { User } from './entities/user.entity';
 import { UserRole } from '../database/enums';
 import type { InviteUserDto } from './dto/invite-user.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';
-import { UserResponse, toUserResponse } from './dto/user-response.dto';
+import {
+  InviteUserResponse,
+  UserResponse,
+  toUserResponse,
+} from './dto/user-response.dto';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
+    private readonly mailer: SystemMailerService,
   ) {}
 
   async list(): Promise<UserResponse[]> {
@@ -121,12 +127,21 @@ export class UsersService {
    * placeholder that the Google OAuth strategy backfills with the
    * real Google identity on the invitee's first sign-in.
    *
+   * After the row is persisted, we fire off an invite email via
+   * the workspace's own connected inbox (SystemMailer). Delivery is
+   * best-effort: the row is the source of truth, and the
+   * `emailSent` flag on the response tells the FE whether to show
+   * "email sent" vs a "share the link" fallback.
+   *
    * Race note: two admins inviting the same email at the same time
    * will collide on the unique email index and Postgres returns 23505.
    * We surface it as a 409 so the FE can display "already invited"
    * rather than a generic 500.
    */
-  async invite(dto: InviteUserDto): Promise<UserResponse> {
+  async invite(
+    dto: InviteUserDto,
+    actor: AuthenticatedUser,
+  ): Promise<InviteUserResponse> {
     const email = dto.email.trim().toLowerCase();
     const existing = await this.users.findOne({ where: { email } });
     if (existing) {
@@ -152,9 +167,9 @@ export class UsersService {
       isApproved: true,
       googleSub: null,
     });
+    let saved: User;
     try {
-      const saved = await this.users.save(row);
-      return toUserResponse(saved);
+      saved = await this.users.save(row);
     } catch (err) {
       // Concurrent-invite race — surface as 409 instead of a generic 500.
       if (
@@ -166,5 +181,15 @@ export class UsersService {
       }
       throw err;
     }
+
+    const inviter = await this.users.findOne({ where: { id: actor.id } });
+    const emailSent = await this.mailer.sendInvite({
+      to: email,
+      inviteeName: provisionalName,
+      inviterName: inviter?.name ?? 'Your admin',
+      role: dto.role,
+    });
+
+    return { ...toUserResponse(saved), emailSent };
   }
 }
