@@ -147,6 +147,18 @@ export class TeamsService {
         'The default team cannot be deleted — every ticket needs somewhere to land.',
       );
     }
+    // Every ticket has a NOT NULL team_id, and the ticket.team_id FK
+    // is deliberately NO ACTION at the DB level — we handle the
+    // reassignment explicitly here so the semantics are auditable.
+    // Any live ticket on this team gets moved to the default team
+    // BEFORE the delete so the FK never trips.
+    const defaultTeam = await this.getDefault();
+    if (defaultTeam.id !== id) {
+      await this.tickets.update({ team_id: id }, { team_id: defaultTeam.id });
+    }
+    // routing_rule.team_id is ON DELETE SET NULL (see migration
+    // TeamDeleteFks1726140000000), so associated rules are preserved
+    // — they null out and become inert until an admin re-assigns.
     await this.teams.delete({ id });
   }
 
