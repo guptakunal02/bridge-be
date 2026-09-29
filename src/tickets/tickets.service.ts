@@ -133,12 +133,19 @@ export class TicketsService {
     //   label is "Latest message", not "latest mutation."
     // sortBy = 'created' → order by ticket.createdAt DESC. Newly
     //   opened tickets sit at the top regardless of later activity.
+    // NB: raw .limit()/.offset() instead of .take()/.skip(). take()
+    // wraps the whole query in a subquery to keep pagination correct
+    // in the face of one-to-many joins — but that outer wrapper
+    // strips the `t` alias, so our raw ORDER BY expression below
+    // can't resolve `t."createdAt"`. All our joins here are
+    // many-to-one (assignee + team, one row each per ticket), so
+    // limit/offset is safe.
     const qb = this.tickets
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.assigneeUser', 'assignee')
       .leftJoinAndSelect('t.team', 'team')
-      .take(limit)
-      .skip(offset);
+      .limit(limit)
+      .offset(offset);
     if (query.sortBy === 'created') {
       qb.orderBy('t.createdAt', 'DESC');
     } else {
