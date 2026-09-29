@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -9,6 +10,7 @@ import { IsNull, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { User } from './entities/user.entity';
 import { UserRole } from '../database/enums';
+import type { InviteUserDto } from './dto/invite-user.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponse, toUserResponse } from './dto/user-response.dto';
 
@@ -111,5 +113,58 @@ export class UsersService {
     await this.users.update({ id }, { deactivatedAt: null });
     const updated = await this.users.findOneOrFail({ where: { id } });
     return toUserResponse(updated);
+  }
+
+  /**
+   * Admin adds an email to the workspace allowlist. Creates a
+   * User row with `googleSub = null` and `isApproved = true` — a
+   * placeholder that the Google OAuth strategy backfills with the
+   * real Google identity on the invitee's first sign-in.
+   *
+   * Race note: two admins inviting the same email at the same time
+   * will collide on the unique email index and Postgres returns 23505.
+   * We surface it as a 409 so the FE can display "already invited"
+   * rather than a generic 500.
+   */
+  async invite(dto: InviteUserDto): Promise<UserResponse> {
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.users.findOne({ where: { email } });
+    if (existing) {
+      if (existing.deactivatedAt !== null) {
+        throw new ConflictException(
+          `${email} is a deactivated user — reactivate instead of re-inviting.`,
+        );
+      }
+      throw new ConflictException(
+        existing.googleSub === null
+          ? `${email} has already been invited but hasn't signed in yet.`
+          : `${email} is already a member.`,
+      );
+    }
+    // Provisional name = email local-part; overwritten on first sign-in
+    // by the Google-provided displayName. Avoids showing an empty name
+    // in the Team list while the invite is pending.
+    const provisionalName = email.split('@')[0] ?? email;
+    const row = this.users.create({
+      email,
+      name: provisionalName,
+      role: dto.role,
+      isApproved: true,
+      googleSub: null,
+    });
+    try {
+      const saved = await this.users.save(row);
+      return toUserResponse(saved);
+    } catch (err) {
+      // Concurrent-invite race — surface as 409 instead of a generic 500.
+      if (
+        err instanceof Error &&
+        'code' in err &&
+        (err as { code?: string }).code === '23505'
+      ) {
+        throw new ConflictException(`${email} has already been invited.`);
+      }
+      throw err;
+    }
   }
 }

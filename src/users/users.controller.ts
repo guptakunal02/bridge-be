@@ -11,6 +11,7 @@ import { UserRole } from '../database/enums';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { InviteUserDto } from './dto/invite-user.dto';
 import { SetStatusDto } from './dto/set-status.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponse, toUserResponse } from './dto/user-response.dto';
@@ -42,6 +43,16 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   list(): Promise<UserResponse[]> {
     return this.users.list();
+  }
+
+  /**
+   * Add a person to the workspace allowlist. Their next Google
+   * sign-in matches by email and lands them straight in the inbox.
+   */
+  @Post('invite')
+  @Roles(UserRole.ADMIN)
+  invite(@Body() dto: InviteUserDto): Promise<UserResponse> {
+    return this.users.invite(dto);
   }
 
   @Get(':id')

@@ -17,9 +17,17 @@ import { User } from '../../users/entities/user.entity';
 // GOOGLE_OAUTH_CALLBACK_URL with a `code` param, Passport exchanges it
 // server-to-server for tokens and the verified user profile.
 //
-// First-time sign-ins auto-create a User row with `isApproved = false`
-// (a Bridge admin flips the flag before the account gets past
-// /access-restricted). Deactivated users fail auth entirely.
+// User resolution — three cases in this order:
+//   1. Row with matching googleSub → return it (repeat sign-in).
+//   2. Row with matching email + null googleSub → admin-invited
+//      placeholder; backfill googleSub/name/photoUrl and return
+//      approved.
+//   3. No row → create with isApproved=false; user lands on
+//      /access-restricted (self-service signup path — kept for
+//      backward compatibility; no admin approval endpoint exists
+//      yet, so effectively a dead-end until one is added).
+//
+// Deactivated users fail auth entirely.
 @Injectable()
 export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
   constructor(
@@ -47,34 +55,58 @@ export class GoogleOAuthStrategy extends PassportStrategy(Strategy, 'google') {
       return;
     }
 
-    // Upsert by googleSub — only refresh mutable fields Google is
-    // authoritative for. Email stays pinned to whatever we captured
-    // first (initial insert only) to avoid colliding with the unique
-    // index on subsequent logins. `upsert` in TypeORM only re-sets the
-    // columns listed in the payload on conflict, so passing only
-    // name/photoUrl in the update path is not possible with a single
-    // call — we pass the full payload; email/googleSub don't change
-    // between calls for the same account, so the merge is a no-op.
-    await this.users.upsert(
-      {
-        googleSub: claim.googleSub,
-        email: claim.email,
-        name: claim.name,
-        photoUrl: claim.photoUrl,
-      },
-      ['googleSub'],
-    );
-
-    const user = await this.users.findOne({
-      where: { googleSub: claim.googleSub },
-    });
-
+    const user = await this.resolveUser(claim);
     if (!user || user.deactivatedAt !== null) {
       done(null, false);
       return;
     }
-
     done(null, user as unknown as Express.User);
+  }
+
+  private async resolveUser(claim: GoogleClaim): Promise<User | null> {
+    // 1. Existing account — refresh mutable Google-authoritative fields.
+    const bySub = await this.users.findOne({
+      where: { googleSub: claim.googleSub },
+    });
+    if (bySub) {
+      await this.users.update(
+        { id: bySub.id },
+        { name: claim.name, photoUrl: claim.photoUrl },
+      );
+      return this.users.findOne({ where: { id: bySub.id } });
+    }
+
+    // 2. Admin-invited placeholder — same email, no googleSub yet.
+    //    Bind the two identities together on the existing row.
+    const byEmail = await this.users.findOne({
+      where: { email: claim.email },
+    });
+    if (byEmail && byEmail.googleSub === null) {
+      await this.users.update(
+        { id: byEmail.id },
+        {
+          googleSub: claim.googleSub,
+          name: claim.name,
+          photoUrl: claim.photoUrl,
+        },
+      );
+      return this.users.findOne({ where: { id: byEmail.id } });
+    }
+
+    // 3. No pre-invite and no prior sign-in with a *different* email
+    //    already sharing this googleSub — create as unapproved.
+    //    (byEmail with a non-null googleSub would be a different
+    //    Google account on the same email — treated as a conflict:
+    //    fall through to null return, which surfaces as auth failure.)
+    if (byEmail) return null;
+
+    const created = this.users.create({
+      googleSub: claim.googleSub,
+      email: claim.email,
+      name: claim.name,
+      photoUrl: claim.photoUrl,
+    });
+    return this.users.save(created);
   }
 }
 
