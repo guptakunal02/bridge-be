@@ -16,6 +16,8 @@ import {
 import { RoutingService } from '../rules/routing.service';
 import { AppSettingsService } from '../settings/app-settings.service';
 import { buildTicketContext } from '../rules/ticket-context';
+import { Team } from '../teams/entities/team.entity';
+import { TeamMember } from '../teams/entities/team-member.entity';
 import { TeamsService } from '../teams/teams.service';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
@@ -185,13 +187,17 @@ export class EmailInboxService {
         }
 
         if (!ticket) {
+          const now = new Date();
           const routed = await this.router.routeFacts(
             {
-              createdAt: new Date(),
+              createdAt: now,
               channelType: ChannelType.EMAIL,
               senderEmail: req.sender,
               subject: req.subject ?? null,
               tags: [],
+              // First message = both the ticket's birth time and the
+              // latest customer message time.
+              latestCustomerMessageAt: now,
             },
             mgr,
           );
@@ -285,6 +291,16 @@ export class EmailInboxService {
           await this.persistAttachments(saved.id, req.attachments, mgr);
         }
 
+        // Reroute-on-message. Only fires when this inbound landed on
+        // an EXISTING ticket — a fresh mint already picked its team
+        // via routeFacts above. Feeds fresh facts (including
+        // latest_customer_message.hour_ist = this message's ts) into
+        // the priority walk and, if the winning team has changed,
+        // moves the ticket + logs the transfer + handles assignment.
+        if (!isNew) {
+          await this.rerouteOnCustomerMessage(mgr, ticket);
+        }
+
         return { message: saved, ticket, wasNewTicket: isNew };
       },
     );
@@ -318,6 +334,7 @@ export class EmailInboxService {
             senderEmail: req.sender,
             subject: req.subject ?? null,
             tags: ticket.tags ?? [],
+            latestCustomerMessageAt: ticket.createdAt,
           }),
         });
         botTookOver = session !== null;
@@ -556,6 +573,98 @@ export class EmailInboxService {
       });
     }
     return affected > 0;
+  }
+
+  /**
+   * Reroute-on-message. Given an inbound message that just landed on
+   * an existing ticket, re-evaluate the routing rules with fresh
+   * facts (in particular `latest_customer_message.hour_ist` = this
+   * message's timestamp). If the winning team differs from the
+   * ticket's current team, move the ticket and log a
+   * SENT_BACK_TO_QUEUE activity row (actor null = system).
+   *
+   * Assignment interaction:
+   *   * If the current assignee is a member of the new team, keep
+   *     them assigned — no disruption to whoever's actively working
+   *     the thread.
+   *   * If they're not, park the ticket back on BOT. The capacity
+   *     drain will hand it to someone on the new team next time
+   *     they free a slot. Skipped when the current assignee is
+   *     already BOT (nothing to unassign).
+   *
+   * Silently no-ops when the routing decision is unchanged so a
+   * ticket that stays in-hours doesn't churn on every reply.
+   */
+  private async rerouteOnCustomerMessage(
+    mgr: import('typeorm').EntityManager,
+    ticket: Ticket,
+  ): Promise<void> {
+    // Load the ticket's first inbound so we route on the same
+    // "first message" facts the initial ingest would have used, but
+    // with the fresh latest-message timestamp.
+    const firstInbound = await mgr.getRepository(EmailMessage).findOne({
+      where: { ticket_id: ticket.id, type: MessageDirection.RECEIVED },
+      order: { createdAt: 'ASC' },
+    });
+    const facts: import('../rules/ticket-context').IngestFacts = {
+      createdAt: ticket.createdAt,
+      channelType: ticket.channel_type,
+      senderEmail: firstInbound?.sender ?? null,
+      subject: firstInbound?.subject ?? null,
+      tags: ticket.tags ?? [],
+      latestCustomerMessageAt: new Date(),
+    };
+    const routed = await this.router.routeFacts(facts, mgr);
+    const nextTeamId =
+      routed?.teamId ?? (await this.teams.getDefault()).id;
+    if (nextTeamId === ticket.team_id) return;
+
+    // Log first so the sequence reads "customer message → reroute"
+    // in the timeline, then apply the mutations.
+    const [fromTeam, toTeam] = await Promise.all([
+      mgr.getRepository(Team).findOne({ where: { id: ticket.team_id } }),
+      mgr.getRepository(Team).findOne({ where: { id: nextTeamId } }),
+    ]);
+    const matchedTail = routed?.matchedRule
+      ? ` — matched rule "${routed.matchedRule.name}"`
+      : ' — default fallback';
+    await mgr.getRepository(TicketActivityLog).save({
+      ticket_id: ticket.id,
+      event: TicketActivity.SENT_BACK_TO_QUEUE,
+      actor_id: null,
+      log: `Auto-rerouted ${fromTeam?.name ?? ticket.team_id} → ${
+        toTeam?.name ?? nextTeamId
+      }${matchedTail}`,
+    });
+
+    // Decide whether the current assignee follows or the ticket
+    // gets parked on BOT for the new team's picker to backfill.
+    let nextAssignee = ticket.assignee;
+    const currentUser = await mgr.getRepository(User).findOne({
+      where: { id: ticket.assignee },
+    });
+    if (currentUser && currentUser.role !== UserRole.BOT) {
+      const stillMember = await mgr.getRepository(TeamMember).findOne({
+        where: { team_id: nextTeamId, user_id: ticket.assignee },
+      });
+      if (!stillMember) {
+        const bot = await mgr
+          .getRepository(User)
+          .findOneOrFail({ where: { role: UserRole.BOT } });
+        nextAssignee = bot.id;
+      }
+    }
+
+    await mgr
+      .getRepository(Ticket)
+      .update(
+        { id: ticket.id },
+        { team_id: nextTeamId, assignee: nextAssignee },
+      );
+    // Keep the in-memory reference in sync so downstream logic in
+    // the same txn sees the fresh team_id / assignee.
+    ticket.team_id = nextTeamId;
+    ticket.assignee = nextAssignee;
   }
 
   /**

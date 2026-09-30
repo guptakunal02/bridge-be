@@ -825,6 +825,9 @@ export class TicketsService {
               senderEmail: firstMsg?.sender ?? null,
               subject: firstMsg?.subject ?? null,
               tags: detail.tags,
+              // Latest received message on the ticket, if any; else
+              // the ticket's own createdAt as a sensible fallback.
+              latestCustomerMessageAt: lastReceivedMsgAt(detail),
             }),
             added_tags: addedTags,
           },
@@ -1159,6 +1162,24 @@ export class TicketsService {
  * Map (prevRole, nextRole) → the activity event that best describes
  * the assignee change.
  */
+/**
+ * Latest RECEIVED (inbound) message timestamp on the ticket detail,
+ * falling back to the ticket's own createdAt when there are no
+ * inbound messages yet (system-created shells, or a Bridge-side
+ * outbound-first fluke). Used to feed routing rules that key off
+ * `latest_customer_message.hour_ist`.
+ */
+function lastReceivedMsgAt(detail: {
+  createdAt: string;
+  messages: Array<{ direction: import('../database/enums').MessageDirection; createdAt: string }>;
+}): Date {
+  for (let i = detail.messages.length - 1; i >= 0; i--) {
+    const m = detail.messages[i]!;
+    if (m.direction === 'RECEIVED') return new Date(m.createdAt);
+  }
+  return new Date(detail.createdAt);
+}
+
 function pickAssigneeEvent(
   prevRole: UserRole | null,
   nextRole: UserRole,

@@ -66,6 +66,16 @@ export const ATTRIBUTES: readonly AttributeDefinition[] = [
     max: 23,
   },
   {
+    key: 'latest_customer_message.hour_ist',
+    label: 'Latest customer message (hour, IST)',
+    description:
+      'Hour of the day (0-23) of the customer’s most recent inbound message, in IST. Routing rules are re-evaluated on every customer message, so a ticket can move between teams as time-of-day shifts (e.g. from General to OOH after 18:00).',
+    type: 'integer',
+    operators: INT_OPS,
+    min: 0,
+    max: 23,
+  },
+  {
     key: 'created_at.dow',
     label: 'Created on (day of week)',
     description:

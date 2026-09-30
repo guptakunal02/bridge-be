@@ -5,6 +5,12 @@ import type { TicketContext } from './rule-evaluator.service';
  * Raw inputs the rule engine sees. Not a ticket entity — this is the
  * pre-persist snapshot the ingest path assembles right before it
  * decides which team to route to.
+ *
+ * `latestCustomerMessageAt` powers the reroute-on-message feature:
+ * at initial ingest it equals `createdAt`; on subsequent RECEIVED
+ * messages the ingest path re-runs routing with this field set to
+ * the new message's timestamp, so a ticket that started in-hours
+ * can move to OOH the moment a customer's follow-up lands past 6pm.
  */
 export interface IngestFacts {
   createdAt: Date;
@@ -12,6 +18,7 @@ export interface IngestFacts {
   senderEmail: string | null;
   subject: string | null;
   tags: string[];
+  latestCustomerMessageAt: Date;
 }
 
 /**
@@ -21,10 +28,12 @@ export interface IngestFacts {
  * 0-6) matches what the FE picker sends.
  */
 export function buildTicketContext(facts: IngestFacts): TicketContext {
-  const ist = getIstParts(facts.createdAt);
+  const createdIst = getIstParts(facts.createdAt);
+  const latestIst = getIstParts(facts.latestCustomerMessageAt);
   return {
-    'created_at.hour_ist': ist.hour,
-    'created_at.dow': ist.dow,
+    'created_at.hour_ist': createdIst.hour,
+    'created_at.dow': createdIst.dow,
+    'latest_customer_message.hour_ist': latestIst.hour,
     channel_type: facts.channelType,
     sender_email: facts.senderEmail ?? '',
     subject: facts.subject ?? '',
