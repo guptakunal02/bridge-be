@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -35,6 +36,7 @@ import {
   TicketListItem,
 } from './dto/ticket-response.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
+import { RequireTagsToResolveGuard } from './guards/require-tags-to-resolve.guard';
 import { TicketsService } from './tickets.service';
 
 @Controller('tickets')
@@ -140,6 +142,7 @@ export class TicketsController {
   }
 
   @Patch(':id')
+  @UseGuards(RequireTagsToResolveGuard)
   update(
     @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: UpdateTicketDto,
