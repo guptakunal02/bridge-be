@@ -1301,14 +1301,38 @@ function applyMessageSearch(
 ): void {
   const q = raw?.trim();
   if (!q) return;
-  qb.andWhere(
-    `EXISTS (
-       SELECT 1 FROM public.email_message m
-        WHERE m.ticket_id = t.id
-          AND m."deletedAt" IS NULL
-          AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
-     )`,
-    { bridgeQ: `%${q}%` },
-  );
+
+  // If the query looks like a ticket id ("831" or "#831") we OR-in
+  // an exact-id predicate. Substring text search stays in place so
+  // typing "831" on a ticket whose subject mentions "Order #831"
+  // still surfaces that ticket too. Non-numeric input skips the id
+  // branch entirely.
+  const idCandidate = q.replace(/^#/, '');
+  const isNumericId = /^\d+$/.test(idCandidate);
+
+  if (isNumericId) {
+    qb.andWhere(
+      `(
+         t.id::text = :bridgeIdExact
+         OR EXISTS (
+           SELECT 1 FROM public.email_message m
+            WHERE m.ticket_id = t.id
+              AND m."deletedAt" IS NULL
+              AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
+         )
+       )`,
+      { bridgeIdExact: idCandidate, bridgeQ: `%${q}%` },
+    );
+  } else {
+    qb.andWhere(
+      `EXISTS (
+         SELECT 1 FROM public.email_message m
+          WHERE m.ticket_id = t.id
+            AND m."deletedAt" IS NULL
+            AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
+       )`,
+      { bridgeQ: `%${q}%` },
+    );
+  }
 }
 
