@@ -567,6 +567,18 @@ export class TicketsService {
       throw new BadRequestException('Nothing to update');
     }
 
+    // Belt-and-braces: RequireTagsToResolveGuard on the HTTP route
+    // is the primary enforcement point (route-level discoverability
+    // for admins reading the controller). Re-invoking the checker
+    // here means any internal caller that bypasses the guard —
+    // future webhook handler, background job, script — still hits
+    // the policy. Same TagRequirementService instance is used at
+    // both layers, so they can't disagree.
+    await this.tagRequirement.assertSatisfied(
+      id,
+      dto as unknown as Record<string, unknown>,
+    );
+
     // Capture added tags across the txn boundary — we fire a
     // BotTrigger.TICKET_TAG_ADDED after commit so the runtime never
     // runs inside our write transaction.
@@ -587,12 +599,12 @@ export class TicketsService {
       });
       if (!ticket) throw new NotFoundException('Ticket not found');
 
-      // "Require tag to resolve" enforcement lives in the guard on
-      // PATCH /tickets/:id and is re-invoked by bulkUpdate() below
-      // per-ticket. update() itself is unaware of the policy — any
-      // internal caller that bypasses the guard is trusted (lifecycle
-      // sweep, backfill, etc. — all system-triggered, none reach
-      // this path with a user-driven close).
+      // "Require tag to resolve" was already asserted above the
+      // transaction via TagRequirementService, and again on the
+      // HTTP layer by RequireTagsToResolveGuard for PATCH /tickets/:id
+      // requests. bulkUpdate also invokes the checker per ticket.
+      // Nothing to do inside the txn — the check ran before we
+      // opened it.
 
       const patch: Partial<Ticket> = {};
       const logs: Array<{ event: TicketActivity; log: string }> = [];
@@ -877,16 +889,12 @@ export class TicketsService {
           failed.push({ id, reason: 'No fields to update' });
           continue;
         }
-        // Mirror the RequireTagsToResolveGuard applied to the
-        // single-ticket PATCH route. Doing it per-ticket lets a
-        // mixed batch (some tagged, some not) succeed for the
-        // tagged ones and land the tagless ones in `failed[]`.
-        // Guard would have to reject the entire request, which
-        // is bad UX for bulk operations.
-        await this.tagRequirement.assertSatisfied(
-          id,
-          perTicketPatch as unknown as Record<string, unknown>,
-        );
+        // update() now asserts the tag-requirement policy itself
+        // (see the belt-and-braces call at the top of that method),
+        // so the surrounding try/catch here is what routes a
+        // tagless-ticket failure into `failed[]` instead of tanking
+        // the whole batch. Mixed batches — some tagged, some not —
+        // succeed for the tagged ones cleanly.
         await this.update(id, perTicketPatch, actingUser);
         succeeded.push(id);
       } catch (err) {
