@@ -719,7 +719,13 @@ export class TicketsService {
 
         logs.push({
           event,
-          log: `Status ${ticket.status} → ${dto.status} by ${actingUser.email ?? actingUser.id}`,
+          log: buildTransitionLog(
+            ticket.status,
+            dto.status,
+            actingUser.email ?? actingUser.id,
+            dto.resumeAtHours,
+            dto.waitingAction,
+          ),
         });
       } else if (dto.resumeAtHours !== undefined) {
         // Sent without an accompanying status change — nothing to
@@ -1173,6 +1179,50 @@ function pickStatusEvent(
   // next === OPEN
   if (prev === TicketStatus.RESOLVED) return TicketActivity.REOPENED;
   return TicketActivity.SENT_BACK_TO_QUEUE;
+}
+
+/**
+ * Build the free-text `log` field on the status-transition activity
+ * row. For WAITING / IN_FOLLOWUP transitions we splice in the
+ * chosen duration (and, for WAITING, whether the sweep will auto-
+ * resolve or reopen). That way an admin scrolling the activity
+ * timeline reads "for 2h" without cross-referencing the ticket's
+ * resume_at field, which cleared the moment the timer fired.
+ */
+function buildTransitionLog(
+  prev: TicketStatus,
+  next: TicketStatus,
+  actor: string,
+  resumeAtHours: number | undefined,
+  waitingAction: import('../database/enums').WaitingAction | undefined,
+): string {
+  const base = `Status ${prev} → ${next}`;
+  if (
+    (next === TicketStatus.WAITING || next === TicketStatus.IN_FOLLOWUP) &&
+    resumeAtHours !== undefined
+  ) {
+    const duration = formatDurationHours(resumeAtHours);
+    const tail =
+      next === TicketStatus.WAITING && waitingAction
+        ? ` (then ${waitingAction === 'REOPEN' ? 'reopens' : 'auto-resolves'})`
+        : '';
+    return `${base} for ${duration}${tail} by ${actor}`;
+  }
+  return `${base} by ${actor}`;
+}
+
+/**
+ * Human-readable duration for a decimal hours input. `2` → "2h",
+ * `1.5` → "1h 30m", `0.25` → "15m". Rounds to the nearest minute
+ * because the picker offers minute-level granularity.
+ */
+function formatDurationHours(hours: number): string {
+  const totalMinutes = Math.max(1, Math.round(hours * 60));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
 }
 
 /**
