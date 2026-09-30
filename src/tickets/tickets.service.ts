@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -1102,6 +1103,15 @@ export class TicketsService {
     scope: TicketScope,
     actingUser: AuthenticatedUser,
   ): Promise<void> {
+    // Role check: `all` and `unassigned` are admin-only surfaces.
+    // A member sending scope=all could otherwise pull the whole
+    // workspace's tickets — the FE never sends it for members, but
+    // this is the actual enforcement point (never trust the client).
+    if (scope !== 'mine' && actingUser.role !== UserRole.ADMIN) {
+      throw new ForbiddenException(
+        `scope=${scope} is admin-only. Use scope=mine.`,
+      );
+    }
     if (scope === 'mine') {
       qb.andWhere('t.assignee = :meId', { meId: actingUser.id });
       return;
