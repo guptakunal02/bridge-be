@@ -16,7 +16,6 @@ import { CustomerOrdersService } from './customer-orders.service';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
 import { TicketReadState } from './entities/ticket-read-state.entity';
-import { RequireTagsToResolveGuard } from './guards/require-tags-to-resolve.guard';
 import { TagRequirementService } from './tag-requirement.service';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
 import { TicketsController } from './tickets.controller';
@@ -58,11 +57,11 @@ import { TicketsService } from './tickets.service';
     TicketLifecycleService,
     CustomerOrdersService,
     // Extracted policy: "require a tag before closing a ticket."
-    // TagRequirementService is the pure checker; the guard is the
-    // route-level surface, and bulkUpdate calls the checker directly
-    // so per-ticket failures survive.
+    // Pure checker — TicketsService.update invokes it at the top of
+    // every mutation. Kept as its own service (not inlined) so the
+    // policy has its own spec surface + can be re-invoked from any
+    // future path that also closes tickets.
     TagRequirementService,
-    RequireTagsToResolveGuard,
   ],
   // Lifecycle service exported so EmailInboxService can wake paused
   // tickets on customer reply inside its ingest transaction.

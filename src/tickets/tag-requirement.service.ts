@@ -9,19 +9,18 @@ import { AppSettingsService } from '../settings/app-settings.service';
 import { Ticket } from './entities/ticket.entity';
 
 /**
- * "Require a tag before closing a ticket" policy. Extracted from
- * TicketsService so both the request-scoped guard AND the bulk-
- * update loop can share the same rules without duplicating them.
+ * "Require a tag before closing a ticket" policy. Extracted so the
+ * rule lives in one place, has its own spec surface, and can be
+ * re-invoked from any future path that closes tickets.
  *
- * Called by:
- *   * RequireTagsToResolveGuard — enforcement on PATCH /tickets/:id
- *   * TicketsService.bulkUpdate — per-ticket check inside the loop
- *     so tagless entries in a mixed batch surface as failed[] rather
- *     than tanking the whole request
+ * Called by TicketsService.update() at the top of every mutation.
+ * bulkUpdate reaches update() per-ticket, so it inherits the check
+ * for free — a tagless entry in a mixed batch surfaces in failed[]
+ * rather than tanking the whole request.
  *
- * Both callsites pass the raw request payload; the checker coerces
- * defensively because guards run BEFORE ValidationPipe (see NestJS
- * request lifecycle) and the bulk shape isn't strongly typed either.
+ * `body` is typed loosely (Record<string, unknown>) so the checker
+ * doesn't couple to the caller's DTO shape — same reason we don't
+ * inline it into update(): the rule is transport-agnostic.
  */
 @Injectable()
 export class TagRequirementService {

@@ -567,13 +567,12 @@ export class TicketsService {
       throw new BadRequestException('Nothing to update');
     }
 
-    // Belt-and-braces: RequireTagsToResolveGuard on the HTTP route
-    // is the primary enforcement point (route-level discoverability
-    // for admins reading the controller). Re-invoking the checker
-    // here means any internal caller that bypasses the guard —
-    // future webhook handler, background job, script — still hits
-    // the policy. Same TagRequirementService instance is used at
-    // both layers, so they can't disagree.
+    // "Require tag before closing" workspace policy. Enforced here
+    // at the service layer so every caller — HTTP PATCH, bulk update,
+    // any future webhook / job / script — hits the same rule.
+    // Setting-off path is a fast short-circuit; the checker only
+    // reads the ticket when the setting is on AND the target is a
+    // closing transition.
     await this.tagRequirement.assertSatisfied(
       id,
       dto as unknown as Record<string, unknown>,
@@ -599,12 +598,8 @@ export class TicketsService {
       });
       if (!ticket) throw new NotFoundException('Ticket not found');
 
-      // "Require tag to resolve" was already asserted above the
-      // transaction via TagRequirementService, and again on the
-      // HTTP layer by RequireTagsToResolveGuard for PATCH /tickets/:id
-      // requests. bulkUpdate also invokes the checker per ticket.
-      // Nothing to do inside the txn — the check ran before we
-      // opened it.
+      // Tag-requirement policy already asserted above the transaction
+      // via TagRequirementService — nothing to check inside the txn.
 
       const patch: Partial<Ticket> = {};
       const logs: Array<{ event: TicketActivity; log: string }> = [];
@@ -889,12 +884,11 @@ export class TicketsService {
           failed.push({ id, reason: 'No fields to update' });
           continue;
         }
-        // update() now asserts the tag-requirement policy itself
-        // (see the belt-and-braces call at the top of that method),
-        // so the surrounding try/catch here is what routes a
-        // tagless-ticket failure into `failed[]` instead of tanking
-        // the whole batch. Mixed batches — some tagged, some not —
-        // succeed for the tagged ones cleanly.
+        // Tag-requirement policy fires inside update() — the
+        // surrounding try/catch routes any BadRequestException
+        // (tagless close under the setting) into `failed[]` instead
+        // of tanking the batch. Mixed batches surface per-ticket
+        // rejections cleanly.
         await this.update(id, perTicketPatch, actingUser);
         succeeded.push(id);
       } catch (err) {

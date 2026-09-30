@@ -8,7 +8,6 @@ import {
   Post,
   Query,
   UploadedFile,
-  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -36,7 +35,6 @@ import {
   TicketListItem,
 } from './dto/ticket-response.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
-import { RequireTagsToResolveGuard } from './guards/require-tags-to-resolve.guard';
 import { TicketsService } from './tickets.service';
 
 @Controller('tickets')
@@ -141,8 +139,13 @@ export class TicketsController {
     return this.tickets.listRelatedForCustomer(id);
   }
 
+  /**
+   * Ticket transitions + tag/team/assignee mutation. Enforces the
+   * "require a tag before closing" workspace policy inside
+   * TicketsService.update (see TagRequirementService) — service-level
+   * so any internal caller of update() gets the same guarantee.
+   */
   @Patch(':id')
-  @UseGuards(RequireTagsToResolveGuard)
   update(
     @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: UpdateTicketDto,
