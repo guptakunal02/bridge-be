@@ -1,9 +1,8 @@
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 /**
- * Wire shape for GET/PATCH /settings/general. Only one knob today —
- * more will follow. Everything optional on PATCH so the FE can
- * ship a partial diff.
+ * Wire shape for GET/PATCH /settings/general. Everything optional on
+ * PATCH so the FE can ship a partial diff.
  */
 export interface GeneralSettingsResponse {
   /**
@@ -14,6 +13,12 @@ export interface GeneralSettingsResponse {
    * threads that reuse a References chain.
    */
   resolvedReopenWindowHours: number;
+  /**
+   * When true, RESOLVED transitions and WAITING-with-AUTO_RESOLVE
+   * transitions require the ticket to carry at least one tag. Keeps
+   * every closed ticket categorised for reporting.
+   */
+  requireTagToResolve: boolean;
 }
 
 export class UpdateGeneralSettingsDto {
@@ -22,4 +27,8 @@ export class UpdateGeneralSettingsDto {
   @Min(0)
   @Max(24 * 30)
   resolvedReopenWindowHours?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  requireTagToResolve?: boolean;
 }

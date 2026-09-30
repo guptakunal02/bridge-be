@@ -19,9 +19,11 @@ export class SettingsController {
 
   @Get('general')
   async getGeneral(): Promise<GeneralSettingsResponse> {
-    const resolvedReopenWindowHours =
-      await this.settings.getResolvedReopenWindowHours();
-    return { resolvedReopenWindowHours };
+    const [resolvedReopenWindowHours, requireTagToResolve] = await Promise.all([
+      this.settings.getResolvedReopenWindowHours(),
+      this.settings.getRequireTagToResolve(),
+    ]);
+    return { resolvedReopenWindowHours, requireTagToResolve };
   }
 
   @Patch('general')
@@ -33,6 +35,9 @@ export class SettingsController {
       await this.settings.setResolvedReopenWindowHours(
         dto.resolvedReopenWindowHours,
       );
+    }
+    if (dto.requireTagToResolve !== undefined) {
+      await this.settings.setRequireTagToResolve(dto.requireTagToResolve);
     }
     return this.getGeneral();
   }

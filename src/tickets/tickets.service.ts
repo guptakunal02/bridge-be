@@ -11,6 +11,7 @@ import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailSenderService } from '../channels/email/email-sender.service';
 import { S3StorageService } from '../common/storage/s3-storage.service';
+import { AppSettingsService } from '../settings/app-settings.service';
 import { Team } from '../teams/entities/team.entity';
 import {
   BotTrigger,
@@ -19,6 +20,7 @@ import {
   TicketActivity,
   TicketStatus,
   UserRole,
+  WaitingAction,
 } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
@@ -75,6 +77,7 @@ export class TicketsService {
     private readonly sender: EmailSenderService,
     private readonly tagsService: TagsService,
     private readonly storage: S3StorageService,
+    private readonly appSettings: AppSettingsService,
   ) {}
 
   /**
@@ -584,6 +587,36 @@ export class TicketsService {
         relations: { assigneeUser: true },
       });
       if (!ticket) throw new NotFoundException('Ticket not found');
+
+      // "Require tag to resolve" gate. Only fires on genuine
+      // transitions INTO a closing state:
+      //   * → RESOLVED  (manual close)
+      //   * → WAITING + waitingAction === AUTO_RESOLVE (deferred close —
+      //     the sweep will resolve it later with no member touch, so
+      //     the tag has to be there NOW)
+      // We check the effective tags for this write: if the same PATCH
+      // is adding tags, they count. If the ticket already has tags,
+      // we let the transition through even without a new tag.
+      const isTransition =
+        dto.status !== undefined && dto.status !== ticket.status;
+      const isClosingTransition =
+        isTransition &&
+        (dto.status === TicketStatus.RESOLVED ||
+          (dto.status === TicketStatus.WAITING &&
+            dto.waitingAction === WaitingAction.AUTO_RESOLVE));
+      if (isClosingTransition) {
+        const effectiveTags = dto.tags ?? ticket.tags ?? [];
+        if (effectiveTags.length === 0) {
+          const required = await this.appSettings.getRequireTagToResolve();
+          if (required) {
+            throw new BadRequestException(
+              dto.status === TicketStatus.WAITING
+                ? 'Apply at least one tag before moving this ticket to auto-resolving Waiting.'
+                : 'Apply at least one tag before resolving this ticket.',
+            );
+          }
+        }
+      }
 
       const patch: Partial<Ticket> = {};
       const logs: Array<{ event: TicketActivity; log: string }> = [];

@@ -7,6 +7,7 @@ import { Channel } from '../channels/entities/channel.entity';
 import { StorageModule } from '../common/storage/storage.module';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
+import { SettingsModule } from '../settings/settings.module';
 import { TagsModule } from '../tags/tags.module';
 import { Team } from '../teams/entities/team.entity';
 import { User } from '../users/entities/user.entity';
@@ -40,6 +41,9 @@ import { TicketsService } from './tickets.service';
     // TagsService — validates that every tag on a PATCH exists in
     // the admin-managed catalogue.
     TagsModule,
+    // AppSettingsService — reads the "require tag to resolve" toggle
+    // when gating RESOLVED / WAITING-with-AUTO_RESOLVE transitions.
+    SettingsModule,
     // OpsReadService — read-only doorway to the surma_common_ops DB
     // for the customer-orders sidebar.
     OpsModule,

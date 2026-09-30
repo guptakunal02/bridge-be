@@ -6,12 +6,14 @@ import { AppSetting } from './entities/app-setting.entity';
 /** Canonical setting keys — using constants keeps typos out. */
 export const SETTING_KEYS = {
   RESOLVED_REOPEN_WINDOW_HOURS: 'resolved_reopen_window_hours',
+  REQUIRE_TAG_TO_RESOLVE: 'require_tag_to_resolve',
 } as const;
 
 /** Fallback values used when the row is absent (e.g. brand-new
  * install before the migration seed lands, or a manual delete). */
 const DEFAULTS = {
   [SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS]: 2,
+  [SETTING_KEYS.REQUIRE_TAG_TO_RESOLVE]: false,
 } as const;
 
 /**
@@ -40,6 +42,30 @@ export class AppSettingsService {
     await this.setRaw(
       SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS,
       String(hours),
+    );
+  }
+
+  /**
+   * Admin toggle: when true, a ticket cannot transition into a
+   * "closed" state without at least one tag on it. Enforced at
+   * two transitions in tickets.service:
+   *   * status → RESOLVED (manual close)
+   *   * status → WAITING with waitingAction = AUTO_RESOLVE
+   *     (deferred close — the tag can't be added later by the
+   *     sweep, so we require it up front)
+   * Not enforced on other transitions since the ticket comes back
+   * to the member and they can still tag before closing.
+   */
+  async getRequireTagToResolve(): Promise<boolean> {
+    const raw = await this.getRaw(SETTING_KEYS.REQUIRE_TAG_TO_RESOLVE);
+    if (raw === null) return DEFAULTS[SETTING_KEYS.REQUIRE_TAG_TO_RESOLVE];
+    return raw === 'true';
+  }
+
+  async setRequireTagToResolve(v: boolean): Promise<void> {
+    await this.setRaw(
+      SETTING_KEYS.REQUIRE_TAG_TO_RESOLVE,
+      v ? 'true' : 'false',
     );
   }
 
