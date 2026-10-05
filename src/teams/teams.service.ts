@@ -205,6 +205,12 @@ export class TeamsService {
   }
 
   async removeMember(id: string, userId: string): Promise<TeamDetail> {
+    // BOT is the system's last-resort assignee. Removing it from a
+    // team would reintroduce the bug where the picker throws when
+    // no human is available, causing the IMAP ingest to drop mail.
+    // Enforce the invariant at the API layer; the FE also hides
+    // the Remove button for BOT rows.
+    await this.assertNotBot(userId, 'remove the BOT user from a team');
     const result = await this.members.delete({ team_id: id, user_id: userId });
     if (!result.affected) {
       throw new NotFoundException('That user is not in this team');
@@ -223,6 +229,13 @@ export class TeamsService {
     ) {
       throw new BadRequestException('Nothing to update');
     }
+    // Pausing BOT per-team is explicitly disallowed — same invariant
+    // the backfill migration enforces at the data layer. Unpausing
+    // (pausedInTeam = false) is allowed as a no-op so the FE can
+    // idempotently reset state without special-casing BOT.
+    if (dto.pausedInTeam === true) {
+      await this.assertNotBot(userId, 'pause the BOT user on a team');
+    }
     const patch: Partial<TeamMember> = {};
     if (dto.pausedInTeam !== undefined) patch.paused_in_team = dto.pausedInTeam;
     if (dto.maxConcurrentTickets !== undefined) {
@@ -236,6 +249,18 @@ export class TeamsService {
       throw new NotFoundException('That user is not in this team');
     }
     return this.get(id);
+  }
+
+  private async assertNotBot(userId: string, action: string): Promise<void> {
+    const user = await this.users.findOne({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+    if (user?.role === UserRole.BOT) {
+      throw new BadRequestException(
+        `Cannot ${action} — BOT is a required last-resort assignee on every team.`,
+      );
+    }
   }
 
   async getDefault(): Promise<Team> {
