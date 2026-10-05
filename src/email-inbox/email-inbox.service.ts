@@ -201,8 +201,8 @@ export class EmailInboxService {
             },
             mgr,
           );
-          const targetTeamId =
-            routed?.teamId ?? (await this.teams.getDefault()).id;
+          const defaultTeamId = (await this.teams.getDefault()).id;
+          let targetTeamId = routed?.teamId ?? defaultTeamId;
 
           // Two-step assignment for FIFO fairness:
           //
@@ -218,10 +218,31 @@ export class EmailInboxService {
           //
           // Result: customers that waited longest get served first,
           // without changing the picker's round-robin semantics.
-          pickedAssigneeId = await this.picker.pickNextAssigneeForTeam(
-            targetTeamId,
-            mgr,
-          );
+          //
+          // Fallback: if the routed team has no eligible assignee
+          // (no Online members AND BOT paused for that team), the
+          // picker throws. Rather than losing the message, fall back
+          // to the default team which is guaranteed to have BOT
+          // available. Log the hop so an admin can fix the
+          // mis-configured team's assignment settings.
+          try {
+            pickedAssigneeId = await this.picker.pickNextAssigneeForTeam(
+              targetTeamId,
+              mgr,
+            );
+          } catch (pickErr) {
+            if (targetTeamId === defaultTeamId) throw pickErr;
+            this.logger.warn(
+              `routing picked team=${targetTeamId} has no eligible assignee (${
+                (pickErr as Error).message
+              }); falling back to default team=${defaultTeamId}`,
+            );
+            targetTeamId = defaultTeamId;
+            pickedAssigneeId = await this.picker.pickNextAssigneeForTeam(
+              targetTeamId,
+              mgr,
+            );
+          }
           const bot = await userRepo.findOneOrFail({
             where: { role: UserRole.BOT },
           });
