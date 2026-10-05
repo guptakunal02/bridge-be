@@ -51,9 +51,10 @@ export class IngestEmailInbox {
   @IsString()
   subject?: string;
 
-  /** Plain-text body of the email. */
+  /** Plain-text body of the email. Legitimately empty when the
+   *  sender sends subject-only or attachments-only — don't require
+   *  non-empty, just non-null. */
   @IsString()
-  @IsNotEmpty()
   content!: string;
 
   /** Original HTML body (if the sender included one). */

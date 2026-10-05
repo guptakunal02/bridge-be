@@ -251,12 +251,14 @@ export class ImapConnection {
           if (uid) this.lastUid = Math.max(this.lastUid, uid);
           continue;
         }
+        let parsedForLog: ParsedMail | null = null;
         try {
           const parsed = await simpleParser(msg.source);
+          parsedForLog = parsed;
           const dto = toIngestDto(parsed);
           if (!dto) {
             this.logger.warn(
-              `[${label}] drain(${trigger}) uid=${uid} unusable envelope — skipping`,
+              `[${label}] drain(${trigger}) uid=${uid} unusable envelope — skipping (messageId=${parsed.messageId ?? 'n/a'})`,
             );
             if (uid) this.lastUid = Math.max(this.lastUid, uid);
             continue;
@@ -269,10 +271,23 @@ export class ImapConnection {
           ingested++;
           if (uid) this.lastUid = Math.max(this.lastUid, uid);
         } catch (parseOrIngestErr) {
+          // Fail-forward: skip the message, log with enough detail
+          // for a manual re-ingest from Gmail, and keep the cursor
+          // moving. Previous "don't advance lastUid" turned any
+          // single ingest crash into a stalled queue — one bad
+          // message blocked every subsequent email until pm2
+          // restart. Prefer losing visibility on one message over
+          // a silent inbox outage.
+          const msgId = parsedForLog?.messageId ?? 'unparsed';
+          const sender =
+            parsedForLog?.from && 'text' in parsedForLog.from
+              ? parsedForLog.from.text
+              : 'unknown';
+          const subject = parsedForLog?.subject ?? '(no subject)';
           this.logger.error(
-            `[${label}] drain(${trigger}) uid=${uid} ingest failed: ${(parseOrIngestErr as Error).message}`,
+            `[${label}] drain(${trigger}) uid=${uid} ingest failed — SKIPPING. messageId=${msgId} from=${sender} subject="${subject}" error=${(parseOrIngestErr as Error).message}`,
           );
-          // Do NOT advance lastUid — retry on next tick.
+          if (uid) this.lastUid = Math.max(this.lastUid, uid);
         }
       }
     } catch (fetchErr) {
