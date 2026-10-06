@@ -11,6 +11,7 @@ import {
   TicketActivity,
   TicketStatus,
   UserRole,
+  UserStatus,
   WaitingAction,
 } from '../database/enums';
 import { User } from '../users/entities/user.entity';
@@ -372,10 +373,17 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
     const logRepo = mgr.getRepository(TicketActivityLog);
 
     // Only ONLINE + non-BOT users pull from the queue. If the agent
-    // stepped away between transitions, let the next round-robin pick
-    // handle it instead.
+    // stepped away (break / meeting / signed out) between the slot
+    // freeing and this hook firing, leave the ticket parked on BOT
+    // — they'll get it when they come back (drainOnCameOnline
+    // handles the catch-up), or someone else online will take it.
+    // Historical bug (ticket #544/#545, 2026-10-06): the comment
+    // claimed this gate existed but the code only checked role.
+    // Offline Divya got auto-assigned a backfill when a resolved
+    // ticket freed her slot.
     const user = await userRepo.findOne({ where: { id: userId } });
     if (!user || user.role === UserRole.BOT) return false;
+    if (user.status !== UserStatus.ONLINE) return false;
 
     const bot = await userRepo.findOne({ where: { role: UserRole.BOT } });
     if (!bot) return false;
