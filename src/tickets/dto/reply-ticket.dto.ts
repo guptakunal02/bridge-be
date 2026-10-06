@@ -69,6 +69,20 @@ export class ReplyTicketDto {
   @MaxLength(200_000)
   bodyHtml?: string;
 
+  /**
+   * Primary recipient(s). When present, the service uses this as
+   * the SMTP To header verbatim. When absent, falls back to the
+   * ticket's first inbound sender (the customer who opened it).
+   * Capped at 20 like CC/BCC — SMTP servers commonly reject much
+   * more than that and fat-finger blasts are a real risk.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ArrayUnique()
+  @IsEmail({}, { each: true })
+  to?: string[];
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)

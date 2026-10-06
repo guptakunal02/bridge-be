@@ -957,6 +957,7 @@ export class TicketsService {
       order: { createdAt: 'ASC' },
     });
     const inbound = thread.filter((m) => m.type === MessageDirection.RECEIVED);
+    const firstInbound = inbound[0] ?? null;
     const lastInbound = inbound[inbound.length - 1] ?? null;
     if (!lastInbound) {
       // A ticket with no inbound message is a data-integrity oddity
@@ -967,14 +968,30 @@ export class TicketsService {
       );
     }
 
-    const to = lastInbound.sender
-      ? [lastInbound.sender]
-      : (() => {
-          throw new BadRequestException(
-            'The last inbound message has no sender address on record.',
-          );
-        })();
+    // Recipient resolution — the FE's composer owns the authoritative
+    // "To:" since the agent can edit it. When provided, use it
+    // verbatim. When absent (older FE builds, scripted callers),
+    // fall back to the FIRST inbound sender — the customer who
+    // opened the ticket. Historically this fell back to the LAST
+    // inbound sender, which misrouted replies when a parallel-
+    // support vendor (LimeChat) also sent into the same thread —
+    // their address became "last inbound" and we'd email the vendor
+    // instead of the customer. Not again.
+    const to =
+      dto.to && dto.to.length > 0
+        ? dto.to
+        : firstInbound?.sender
+          ? [firstInbound.sender]
+          : (() => {
+              throw new BadRequestException(
+                "No recipient — the ticket has no customer address on record and no 'to' was provided.",
+              );
+            })();
 
+    // Thread headers still key off the LAST inbound — that's what
+    // the recipient's MUA will match In-Reply-To against to keep
+    // the thread stitched. Separate concern from who we're sending
+    // to.
     const subject = replySubject(lastInbound.subject);
 
     // References chain = every previous message's external id in
