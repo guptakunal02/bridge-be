@@ -15,6 +15,7 @@ import { UsersModule } from '../users/users.module';
 import { CustomerOrdersService } from './customer-orders.service';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { TicketNote } from './entities/ticket-note.entity';
 import { TicketReadState } from './entities/ticket-read-state.entity';
 import { TagRequirementService } from './tag-requirement.service';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
@@ -27,6 +28,7 @@ import { TicketsService } from './tickets.service';
       Ticket,
       TicketActivityLog,
       TicketReadState,
+      TicketNote,
       EmailMessage,
       EmailMessageAttachment,
       User,

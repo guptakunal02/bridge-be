@@ -29,6 +29,7 @@ import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
 import { PresenceService } from '../users/presence.service';
 import type { ListTicketsQuery, TicketScope } from './dto/list-tickets.dto';
+import type { CreateTicketNoteDto } from './dto/create-ticket-note.dto';
 import type { ReplyTicketDto } from './dto/reply-ticket.dto';
 import {
   TicketDetail,
@@ -39,6 +40,7 @@ import {
 import type { UpdateTicketDto } from './dto/update-ticket.dto';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
+import { TicketNote } from './entities/ticket-note.entity';
 import { TicketReadState } from './entities/ticket-read-state.entity';
 import { normaliseAddressList, replySubject } from './reply-utils';
 import { TicketLifecycleService } from './ticket-lifecycle.service';
@@ -68,6 +70,8 @@ export class TicketsService {
     private readonly emails: Repository<EmailMessage>,
     @InjectRepository(TicketReadState)
     private readonly readStates: Repository<TicketReadState>,
+    @InjectRepository(TicketNote)
+    private readonly notes: Repository<TicketNote>,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly dataSource: DataSource,
@@ -500,7 +504,7 @@ export class TicketsService {
     // defensively so a pathological loop can't stall the request.
     const chainIds = await this.collectAncestorChain(id, 20);
 
-    const [messages, activity] = await Promise.all([
+    const [messages, activity, notes] = await Promise.all([
       // Ancestor messages come along too — the FE groups by ticketId
       // and inserts a divider at each boundary. Ordering by createdAt
       // works because ancestor tickets resolved before the current
@@ -518,9 +522,51 @@ export class TicketsService {
         where: { ticket_id: id },
         order: { createdAt: 'ASC' },
       }),
+      // Notes stay scoped to THIS ticket (not the ancestor chain) —
+      // a note is commentary about THIS case; dragging ancestors'
+      // notes forward would clutter the thread.
+      this.notes.find({
+        where: { ticket_id: id },
+        relations: { author: true },
+        order: { createdAt: 'ASC' },
+      }),
     ]);
 
-    return toTicketDetail(ticket, messages, activity);
+    return toTicketDetail(ticket, messages, activity, notes);
+  }
+
+  /**
+   * Attach a private note to a ticket. Visible to every member and
+   * admin via the ticket detail; the customer never sees it. Any
+   * authenticated user can post (same access model as viewing the
+   * ticket) — authors are stamped so the thread shows who said
+   * what. Returns the fresh detail so the FE can re-render without
+   * a second fetch.
+   */
+  async addNote(
+    id: string,
+    dto: CreateTicketNoteDto,
+    actingUser: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    const ticket = await this.tickets.findOne({
+      where: { id },
+      select: { id: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const body = dto.body.trim();
+    if (!body) {
+      throw new BadRequestException('A note needs some content.');
+    }
+
+    await this.notes.save(
+      this.notes.create({
+        ticket_id: id,
+        author_id: actingUser.id,
+        body,
+      }),
+    );
+    return this.get(id);
   }
 
   /**

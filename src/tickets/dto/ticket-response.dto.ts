@@ -9,6 +9,7 @@ import {
 import { EmailMessage } from '../../email-inbox/entities/email-message.entity';
 import { Ticket } from '../entities/ticket.entity';
 import { TicketActivityLog } from '../entities/ticket-activity-log.entity';
+import { TicketNote } from '../entities/ticket-note.entity';
 import {
   parseQuotedThread,
   shouldShowSubjectHeader,
@@ -157,9 +158,23 @@ export interface TicketActivityResponse {
   createdAt: string;
 }
 
+/**
+ * Internal note attached to a ticket. Visible to every member and
+ * admin — never sent to the customer. Author is nullable because
+ * the user FK is ON DELETE SET NULL (deactivated users shouldn't
+ * erase their notes). FE renders a placeholder in that case.
+ */
+export interface TicketNoteResponse {
+  id: string;
+  author: TicketAssigneeSummary | null;
+  body: string;
+  createdAt: string;
+}
+
 export interface TicketDetail extends TicketListItem {
   messages: EmailMessageResponse[];
   activity: TicketActivityResponse[];
+  notes: TicketNoteResponse[];
 }
 
 /**
@@ -215,6 +230,7 @@ export function toTicketDetail(
   ticket: Ticket,
   messages: EmailMessage[],
   activity: TicketActivityLog[],
+  notes: TicketNote[],
 ): TicketDetail {
   const latest = messages.length
     ? (messages[messages.length - 1] ?? null)
@@ -234,6 +250,18 @@ export function toTicketDetail(
     ...toTicketListItem(ticket, latest),
     messages: mappedMessages,
     activity: activity.map(toActivity),
+    notes: notes.map(toNote),
+  };
+}
+
+function toNote(n: TicketNote): TicketNoteResponse {
+  return {
+    id: n.id,
+    author: n.author
+      ? { id: n.author.id, name: n.author.name, role: n.author.role }
+      : null,
+    body: n.body,
+    createdAt: n.createdAt.toISOString(),
   };
 }
 

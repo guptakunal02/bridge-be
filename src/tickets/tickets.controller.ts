@@ -26,6 +26,7 @@ import {
   BulkUpdateResult,
   BulkUpdateTicketsDto,
 } from './dto/bulk-update-tickets.dto';
+import { CreateTicketNoteDto } from './dto/create-ticket-note.dto';
 import { ListCustomerOrdersQuery } from './dto/list-customer-orders.dto';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
 import { ReplyTicketDto } from './dto/reply-ticket.dto';
@@ -179,6 +180,21 @@ export class TicketsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
     return this.tickets.reply(id, dto, user);
+  }
+
+  /**
+   * Attach a private internal note. Any member/admin can post;
+   * notes are visible to the whole team and never emailed out.
+   * Returns the full detail so the FE can re-render without a
+   * second fetch.
+   */
+  @Post(':id/notes')
+  addNote(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: CreateTicketNoteDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    return this.tickets.addNote(id, dto, user);
   }
 
   /**
