@@ -243,11 +243,33 @@ interface ShopifyRaw {
   line_items?: ShopifyLineItem[];
 }
 
+/**
+ * Shape of `orders.raw_clickpost_response` as it actually arrives
+ * from surma_common_ops. Verified against prod on 2026-10-06 for
+ * order #228806 — the previous flat `{tracking_url, security_key,
+ * cp_id, waybill}` interface was wishful thinking and never
+ * matched a real row.
+ *
+ * The real payload is Clickpost's track-order response, with
+ * tracking data keyed by AWB under `result[AWB]`. The `trackingUrl`
+ * object inside `additional` carries a direct courier URL
+ * (Delhivery / Bluedart / etc) — zero extra work to display.
+ *
+ * Note: LimeChat's Surma-branded surma.clickpost.ai links are
+ * minted via a separate Clickpost API call; the raw column
+ * doesn't contain them.
+ */
 interface ClickpostRaw {
-  tracking_url?: string;
-  security_key?: string;
-  cp_id?: number | string;
-  waybill?: string;
+  result?: Record<
+    string,
+    {
+      additional?: {
+        trackingUrl?: { url?: string };
+        courier_partner_id?: number | string;
+        courier_partner_name?: string;
+      };
+    }
+  >;
 }
 
 function toCustomerOrder(row: OrdersRow): CustomerOrder {
@@ -318,15 +340,16 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
     };
   });
 
-  // Prefer Clickpost's tracking_url if present; else synthesise
-  // Surma's Clickpost portal link from the pieces we have.
-  const trackingUrl =
-    c.tracking_url ??
-    (c.security_key && (c.cp_id ?? c.waybill ?? row.awb)
-      ? `https://surma.clickpost.ai?cp_id=${c.cp_id ?? ''}&waybill=${
-          c.waybill ?? row.awb ?? ''
-        }&security_key=${c.security_key}`
-      : null);
+  // Clickpost's track-order payload nests tracking data under
+  // result[AWB].additional.trackingUrl.url. Primary lookup is by
+  // the AWB column; fall back to the single entry in `result` when
+  // the AWB column is missing or doesn't match the JSON key
+  // (seen on a handful of older rows where the AWB got updated
+  // after Clickpost responded).
+  const clickpostEntry =
+    (row.awb ? c.result?.[row.awb] : undefined) ??
+    (c.result ? Object.values(c.result)[0] : undefined);
+  const trackingUrl = clickpostEntry?.additional?.trackingUrl?.url ?? null;
 
   // The number-only order id — "#159288" → "159288". Falls back to
   // the raw name if it doesn't lead with a hash.
