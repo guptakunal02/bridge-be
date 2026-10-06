@@ -135,7 +135,6 @@ export class CustomerOrdersService {
                o.cancelled_at,
                o.shopify_tags,
                o.raw_shopify_response,
-               o.raw_clickpost_response,
                o.ordered_at,
                o.shopify_order_id,
                e.new_shopify_order_id AS exchange_new_order_id,
@@ -143,7 +142,13 @@ export class CustomerOrdersService {
                ROW_NUMBER() OVER (
                  PARTITION BY COALESCE(o.shopify_order_id, o.id::text)
                  ORDER BY
-                   (o.raw_clickpost_response IS NOT NULL) DESC,
+                   -- Prefer the fulfilled snapshot — the row whose
+                   -- raw_shopify_response has a fulfillment with a
+                   -- tracking URL. Shell rows created at order placement
+                   -- have no fulfillments yet, so they lose. Secondary
+                   -- keys catch orders ingested before a URL landed.
+                   (o.raw_shopify_response -> 'fulfillments' -> 0
+                      -> 'trackingInfo' -> 0 ->> 'url' IS NOT NULL) DESC,
                    (o.awb IS NOT NULL) DESC,
                    o.ordered_at DESC NULLS LAST
                ) AS rn
@@ -201,7 +206,6 @@ interface OrdersRow {
   cancelled_at: string | null;
   shopify_tags: string[] | null;
   raw_shopify_response: ShopifyRaw | null;
-  raw_clickpost_response: ClickpostRaw | null;
   ordered_at: string | Date | null;
   shopify_order_id: string | null;
   exchange_new_order_id: string | null;
@@ -261,40 +265,32 @@ interface ShopifyRaw {
   };
   // REST: snake-cased array
   line_items?: ShopifyLineItem[];
+  /**
+   * One entry per shipment. For Surma, Clickpost pushes the
+   * fully-assembled Surma-branded tracking URL
+   * (https://surma.clickpost.ai?cp_id=…&waybill=…&security_key=…)
+   * into Shopify's Fulfillment API, so Shopify just mirrors
+   * whatever string Clickpost sent — we read it from here instead
+   * of trying to mint it ourselves. Confirmed by ops team
+   * (surma-common-data-backend) on 2026-10-06. Split orders
+   * (Gurugram + Mumbai warehouses) produce multiple fulfillments;
+   * we show the first with a URL for now.
+   */
+  fulfillments?: ShopifyFulfillment[];
 }
 
-/**
- * Shape of `orders.raw_clickpost_response` as it actually arrives
- * from surma_common_ops. Verified against prod on 2026-10-06 for
- * order #228806 — the previous flat `{tracking_url, security_key,
- * cp_id, waybill}` interface was wishful thinking and never
- * matched a real row.
- *
- * The real payload is Clickpost's track-order response, with
- * tracking data keyed by AWB under `result[AWB]`. The `trackingUrl`
- * object inside `additional` carries a direct courier URL
- * (Delhivery / Bluedart / etc) — zero extra work to display.
- *
- * Note: LimeChat's Surma-branded surma.clickpost.ai links are
- * minted via a separate Clickpost API call; the raw column
- * doesn't contain them.
- */
-interface ClickpostRaw {
-  result?: Record<
-    string,
-    {
-      additional?: {
-        trackingUrl?: { url?: string };
-        courier_partner_id?: number | string;
-        courier_partner_name?: string;
-      };
-    }
-  >;
+interface ShopifyFulfillment {
+  status?: string;
+  deliveredAt?: string;
+  trackingInfo?: Array<{
+    url?: string;
+    number?: string;
+    company?: string;
+  }>;
 }
 
 function toCustomerOrder(row: OrdersRow): CustomerOrder {
   const s = row.raw_shopify_response ?? {};
-  const c = row.raw_clickpost_response ?? {};
 
   const totalAmount = s.totalPriceSet?.shopMoney?.amount ?? null;
   const currency =
@@ -360,16 +356,16 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
     };
   });
 
-  // Clickpost's track-order payload nests tracking data under
-  // result[AWB].additional.trackingUrl.url. Primary lookup is by
-  // the AWB column; fall back to the single entry in `result` when
-  // the AWB column is missing or doesn't match the JSON key
-  // (seen on a handful of older rows where the AWB got updated
-  // after Clickpost responded).
-  const clickpostEntry =
-    (row.awb ? c.result?.[row.awb] : undefined) ??
-    (c.result ? Object.values(c.result)[0] : undefined);
-  const trackingUrl = clickpostEntry?.additional?.trackingUrl?.url ?? null;
+  // Shopify's fulfillment carries the Surma-branded Clickpost URL
+  // (Clickpost push-registers it on fulfillment creation). First
+  // non-empty URL across all fulfillments wins — enough for the
+  // sidebar. Multi-warehouse splits produce multiple fulfillments;
+  // if an agent needs the second one, they'll see it when we add
+  // per-shipment detail. V1 is "give me a working tracking link".
+  const trackingUrl =
+    s.fulfillments
+      ?.flatMap((f) => f.trackingInfo ?? [])
+      .find((t) => t.url)?.url ?? null;
 
   // The number-only order id — "#159288" → "159288". Falls back to
   // the raw name if it doesn't lead with a hash.
