@@ -111,6 +111,14 @@ export class CustomerOrdersService {
       async (q) => {
         await q('SET LOCAL statement_timeout = 5000');
         return q(
+          // Dedup by shopify_order_id — the ops DB stores multiple
+          // snapshots per order (one unfulfilled, one fulfilled, …)
+          // and we want ONE row per real order. ROW_NUMBER() ranks
+          // dupes by data richness: a row with Clickpost data +
+          // AWB beats a bare unfulfilled snapshot. COALESCE on the
+          // partition key keeps rows with NULL shopify_order_id
+          // from collapsing to a single row.
+          //
           // LEFT JOIN LATERAL to `exchanges` picks up the most recent
           // exchange record for each order, if any. Ops indexes
           // exchanges on initial_shopify_order_id so this is a cheap
@@ -119,32 +127,44 @@ export class CustomerOrdersService {
           // "Exchanged" only once it exists (see the mapper), so an
           // in-flight-but-unfulfilled exchange keeps the underlying
           // shipment status.
-          `SELECT
-             o.id,
-             o.awb,
-             o.normalised_current_status,
-             o.cancelled_at,
-             o.shopify_tags,
-             o.raw_shopify_response,
-             o.raw_clickpost_response,
-             o.ordered_at,
-             o.shopify_order_id,
-             e.new_shopify_order_id AS exchange_new_order_id,
-             e.request_created_at   AS exchange_request_created_at
-           FROM orders o
-           LEFT JOIN LATERAL (
-             SELECT new_shopify_order_id, request_created_at
-             FROM exchanges
-             WHERE initial_shopify_order_id = o.shopify_order_id
-             ORDER BY request_created_at DESC NULLS LAST
-             LIMIT 1
-           ) e ON TRUE
-           WHERE
-                  lower((o.raw_shopify_response->'shippingAddress'->>'email')) = $1
-               OR lower((o.raw_shopify_response->'customer'->>'email')) = $1
-               OR lower((o.raw_shopify_response->>'email')) = $1
-           ORDER BY o.ordered_at DESC NULLS LAST
-           LIMIT $2 OFFSET $3`,
+          `WITH ranked AS (
+             SELECT
+               o.id,
+               o.awb,
+               o.normalised_current_status,
+               o.cancelled_at,
+               o.shopify_tags,
+               o.raw_shopify_response,
+               o.raw_clickpost_response,
+               o.ordered_at,
+               o.shopify_order_id,
+               e.new_shopify_order_id AS exchange_new_order_id,
+               e.request_created_at   AS exchange_request_created_at,
+               ROW_NUMBER() OVER (
+                 PARTITION BY COALESCE(o.shopify_order_id, o.id::text)
+                 ORDER BY
+                   (o.raw_clickpost_response IS NOT NULL) DESC,
+                   (o.awb IS NOT NULL) DESC,
+                   o.ordered_at DESC NULLS LAST
+               ) AS rn
+             FROM orders o
+             LEFT JOIN LATERAL (
+               SELECT new_shopify_order_id, request_created_at
+               FROM exchanges
+               WHERE initial_shopify_order_id = o.shopify_order_id
+               ORDER BY request_created_at DESC NULLS LAST
+               LIMIT 1
+             ) e ON TRUE
+             WHERE
+                    lower((o.raw_shopify_response->'shippingAddress'->>'email')) = $1
+                 OR lower((o.raw_shopify_response->'customer'->>'email')) = $1
+                 OR lower((o.raw_shopify_response->>'email')) = $1
+           )
+           SELECT *
+             FROM ranked
+            WHERE rn = 1
+            ORDER BY ordered_at DESC NULLS LAST
+            LIMIT $2 OFFSET $3`,
           [email, limit + 1, offset],
         );
       },
