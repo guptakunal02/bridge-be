@@ -72,11 +72,43 @@ export class EmailInboxService {
     });
     if (existing) return existing;
 
-    // Muted-senders gate. Load the channel once — cheap PK lookup —
-    // and drop early if the sender matches. No ticket, no email row,
-    // no bot trigger. Log a structured line so audits can see what
-    // was skipped and why.
+    // Load the channel once — cheap PK lookup — then run three gates
+    // in order of specificity (invariant → invariant → config):
+    //
+    //   1. Self-send: the "sender" IS our own inbox. We're looking
+    //      at a copy of our own outbound that landed back in INBOX
+    //      (common when Gmail SMTP deposits a self-copy, or when a
+    //      relay BCCs us).
+    //   2. Not-addressed-to-us: our inbox is NOT in the recipient
+    //      list. The message landed here by forward / BCC / relay
+    //      and isn't logically addressed to us — it's not an inbound
+    //      ticket, no matter how it got into INBOX.
+    //   3. Muted sender (configuration): the admin explicitly muted
+    //      this sender or domain.
+    //
+    // (1) and (2) are structural invariants about email semantics —
+    // not configuration. Historical bug (2026-10-07, LimeChat
+    // controlled migration): outbound sent through LimeChat's
+    // Mailgun relay was landing in Surma's hello@surma.in INBOX
+    // and being minted as "received" tickets. The outbound was
+    // addressed TO the customer, not to us; check (2) catches it.
     const channel = await this.channels.findOne({ where: { id: channelId } });
+    const channelInbox = channel?.inbox_contact?.trim().toLowerCase() ?? null;
+    const senderLower = req.sender?.trim().toLowerCase() ?? '';
+    const receiverLower = req.receiver.map((r) => r.trim().toLowerCase());
+
+    if (channelInbox && senderLower === channelInbox) {
+      this.logger.log(
+        `self-send drop: channel=${channelId} sender=${req.sender} external_message_id=${req.external_message_id}`,
+      );
+      return null;
+    }
+    if (channelInbox && !receiverLower.includes(channelInbox)) {
+      this.logger.log(
+        `not-addressed-to-us drop: channel=${channelId} inbox=${channelInbox} to=${receiverLower.join(',')} sender=${req.sender} external_message_id=${req.external_message_id}`,
+      );
+      return null;
+    }
     if (
       channel &&
       isMutedSender(req.sender, channel.muted_senders, channel.type)
