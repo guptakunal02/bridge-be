@@ -330,14 +330,22 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
       ? parsed.html
       : undefined;
 
-  const attachments = (parsed.attachments ?? [])
-    .filter((a) => a.contentDisposition !== 'inline')
-    .map((a) => ({
-      filename: (a.filename ?? 'attachment').trim() || 'attachment',
-      contentType: a.contentType ?? 'application/octet-stream',
-      size: Number(a.size ?? a.content?.length ?? 0),
-      body: a.content,
-    }));
+  // Keep every attachment mailparser surfaces — including those
+  // marked Content-Disposition: inline. Gmail mobile (and many
+  // other clients) mark genuine photo evidence as inline when the
+  // sender embedded them visually; the earlier `!== 'inline'`
+  // filter was throwing away real customer attachments.
+  // Historical bug (ticket #1107, 2026-10-07): two product photos
+  // from a complaint arrived with contentDisposition='inline' and
+  // vanished. Trade-off accepted: signature logos may now land as
+  // attachments (minor UX noise); no customer evidence is ever
+  // dropped (critical).
+  const attachments = (parsed.attachments ?? []).map((a) => ({
+    filename: (a.filename ?? 'attachment').trim() || 'attachment',
+    contentType: a.contentType ?? 'application/octet-stream',
+    size: Number(a.size ?? a.content?.length ?? 0),
+    body: a.content,
+  }));
 
   const references = normaliseReferences(parsed.references);
   const inReplyTo = parsed.inReplyTo?.trim() || undefined;
