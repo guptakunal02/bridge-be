@@ -45,6 +45,17 @@ export interface TicketListItem {
   teamName: string | null;
   latestMessage: TicketLatestMessage | null;
   /**
+   * The customer's email — i.e. the sender of the FIRST inbound
+   * message on the ticket. Always the person outside the team,
+   * regardless of whether the latest message is SENT or RECEIVED.
+   * Backs the inbox list's "who" column so an agent always sees the
+   * customer and never our own inbox address bouncing back from a
+   * reply. Null only on edge-case rows that have no RECEIVED message
+   * (should not exist going forward — ingest requires an inbound to
+   * mint a ticket).
+   */
+  customerEmail: string | null;
+  /**
    * Only set for WAITING / IN_FOLLOWUP tickets. The FE renders it
    * as a countdown (e.g. "auto-resolves in 42m", "returns to live
    * in 1h 12m"). Cleared to null when the ticket transitions back
@@ -197,6 +208,7 @@ export function toTicketListItem(
   ticket: Ticket,
   latest: EmailMessage | null,
   unreadCount: number = 0,
+  customerEmail: string | null = null,
 ): TicketListItem {
   return {
     id: ticket.id,
@@ -217,6 +229,7 @@ export function toTicketListItem(
     teamId: ticket.team_id,
     teamName: ticket.team?.name ?? null,
     latestMessage: latest ? toLatestMessage(latest) : null,
+    customerEmail,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
     waitingAction: ticket.waiting_action,
     previousTicketId: ticket.previous_ticket_id ?? null,
@@ -246,8 +259,17 @@ export function toTicketDetail(
     mappedMessages.push(toEmailMessage(m, ticketSubject, priorBodies));
     priorBodies.push(m.content ?? '');
   }
+  // Customer = first inbound sender. Walking messages ascending
+  // (they're ordered that way by callers) gives the oldest RECEIVED
+  // which is the ticket's originator. Null if no inbound exists
+  // yet — shouldn't happen going forward (ingest requires a
+  // RECEIVED to mint a ticket), kept nullable for safety.
+  const firstInbound = messages.find(
+    (m) => m.type === MessageDirection.RECEIVED,
+  );
+  const customerEmail = firstInbound?.sender ?? null;
   return {
-    ...toTicketListItem(ticket, latest),
+    ...toTicketListItem(ticket, latest, 0, customerEmail),
     messages: mappedMessages,
     activity: activity.map(toActivity),
     notes: notes.map(toNote),

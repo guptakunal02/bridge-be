@@ -202,15 +202,19 @@ export class TicketsService {
     const myTicketIds = rows
       .filter((t) => t.assignee === actingUser.id)
       .map((t) => t.id);
-    const [latestByTicket, unreadByTicket] = await Promise.all([
-      this.fetchLatestMessages(rows.map((t) => t.id)),
-      this.unreadCountsFor(myTicketIds, actingUser.id),
-    ]);
+    const ticketIds = rows.map((t) => t.id);
+    const [latestByTicket, unreadByTicket, customerEmailByTicket] =
+      await Promise.all([
+        this.fetchLatestMessages(ticketIds),
+        this.unreadCountsFor(myTicketIds, actingUser.id),
+        this.fetchFirstInboundSenders(ticketIds),
+      ]);
     return rows.map((t) =>
       toTicketListItem(
         t,
         latestByTicket.get(t.id) ?? null,
         unreadByTicket.get(t.id) ?? 0,
+        customerEmailByTicket.get(t.id) ?? null,
       ),
     );
   }
@@ -1218,6 +1222,35 @@ export class TicketsService {
       [ticketIds],
     );
     return new Map(rows.map((r) => [String(r.ticket_id), r]));
+  }
+
+  /**
+   * Oldest RECEIVED message's sender per ticket — i.e. the customer
+   * who opened the ticket. Backs the inbox list's "who" column so
+   * agents always see the customer, not our own inbox bouncing back
+   * on a reply. Same DISTINCT ON shape as fetchLatestMessages but
+   * ASC and filtered to inbound; the (ticket_id, createdAt) index
+   * covers both scans.
+   */
+  private async fetchFirstInboundSenders(
+    ticketIds: string[],
+  ): Promise<Map<string, string>> {
+    if (ticketIds.length === 0) return new Map();
+    const rows: Array<{ ticket_id: string; sender: string | null }> =
+      await this.emails.query(
+        `SELECT DISTINCT ON (ticket_id) ticket_id, sender
+           FROM email_message
+          WHERE ticket_id = ANY($1::bigint[])
+            AND type = 'RECEIVED'
+            AND "deletedAt" IS NULL
+          ORDER BY ticket_id, "createdAt" ASC`,
+        [ticketIds],
+      );
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      if (r.sender) out.set(String(r.ticket_id), r.sender);
+    }
+    return out;
   }
 }
 
