@@ -319,7 +319,23 @@ export class ImapConnection {
 }
 
 function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
-  const sender = firstAddress(parsed.from);
+  // Reply-To wins over From when the sender set one (RFC 5322
+  // §3.6.2). Judge.me, Shopify review relays, mailing lists —
+  // these send with From=<relay> and Reply-To=<the real human>,
+  // so an agent clicking Reply should message the human, not
+  // the relay.
+  //
+  // We treat Reply-To as the authoritative "sender" for the
+  // whole ticket's lifetime: customer detection in the sidebar,
+  // list "who" column, and default-reply recipient all key off
+  // email_message.sender. One hop here fixes all three.
+  //
+  // Historical bug (ticket #1123, 2026-10-08): judge.me notified
+  // us of a 5-star review from bhavanishankar65269@gmail.com with
+  // From=support@judge.me, Reply-To=bhavanishankar65269@gmail.com.
+  // Bridge picked From, so a reply would've landed with judge.me
+  // instead of the customer.
+  const sender = firstAddress(parsed.replyTo) ?? firstAddress(parsed.from);
   const receiver = allAddresses(parsed.to);
   const externalMessageId = parsed.messageId?.trim();
 
@@ -369,7 +385,9 @@ function normaliseReferences(raw: string | string[] | undefined): string[] {
   return items.map((s) => s.trim()).filter(Boolean);
 }
 
-function firstAddress(header: ParsedMail['from']): string | null {
+function firstAddress(
+  header: ParsedMail['from'] | ParsedMail['replyTo'],
+): string | null {
   if (!header) return null;
   const arr: AddressObject[] = Array.isArray(header) ? header : [header];
   const first: EmailAddress | undefined = arr[0]?.value?.[0];
