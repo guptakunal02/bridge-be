@@ -14,6 +14,7 @@ import {
   toAutomationRuleResponse,
 } from './dto/automation-rule-response.dto';
 import { AutomationRule } from './entities/automation-rule.entity';
+import { detectTagLoops } from './loop-validator';
 import { validateCasesAndActions } from './rule-validator';
 
 /**
@@ -57,7 +58,7 @@ export class AutomationsService {
         else_actions: dto.else_actions ?? [],
       }),
     );
-    return toAutomationRuleResponse(row);
+    return this.attachWarnings(toAutomationRuleResponse(row));
   }
 
   async update(
@@ -84,7 +85,20 @@ export class AutomationsService {
     if (dto.else_actions !== undefined) row.else_actions = dto.else_actions;
 
     const saved = await this.rules.save(row);
-    return toAutomationRuleResponse(saved);
+    return this.attachWarnings(toAutomationRuleResponse(saved));
+  }
+
+  /**
+   * Attach non-blocking loop warnings to a create/update response.
+   * Recomputed on every write — the rule set is small (admin-authored,
+   * dozens at most), so a full scan is well under 1ms.
+   */
+  private async attachWarnings(
+    resp: AutomationRuleResponse,
+  ): Promise<AutomationRuleResponse> {
+    const all = await this.rules.find();
+    const warnings = detectTagLoops(all);
+    return warnings.length > 0 ? { ...resp, warnings } : resp;
   }
 
   async remove(id: string): Promise<void> {

@@ -11,6 +11,12 @@ export interface AutomationRuleResponse {
   else_actions: unknown[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Non-blocking warnings surfaced on create/update. Current source:
+   * tag-level loop detection across all `tag.applied` rules. Empty
+   * on list/get responses (not re-computed per read).
+   */
+  warnings?: string[];
 }
 
 export function toAutomationRuleResponse(
