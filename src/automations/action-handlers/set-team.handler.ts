@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Team } from '../../teams/entities/team.entity';
@@ -16,6 +16,7 @@ export class SetTeamHandler
   private readonly logger = new Logger(SetTeamHandler.name);
 
   constructor(
+    @Inject(forwardRef(() => TicketsService))
     private readonly tickets: TicketsService,
     private readonly actor: AutomationSystemActor,
     @InjectRepository(Team) private readonly teams: Repository<Team>,

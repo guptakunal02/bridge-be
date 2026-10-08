@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { TicketsService } from '../../tickets/tickets.service';
 import type { Action, ActionHandler } from '../action';
 import { AutomationSystemActor } from '../automation-system-actor';
@@ -13,6 +13,7 @@ export class RemoveTagHandler
   private readonly logger = new Logger(RemoveTagHandler.name);
 
   constructor(
+    @Inject(forwardRef(() => TicketsService))
     private readonly tickets: TicketsService,
     private readonly actor: AutomationSystemActor,
   ) {}

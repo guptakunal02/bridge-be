@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { TicketStatus } from '../../database/enums';
 import { TicketsService } from '../../tickets/tickets.service';
 import type { Action, ActionHandler } from '../action';
@@ -21,6 +21,7 @@ export class SetStatusHandler
   private readonly logger = new Logger(SetStatusHandler.name);
 
   constructor(
+    @Inject(forwardRef(() => TicketsService))
     private readonly tickets: TicketsService,
     private readonly actor: AutomationSystemActor,
   ) {}

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { TicketsService } from '../../tickets/tickets.service';
 import type { Action, ActionHandler } from '../action';
 import { AutomationSystemActor } from '../automation-system-actor';
@@ -19,6 +19,11 @@ export class AddTagHandler
   private readonly logger = new Logger(AddTagHandler.name);
 
   constructor(
+    // forwardRef — TicketsModule and AutomationsModule import each
+    // other (tag mutations emit automation events; automation actions
+    // call back into TicketsService.update). Without this inject
+    // Nest resolves TicketsService as undefined and dies at boot.
+    @Inject(forwardRef(() => TicketsService))
     private readonly tickets: TicketsService,
     private readonly actor: AutomationSystemActor,
   ) {}
