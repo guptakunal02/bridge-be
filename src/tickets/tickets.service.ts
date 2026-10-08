@@ -639,6 +639,11 @@ export class TicketsService {
     // BotTrigger.TICKET_TAG_ADDED after commit so the runtime never
     // runs inside our write transaction.
     let addedTags: string[] = [];
+    // Status transition captured for post-commit automation emits
+    // (ticket.resolved / ticket.reopened). Null when the write
+    // doesn't change status.
+    let statusTransition: { from: TicketStatus; to: TicketStatus } | null =
+      null;
     // Capture "this transition freed capacity for a human agent" so
     // we can call the backfill hook post-commit. Set only when a
     // human's OPEN ticket moves to a non-OPEN status.
@@ -705,6 +710,7 @@ export class TicketsService {
 
       if (dto.status !== undefined && dto.status !== ticket.status) {
         const event = pickStatusEvent(ticket.status, dto.status);
+        statusTransition = { from: ticket.status, to: dto.status };
         patch.status = dto.status;
         // OPEN → anything-else frees the agent's slot (same rule as
         // reassign-away above; either can trigger the backfill,
@@ -897,20 +903,46 @@ export class TicketsService {
       // Separate events (vs. one with a tag[]) so predicates can key
       // off the SPECIFIC tag that triggered the chain — see
       // automations/events.ts for the rationale.
-      const snapshot = {
-        id: detail.id,
-        channelId: detail.channelId,
-        status: detail.status,
-        tags: detail.tags,
-        assigneeId: detail.assignee?.id ?? null,
-        teamId: detail.teamId,
-        subject: detail.messages[0]?.subject ?? null,
-      };
       for (const tag of addedTags) {
         this.automations.emit({
           event: AUTOMATION_EVENT.TAG_APPLIED,
-          ticket: snapshot,
+          ticket: buildTicketSnapshot(detail),
           payload: { ticketId: detail.id, tagName: tag },
+        });
+      }
+    }
+
+    // Status transition events — fire exactly one of resolved /
+    // reopened depending on the transition direction. Both are
+    // post-commit so a failing rule can't roll back the status
+    // change itself. Cast via unknown because TS narrows the
+    // post-callback `statusTransition` to `null` (the setter
+    // inside the async txn callback is invisible to the narrower).
+    const transition = statusTransition as unknown as {
+      from: TicketStatus;
+      to: TicketStatus;
+    } | null;
+    if (transition) {
+      const hourIst = computeHourIst(new Date());
+      if (transition.to === TicketStatus.RESOLVED) {
+        this.automations.emit({
+          event: AUTOMATION_EVENT.TICKET_RESOLVED,
+          ticket: buildTicketSnapshot(detail),
+          payload: {
+            ticketId: detail.id,
+            previousStatus: transition.from,
+            hourIst,
+          },
+        });
+      } else if (transition.from === TicketStatus.RESOLVED) {
+        this.automations.emit({
+          event: AUTOMATION_EVENT.TICKET_REOPENED,
+          ticket: buildTicketSnapshot(detail),
+          payload: {
+            ticketId: detail.id,
+            newStatus: transition.to,
+            hourIst,
+          },
         });
       }
     }
@@ -1457,5 +1489,42 @@ function applyMessageSearch(
       { bridgeQ: `%${q}%` },
     );
   }
+}
+
+/**
+ * Minimal TicketSnapshot the automation engine wants on every event
+ * payload. Pulled out so every emit site in update() stays a one-
+ * liner and can't drift from the AutomationEventPayload shape.
+ */
+function buildTicketSnapshot(detail: TicketDetail): {
+  id: string;
+  channelId: string;
+  status: TicketStatus;
+  tags: string[];
+  assigneeId: string | null;
+  teamId: string;
+  subject: string | null;
+} {
+  return {
+    id: detail.id,
+    channelId: detail.channelId,
+    status: detail.status,
+    tags: detail.tags,
+    assigneeId: detail.assignee?.id ?? null,
+    teamId: detail.teamId,
+    subject: detail.messages[0]?.subject ?? null,
+  };
+}
+
+/**
+ * Hour of the day (0-23) in IST at the given moment. IST is a
+ * fixed +05:30 offset (no DST), so we can compute it directly off
+ * UTC without a tz library. Convenience field on automation
+ * event payloads for OOH-style predicates.
+ */
+function computeHourIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCHours();
 }
 

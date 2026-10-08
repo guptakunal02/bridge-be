@@ -126,7 +126,7 @@ export class EmailInboxService {
     // Non-null only when we just created a fresh ticket AND the
     // picker landed on a human agent. When it's null, no drain runs.
     let pickedAssigneeId: string | null = null;
-    const { message, ticket, wasNewTicket } = await this.dataSource.transaction(
+    const { message, ticket, wasNewTicket, reopenedFromResolved } = await this.dataSource.transaction(
       async (mgr) => {
         const threadKey = req.external_message_id;
         const ticketRepo = mgr.getRepository(Ticket);
@@ -175,6 +175,11 @@ export class EmailInboxService {
         // the fresh state (post-winner-reopen or post-drop) and
         // proceeds accordingly. The lock is released when the outer
         // txn commits or rolls back.
+        // Capture "this ingest reopened a RESOLVED ticket" so the
+        // post-commit automation emit can fire ticket.reopened. Only
+        // true for the within-window reopen path below — NOT for the
+        // ingest's own "merge-with-existing-non-resolved" branch.
+        let reopenedFromResolved = false;
         if (ticket && ticket.status === TicketStatus.RESOLVED) {
           const locked = await ticketRepo.findOne({
             where: { id: ticket.id },
@@ -208,6 +213,7 @@ export class EmailInboxService {
                 ticket = await ticketRepo.findOne({
                   where: { id: locked.id },
                 });
+                reopenedFromResolved = true;
               }
             }
           }
@@ -357,7 +363,12 @@ export class EmailInboxService {
           await this.rerouteOnCustomerMessage(mgr, ticket);
         }
 
-        return { message: saved, ticket, wasNewTicket: isNew };
+        return {
+          message: saved,
+          ticket,
+          wasNewTicket: isNew,
+          reopenedFromResolved,
+        };
       },
     );
 
@@ -400,6 +411,22 @@ export class EmailInboxService {
           sender: req.sender,
           subject: req.subject ?? null,
           body: req.content,
+          hourIst,
+        },
+      });
+    }
+    if (reopenedFromResolved) {
+      // Ingest-driven reopen: a customer replied to a RESOLVED
+      // ticket within the configured reopen window. The post-txn
+      // ticket row shows status=OPEN; we tell rules "the ticket
+      // went from RESOLVED to OPEN" so automations can re-tag /
+      // re-route /etc.
+      this.automations.emit({
+        event: AUTOMATION_EVENT.TICKET_REOPENED,
+        ticket: ticketSnapshot,
+        payload: {
+          ticketId: ticket.id,
+          newStatus: ticket.status,
           hourIst,
         },
       });

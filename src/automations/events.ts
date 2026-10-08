@@ -17,6 +17,8 @@ export const AUTOMATION_EVENT = {
   TICKET_CREATED: 'ticket.created',
   MESSAGE_RECEIVED: 'message.received',
   TAG_APPLIED: 'tag.applied',
+  TICKET_RESOLVED: 'ticket.resolved',
+  TICKET_REOPENED: 'ticket.reopened',
 } as const;
 
 export type AutomationEventName =
@@ -69,6 +71,29 @@ export interface TagAppliedEventPayload {
   tagName: string;
 }
 
+/**
+ * Fires when a ticket's status transitions INTO RESOLVED (from any
+ * non-resolved status). Predicates can key off `previousStatus` to
+ * distinguish "resolved from OPEN" vs "resolved from WAITING".
+ */
+export interface TicketResolvedEventPayload {
+  ticketId: string;
+  previousStatus: TicketStatus;
+  hourIst: number;
+}
+
+/**
+ * Fires when a RESOLVED ticket transitions back to a non-resolved
+ * status (OPEN / WAITING / IN_FOLLOWUP). Covers both the manual
+ * agent "Reopen" button and the ingest-driven reopen (customer
+ * replies to a resolved ticket within the configured window).
+ */
+export interface TicketReopenedEventPayload {
+  ticketId: string;
+  newStatus: TicketStatus;
+  hourIst: number;
+}
+
 export type AutomationEventPayload =
   | {
       event: typeof AUTOMATION_EVENT.TICKET_CREATED;
@@ -84,6 +109,16 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.TAG_APPLIED;
       ticket: TicketSnapshot;
       payload: TagAppliedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.TICKET_RESOLVED;
+      ticket: TicketSnapshot;
+      payload: TicketResolvedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.TICKET_REOPENED;
+      ticket: TicketSnapshot;
+      payload: TicketReopenedEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */
