@@ -30,3 +30,6 @@ coverage
 
 # temp
 *.tsbuildinfo
+
+# one-off recovery / diagnostic scripts — local only, deleted after use
+scripts/
