@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
 import { OpsModule } from '../bot/ops/ops.module';
 import { ChannelsModule } from '../channels/channels.module';
@@ -52,6 +53,10 @@ import { TicketsService } from './tickets.service';
     OpsModule,
     // S3StorageService — reply-attachment uploads.
     StorageModule,
+    // AutomationEngine — emit tag.applied events post-mutation.
+    // forwardRef because AutomationsModule imports TicketsModule
+    // (its action handlers call back into TicketsService.update).
+    forwardRef(() => AutomationsModule),
   ],
   controllers: [TicketsController],
   providers: [

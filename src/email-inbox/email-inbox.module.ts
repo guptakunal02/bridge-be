@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
@@ -35,6 +36,9 @@ import { EmailMessageRepository } from './providers/email-message.repository';
     // AppSettingsService — configurable reopen window for RESOLVED
     // tickets that receive a fresh reply.
     SettingsModule,
+    // AutomationEngine — emit ticket.created / message.received
+    // on every inbound persist.
+    AutomationsModule,
   ],
   controllers: [EmailInboxController],
   providers: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],

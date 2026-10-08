@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
+import { AutomationEngine } from '../automations/automation-engine.service';
+import { AUTOMATION_EVENT } from '../automations/events';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { isMutedSender } from '../channels/channel-muted-senders';
 import { Channel } from '../channels/entities/channel.entity';
@@ -47,6 +49,7 @@ export class EmailInboxService {
     private readonly storage: S3StorageService,
     private readonly appSettings: AppSettingsService,
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
+    private readonly automations: AutomationEngine,
   ) {}
 
   /**
@@ -357,6 +360,50 @@ export class EmailInboxService {
         return { message: saved, ticket, wasNewTicket: isNew };
       },
     );
+
+    // Fire automation events post-commit, pre-bot. Fire-and-forget;
+    // the engine queues via EventEmitter2 so slow / failing rules
+    // never block the ingest's return path.
+    // Hour-of-day in IST — convenience for the common "OOH"
+    // condition pattern. Computed once per emit so predicates can
+    // compare integers rather than parse timestamps.
+    const hourIst = computeHourIst(message.createdAt);
+    const ticketSnapshot = {
+      id: ticket.id,
+      channelId: ticket.channel_id,
+      status: ticket.status,
+      tags: ticket.tags ?? [],
+      assigneeId: ticket.assignee,
+      teamId: ticket.team_id,
+      subject: ticket.thread_key ?? null,
+    };
+    this.automations.emit({
+      event: AUTOMATION_EVENT.MESSAGE_RECEIVED,
+      ticket: ticketSnapshot,
+      payload: {
+        ticketId: ticket.id,
+        messageId: message.id,
+        channelId: channelId,
+        sender: req.sender,
+        subject: req.subject ?? null,
+        body: req.content,
+        hourIst,
+      },
+    });
+    if (wasNewTicket) {
+      this.automations.emit({
+        event: AUTOMATION_EVENT.TICKET_CREATED,
+        ticket: ticketSnapshot,
+        payload: {
+          ticketId: ticket.id,
+          channelId: channelId,
+          sender: req.sender,
+          subject: req.subject ?? null,
+          body: req.content,
+          hourIst,
+        },
+      });
+    }
 
     // Post-commit sequence — order matters:
     //
@@ -758,4 +805,16 @@ export class EmailInboxService {
       }
     }
   }
+}
+
+/**
+ * Hour of the day (0-23) in IST at the given moment. IST is a
+ * fixed +05:30 offset (no DST), so we can compute it directly
+ * off UTC without a tz library. Convenience field on automation
+ * event payloads for OOH-style predicates.
+ */
+function computeHourIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCHours();
 }

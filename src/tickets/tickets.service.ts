@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,6 +10,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { AutomationEngine } from '../automations/automation-engine.service';
+import { AUTOMATION_EVENT } from '../automations/events';
 import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { Channel } from '../channels/entities/channel.entity';
 import { EmailSenderService } from '../channels/email/email-sender.service';
@@ -80,6 +84,8 @@ export class TicketsService {
     private readonly lifecycle: TicketLifecycleService,
     private readonly sender: EmailSenderService,
     private readonly tagsService: TagsService,
+    @Inject(forwardRef(() => AutomationEngine))
+    private readonly automations: AutomationEngine,
     private readonly storage: S3StorageService,
     private readonly tagRequirement: TagRequirementService,
   ) {}
@@ -885,6 +891,27 @@ export class TicketsService {
       } catch {
         // Runtime failures are logged inside the service — swallow
         // so the human-side PATCH still returns success.
+      }
+
+      // Emit one automation.tag.applied event per newly added tag.
+      // Separate events (vs. one with a tag[]) so predicates can key
+      // off the SPECIFIC tag that triggered the chain — see
+      // automations/events.ts for the rationale.
+      const snapshot = {
+        id: detail.id,
+        channelId: detail.channelId,
+        status: detail.status,
+        tags: detail.tags,
+        assigneeId: detail.assignee?.id ?? null,
+        teamId: detail.teamId,
+        subject: detail.messages[0]?.subject ?? null,
+      };
+      for (const tag of addedTags) {
+        this.automations.emit({
+          event: AUTOMATION_EVENT.TAG_APPLIED,
+          ticket: snapshot,
+          payload: { ticketId: detail.id, tagName: tag },
+        });
       }
     }
 
