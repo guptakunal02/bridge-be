@@ -355,7 +355,8 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
   // From=support@judge.me, Reply-To=bhavanishankar65269@gmail.com.
   // Bridge picked From, so a reply would've landed with judge.me
   // instead of the customer.
-  const sender = firstAddress(parsed.replyTo) ?? firstAddress(parsed.from);
+  const fromAddress = firstAddress(parsed.from);
+  const sender = firstAddress(parsed.replyTo) ?? fromAddress;
   const receiver = allAddresses(parsed.to);
   const externalMessageId = parsed.messageId?.trim();
 
@@ -388,6 +389,7 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
 
   return {
     sender,
+    fromAddress: fromAddress ?? undefined,
     receiver,
     subject: parsed.subject?.trim() || undefined,
     content: parsed.text?.trim() || '',

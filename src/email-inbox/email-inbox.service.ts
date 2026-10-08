@@ -98,7 +98,33 @@ export class EmailInboxService {
     const channel = await this.channels.findOne({ where: { id: channelId } });
     const channelInbox = channel?.inbox_contact?.trim().toLowerCase() ?? null;
     const senderLower = req.sender?.trim().toLowerCase() ?? '';
+    const fromLower = req.fromAddress?.trim().toLowerCase() ?? senderLower;
     const receiverLower = req.receiver.map((r) => r.trim().toLowerCase());
+
+    // Relay-outbound classification BEFORE self-send drop. When
+    // From is external (NOT our inbox) but Reply-To is our inbox,
+    // this is a message sent on our behalf by an outbound relay
+    // (LimeChat's Mailgun, Mandrill, etc.) that landed back in our
+    // INBOX. Semantically it's an OUTBOUND send — persist as SENT
+    // via ingestSent (stitches by References/In-Reply-To, no new
+    // ticket mint).
+    //
+    // Historical bug (ticket #1132, 2026-10-08): the combination of
+    // the Reply-To honouring fix (63e3a06) + the self-send structural
+    // guard (3b4b235) silently dropped every LimeChat-relayed reply
+    // because Reply-To-first made sender==inbox and the guard fired.
+    // This check is the sibling path that recognises them as
+    // outbound-via-relay instead of self-send.
+    if (
+      channelInbox &&
+      senderLower === channelInbox &&
+      fromLower !== channelInbox
+    ) {
+      this.logger.log(
+        `relay-outbound redirect: channel=${channelId} from=${fromLower} reply-to=${senderLower} external_message_id=${req.external_message_id}`,
+      );
+      return this.ingestSent(channelId, req);
+    }
 
     if (channelInbox && senderLower === channelInbox) {
       this.logger.log(

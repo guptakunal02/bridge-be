@@ -37,9 +37,26 @@ export class IngestEmailAttachment {
  * Independent of the entity — this is the API contract, not the DB shape.
  */
 export class IngestEmailInbox {
-  /** Sender's email address (From:). */
+  /**
+   * Effective sender for ingest decisions. If the message has a
+   * Reply-To header we honour it over From (see the Reply-To fix
+   * — judge.me / Shopify review notifications set Reply-To to the
+   * real customer). Falls back to From when Reply-To is absent.
+   */
   @IsEmail()
   sender!: string;
+
+  /**
+   * Raw From-header address, independent of Reply-To honouring.
+   * Needed to distinguish "we sent this via a relay" (From =
+   * external, Reply-To = us) from "customer or notification sent
+   * this" (From = anyone). Classification happens in ingestInbound.
+   * Optional for backward compat — older callers that didn't set
+   * this field behave the same as before.
+   */
+  @IsOptional()
+  @IsEmail()
+  fromAddress?: string;
 
   /** Recipients (To:). At least one; each element must be a valid email. */
   @IsEmail({}, { each: true })
