@@ -11,6 +11,7 @@ import {
 } from '../../channels/email/email-credentials';
 import type { IngestEmailInbox } from '../dto/req.dto';
 import type { EmailInboxService } from '../email-inbox.service';
+import type { ImapResumeStore } from './imap-resume-store.service';
 
 /**
  * One IMAP IDLE session for a single Bridge channel + mailbox.
@@ -47,6 +48,7 @@ export class ImapConnection {
     private readonly inbox: EmailInboxService,
     private readonly tokens: AccessTokenCache,
     private readonly logger: Logger,
+    private readonly resumeStore: ImapResumeStore,
     private readonly mode: ImapMode = 'inbox',
   ) {
     this.mailbox = mode === 'sent' ? GMAIL_SENT_MAILBOX : 'INBOX';
@@ -80,14 +82,20 @@ export class ImapConnection {
     await this.client.connect();
     const mb = await this.openMailboxOrFallback();
 
-    // Everything already present at connect time is "old" — we ingest
-    // only messages that arrive after this point. On restart the
-    // idempotency check on external_message_id would catch any
-    // overlap anyway, but skipping the historical scan here saves
-    // an entire FETCH pass.
-    this.lastUid = (mb.uidNext ?? 1) - 1;
+    // Resume from the persisted cursor if we have one — that's
+    // how we avoid silently burying mail that landed in the folder
+    // while the worker was down. First-boot fallback: `uidNext - 1`,
+    // which replicates the historical "skip everything already here"
+    // behaviour. Idempotency on external_message_id means replaying
+    // a few messages after a crash is a safe no-op.
+    const persisted = await this.resumeStore.read(this.channelId, this.mode);
+    if (persisted !== null) {
+      this.lastUid = persisted;
+    } else {
+      this.lastUid = (mb.uidNext ?? 1) - 1;
+    }
     this.logger.log(
-      `[${label}] mailbox open. messages=${mb.exists} uidNext=${mb.uidNext} lastUid=${this.lastUid}`,
+      `[${label}] mailbox open. messages=${mb.exists} uidNext=${mb.uidNext} lastUid=${this.lastUid} resumed=${persisted !== null}`,
     );
 
     this.wireEvents();
@@ -298,6 +306,18 @@ export class ImapConnection {
     this.logger.log(
       `[${label}] drain(${trigger}) done: seen=${seen} ingested=${ingested} lastUid=${this.lastUid}`,
     );
+    // Persist the cursor. We write unconditionally — even on an
+    // empty drain the stored value should be "we've seen through
+    // UID N", because an interrupted-and-resumed worker that
+    // re-reads the DB expects an authoritative value. Write
+    // failures are swallowed by the store (logged there).
+    if (this.lastUid !== null) {
+      await this.resumeStore.write(
+        this.channelId,
+        this.mode,
+        this.lastUid,
+      );
+    }
   }
 
   async stop(): Promise<void> {

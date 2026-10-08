@@ -45,6 +45,35 @@ export class Channel {
   @Column({ type: 'text', array: true, default: () => `'{}'::text[]`, name: 'muted_senders' })
   muted_senders!: string[];
 
+  /**
+   * Last UID the IMAP INBOX worker successfully drained to for
+   * THIS channel. The worker's start() uses this to resume where
+   * the previous process left off instead of jumping to the
+   * folder's current uidNext-1 (which silently buries every
+   * message that arrived while this channel's worker was down).
+   *
+   * NULL on brand-new channels and on channels that pre-date this
+   * column — those fall back to `uidNext - 1` on first boot
+   * (same behaviour as before, but any subsequent boot resumes
+   * from this persisted value).
+   *
+   * Updated at the end of every successful drain cycle; the
+   * idempotency check on external_message_id covers the race
+   * where the process crashes between update and ingest commit.
+   */
+  @Column({ type: 'integer', nullable: true, name: 'last_processed_inbox_uid' })
+  last_processed_inbox_uid!: number | null;
+
+  /**
+   * Same contract as last_processed_inbox_uid, for the Sent Mail
+   * folder. Historical bug (2026-10-08, ticket #1132): without
+   * this field, Gmail-side agent replies that happened between a
+   * pm2 restart and the first post-restart EXISTS event were
+   * permanently lost.
+   */
+  @Column({ type: 'integer', nullable: true, name: 'last_processed_sent_uid' })
+  last_processed_sent_uid!: number | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

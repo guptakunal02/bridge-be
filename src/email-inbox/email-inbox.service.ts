@@ -572,7 +572,16 @@ export class EmailInboxService {
     const existing = await this.emails.findOne({
       where: { external_message_id: req.external_message_id },
     });
-    if (existing) return existing;
+    if (existing) {
+      // Idempotent re-process — this message was already stored on
+      // a prior drain. Benign; log at debug-equivalent level so an
+      // RCA next time can tell "we saw this but it was a repeat"
+      // apart from "we never saw this".
+      this.logger.log(
+        `ingestSent idempotent: channel=${channelId} external_message_id=${req.external_message_id} ticket=${existing.ticket_id}`,
+      );
+      return existing;
+    }
 
     return this.dataSource.transaction(async (mgr) => {
       const ticketRepo = mgr.getRepository(Ticket);
@@ -600,11 +609,8 @@ export class EmailInboxService {
       }
 
       if (!ticket) {
-        // Outbound with no prior inbound thread — drop silently.
-        // Structured log so the drop is traceable if someone asks
-        // "why isn't my Gmail-side send showing up in Bridge?"
         this.logger.log(
-          `outbound-only drop: channel=${channelId} to=${req.receiver.join(',')} external_message_id=${req.external_message_id}`,
+          `ingestSent drop no-thread: channel=${channelId} to=${req.receiver.join(',')} external_message_id=${req.external_message_id} refs=${(req.references ?? []).length} inReplyTo=${req.inReplyTo ?? 'none'}`,
         );
         return null;
       }
@@ -635,6 +641,9 @@ export class EmailInboxService {
         log: `Reply sent from Gmail to ${req.receiver.join(', ')}`,
       });
 
+      this.logger.log(
+        `ingestSent persisted: channel=${channelId} ticket=${ticket.id} message=${saved.id} external_message_id=${req.external_message_id}`,
+      );
       return saved;
     });
   }

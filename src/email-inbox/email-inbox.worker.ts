@@ -19,6 +19,7 @@ import { Channel } from '../channels/entities/channel.entity';
 import { ChannelStatus, ChannelType } from '../database/enums';
 import { EmailInboxService } from './email-inbox.service';
 import { ImapConnection } from './providers/imap-connection';
+import { ImapResumeStore } from './providers/imap-resume-store.service';
 
 /**
  * Orchestrates IMAP IDLE workers, one per EMAIL channel that has valid
@@ -55,6 +56,7 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
     private readonly credentials: EmailCredentialsService,
     private readonly inbox: EmailInboxService,
     private readonly tokens: AccessTokenCache,
+    private readonly resumeStore: ImapResumeStore,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -143,6 +145,7 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
       this.inbox,
       this.tokens,
       this.logger,
+      this.resumeStore,
       'inbox',
     );
     const sentConn = new ImapConnection(
@@ -151,6 +154,7 @@ export class EmailInboxWorker implements OnModuleInit, OnModuleDestroy {
       this.inbox,
       this.tokens,
       this.logger,
+      this.resumeStore,
       'sent',
     );
     await inboxConn.start();

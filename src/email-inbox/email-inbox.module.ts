@@ -15,6 +15,7 @@ import { EmailInboxWorker } from './email-inbox.worker';
 import { EmailMessage } from './entities/email-message.entity';
 import { EmailMessageAttachment } from './entities/email-message-attachment.entity';
 import { EmailMessageRepository } from './providers/email-message.repository';
+import { ImapResumeStore } from './providers/imap-resume-store.service';
 
 @Module({
   imports: [
@@ -41,7 +42,12 @@ import { EmailMessageRepository } from './providers/email-message.repository';
     AutomationsModule,
   ],
   controllers: [EmailInboxController],
-  providers: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],
+  providers: [
+    EmailInboxService,
+    EmailMessageRepository,
+    EmailInboxWorker,
+    ImapResumeStore,
+  ],
   exports: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],
 })
 export class EmailInboxModule {}
