@@ -1,6 +1,5 @@
+import { Transform } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  IsArray,
   IsBoolean,
   IsIn,
   IsOptional,
@@ -13,13 +12,27 @@ import { AUTOMATION_EVENT, type AutomationEventName } from '../events';
 const EVENTS = Object.values(AUTOMATION_EVENT) as AutomationEventName[];
 
 /**
- * CRUD payload for an automation rule. `cases` and `else_actions`
- * are intentionally typed as `unknown[]` at the class-validator
- * layer — their inner shape is a discriminated union of predicates
- * + actions that doesn't model cleanly with decorators. The
- * AutomationsService runs a dedicated structural validator over
- * both arrays before persisting, with per-case / per-action error
- * messages the FE surfaces.
+ * CRUD payload for an automation rule.
+ *
+ * On `cases` and `else_actions`: these are discriminated-union
+ * structures (predicates + actions) that don't model cleanly with
+ * class-validator decorators. The deep shape is validated by
+ * AutomationsService.validateCasesAndActions() post-pipe, with
+ * per-case / per-action error paths the FE surfaces.
+ *
+ * CRITICAL: `@Transform(({ value }) => value)` short-circuits
+ * class-transformer so plainToInstance leaves the raw array +
+ * every nested object completely untouched. Without this, the
+ * global ValidationPipe (whitelist: true + transform: true +
+ * enableImplicitConversion: true) was silently converting
+ * each case object to `{}` — the inner `conditions` / `actions`
+ * keys vanished before the service ever saw them, and the FE
+ * had no clue because class-validator saw a valid array.
+ *
+ * Historical bug (2026-10-08): first saved automation rule had
+ * cases=[] and else_actions=[] in the DB despite the FE sending
+ * fully-populated cases. Confirmed via direct DB query against
+ * row id 37849e80-e3da-46ad-a202-921a585fb614.
  */
 export class CreateAutomationRuleDto {
   @IsString()
@@ -40,14 +53,12 @@ export class CreateAutomationRuleDto {
   @IsIn(EVENTS)
   event!: AutomationEventName;
 
-  @IsArray()
-  @ArrayMaxSize(50)
-  cases!: unknown[];
+  @Transform(({ value }) => value)
+  cases!: unknown;
 
   @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(20)
-  else_actions?: unknown[];
+  @Transform(({ value }) => value)
+  else_actions?: unknown;
 }
 
 export class UpdateAutomationRuleDto {
@@ -72,12 +83,10 @@ export class UpdateAutomationRuleDto {
   event?: AutomationEventName;
 
   @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(50)
-  cases?: unknown[];
+  @Transform(({ value }) => value)
+  cases?: unknown;
 
   @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(20)
-  else_actions?: unknown[];
+  @Transform(({ value }) => value)
+  else_actions?: unknown;
 }
