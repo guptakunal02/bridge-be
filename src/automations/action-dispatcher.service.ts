@@ -30,12 +30,22 @@ export class ActionDispatcher {
     setAssignee: SetAssigneeHandler,
     setTeam: SetTeamHandler,
   ) {
+    // Keys are hard-coded strings instead of reading `handler.type`
+    // from the instance. The handlers participate in the
+    // AutomationsModule ↔ TicketsModule forwardRef cycle, so Nest
+    // may hand us the instance before its class-field initialisers
+    // have populated `.type`. Historical bug (2026-10-08, every
+    // automation silently no-op'd): "No handler for action.type=add_tag"
+    // logged for every single rule because the Map ended up with
+    // undefined keys. The strings here are the single source of
+    // truth and MUST stay in sync with the Action discriminant
+    // literals in action.ts.
     this.handlers = new Map<Action['type'], ActionHandler>([
-      [addTag.type, addTag as ActionHandler],
-      [removeTag.type, removeTag as ActionHandler],
-      [setStatus.type, setStatus as ActionHandler],
-      [setAssignee.type, setAssignee as ActionHandler],
-      [setTeam.type, setTeam as ActionHandler],
+      ['add_tag', addTag as ActionHandler],
+      ['remove_tag', removeTag as ActionHandler],
+      ['set_status', setStatus as ActionHandler],
+      ['set_assignee', setAssignee as ActionHandler],
+      ['set_team', setTeam as ActionHandler],
     ]);
   }
 
