@@ -42,12 +42,18 @@ export class AddTagHandler
       );
       return;
     }
+    const nextTags = [...ctx.ticket.tags, tag];
     try {
-      await this.tickets.update(
-        ctx.ticket.id,
-        { tags: [...ctx.ticket.tags, tag] },
-        sys,
-      );
+      await this.tickets.update(ctx.ticket.id, { tags: nextTags }, sys);
+      // Mutate the event-time snapshot so subsequent handlers in the
+      // same evaluation see the newly-added tag. Without this, two
+      // cases in the same rule that each add a DIFFERENT tag end up
+      // overwriting each other: each handler reads the original
+      // snapshot, computes `[...snapshot.tags, mytag]`, and calls
+      // update() with set-semantics — last call wins, previous tags
+      // get wiped. The snapshot object is per-emission scratch, not
+      // shared across requests, so this mutation is safe.
+      ctx.ticket.tags = nextTags;
     } catch (err) {
       this.logger.warn(
         `add_tag(${tag}) failed on ticket=${ctx.ticket.id}: ${

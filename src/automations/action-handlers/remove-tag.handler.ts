@@ -32,12 +32,13 @@ export class RemoveTagHandler
       );
       return;
     }
+    const nextTags = ctx.ticket.tags.filter((t) => t !== tag);
     try {
-      await this.tickets.update(
-        ctx.ticket.id,
-        { tags: ctx.ticket.tags.filter((t) => t !== tag) },
-        sys,
-      );
+      await this.tickets.update(ctx.ticket.id, { tags: nextTags }, sys);
+      // See AddTagHandler for the rationale — mutate the snapshot
+      // so subsequent handlers in the same evaluation see the
+      // removed tag reflected.
+      ctx.ticket.tags = nextTags;
     } catch (err) {
       this.logger.warn(
         `remove_tag(${tag}) failed on ticket=${ctx.ticket.id}: ${
