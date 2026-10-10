@@ -42,6 +42,7 @@ export interface CustomerOrder {
     quantity: number;
     priceLabel: string | null;
     imageUrl: string | null;
+    variantTitle: string | null;
   }>;
 }
 
@@ -221,11 +222,18 @@ type ShopifyLineItem = {
   name?: string;
   quantity?: number;
   price?: string;
+  // GraphQL: variantTitle (camel) on the line item, OR variant.title
+  // REST: variant_title (snake) on the line item
+  variantTitle?: string;
+  variant_title?: string;
   originalUnitPriceSet?: {
     shopMoney?: { amount?: string; currencyCode?: string };
   };
   image?: { url?: string; src?: string };
-  variant?: { image?: { url?: string; src?: string } };
+  variant?: {
+    title?: string;
+    image?: { url?: string; src?: string };
+  };
 };
 
 interface ShopifyRaw {
@@ -341,6 +349,17 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
       s.totalPriceSet?.shopMoney?.currencyCode ??
       s.currencyCode ??
       null;
+    // Variant lives in different fields across Shopify export shapes:
+    //   REST  → line_item.variant_title            (e.g. "XL")
+    //   GQL   → line_item.variantTitle             (e.g. "XL")
+    //   GQL   → line_item.variant.title            (e.g. "Pink Vinyl / XL")
+    // When a product has no real variants, Shopify emits the sentinel
+    // "Default Title" — strip that so the UI doesn't display noise.
+    const rawVariant = n.variantTitle ?? n.variant_title ?? n.variant?.title ?? null;
+    const variantTitle =
+      rawVariant && rawVariant.trim() && rawVariant.trim() !== 'Default Title'
+        ? rawVariant.trim()
+        : null;
     return {
       name: n.title ?? n.name ?? '(unnamed)',
       quantity: Number(n.quantity ?? 1),
@@ -353,6 +372,7 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
         n.image?.url ??
         n.image?.src ??
         null,
+      variantTitle,
     };
   });
 
