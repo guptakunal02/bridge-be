@@ -44,6 +44,14 @@ export interface CustomerOrder {
     imageUrl: string | null;
     variantTitle: string | null;
   }>;
+  // Pre-formatted "₹ 1000.00" labels so the FE renders a consistent
+  // money summary (shipping / tax / discount / total) without having
+  // to re-implement currency symbol + decimal logic. Null when the
+  // underlying Shopify payload didn't carry the field.
+  shippingLabel: string | null;
+  taxLabel: string | null;
+  discountLabel: string | null;
+  totalLabel: string | null;
 }
 
 export interface CustomerOrdersPage {
@@ -246,6 +254,23 @@ interface ShopifyRaw {
     shopMoney?: { amount?: string; currencyCode?: string };
   };
   total_price?: string;
+  // Money breakdown. Each is optional + nullable because old rows,
+  // partial Shopify payloads, and REST-vs-GraphQL export shapes all
+  // disagree on which fields are present.
+  totalShippingPriceSet?: {
+    shopMoney?: { amount?: string; currencyCode?: string };
+  };
+  total_shipping_price_set?: {
+    shop_money?: { amount?: string; currency_code?: string };
+  };
+  shipping_lines?: Array<{ price?: string }>;
+  totalTaxSet?: { shopMoney?: { amount?: string; currencyCode?: string } };
+  total_tax?: string;
+  totalDiscountsSet?: {
+    shopMoney?: { amount?: string; currencyCode?: string };
+  };
+  current_total_discounts?: string;
+  total_discounts?: string;
   displayFinancialStatus?: string;
   displayFulfillmentStatus?: string;
   financial_status?: string;
@@ -295,6 +320,41 @@ interface ShopifyFulfillment {
     number?: string;
     company?: string;
   }>;
+}
+
+const CURRENCY_SYMBOL: Record<string, string> = {
+  INR: '₹',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  AED: 'AED',
+};
+
+/**
+ * Format "1290" + "INR" → "₹ 1290.00". Falls back to raw currency
+ * code when we don't have a symbol mapping, and to `null` when the
+ * amount is missing/non-numeric so the FE can skip the row cleanly.
+ */
+function formatMoney(
+  amount: string | number | null | undefined,
+  currency: string | null | undefined,
+): string | null {
+  if (amount === null || amount === undefined || amount === '') return null;
+  const n = typeof amount === 'number' ? amount : Number(amount);
+  if (!Number.isFinite(n)) return null;
+  const fixed = n.toFixed(2);
+  const code = (currency ?? '').toUpperCase();
+  const sym = CURRENCY_SYMBOL[code] ?? code;
+  return sym ? `${sym} ${fixed}` : fixed;
+}
+
+/** Sum numeric strings; returns null if nothing summable. */
+function sumMoney(parts: Array<string | undefined>): string | null {
+  const nums = parts
+    .map((p) => (p === undefined ? NaN : Number(p)))
+    .filter((n) => Number.isFinite(n)) as number[];
+  if (nums.length === 0) return null;
+  return nums.reduce((a, b) => a + b, 0).toFixed(2);
 }
 
 function toCustomerOrder(row: OrdersRow): CustomerOrder {
@@ -363,9 +423,7 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
     return {
       name: n.title ?? n.name ?? '(unnamed)',
       quantity: Number(n.quantity ?? 1),
-      priceLabel: priceAmount
-        ? `${priceCurrency ?? ''} ${priceAmount}`.trim()
-        : null,
+      priceLabel: formatMoney(priceAmount, priceCurrency),
       imageUrl:
         n.variant?.image?.url ??
         n.variant?.image?.src ??
@@ -375,6 +433,26 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
       variantTitle,
     };
   });
+
+  // Money breakdown — pull from whichever Shopify shape this row
+  // was ingested with. All of these are optional on the raw payload.
+  const shippingAmount =
+    s.totalShippingPriceSet?.shopMoney?.amount ??
+    s.total_shipping_price_set?.shop_money?.amount ??
+    (s.shipping_lines && s.shipping_lines.length > 0
+      ? sumMoney(s.shipping_lines.map((l) => l.price))
+      : null);
+  const taxAmount = s.totalTaxSet?.shopMoney?.amount ?? s.total_tax ?? null;
+  const discountAmount =
+    s.totalDiscountsSet?.shopMoney?.amount ??
+    s.current_total_discounts ??
+    s.total_discounts ??
+    null;
+
+  const shippingLabel = formatMoney(shippingAmount, currency);
+  const taxLabel = formatMoney(taxAmount, currency);
+  const discountLabel = formatMoney(discountAmount, currency);
+  const totalLabel = formatMoney(totalAmount, currency);
 
   // Shopify's fulfillment carries the Surma-branded Clickpost URL
   // (Clickpost push-registers it on fulfillment creation). First
@@ -442,6 +520,10 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
     awb: row.awb,
     orderTags: tags,
     lineItems,
+    shippingLabel,
+    taxLabel,
+    discountLabel,
+    totalLabel,
   };
 }
 
