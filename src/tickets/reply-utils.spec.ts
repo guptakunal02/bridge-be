@@ -1,10 +1,10 @@
 import { normaliseAddressList, replySubject } from './reply-utils';
 
 describe('replySubject', () => {
-  it('falls back to "Support reply" for null / empty / whitespace', () => {
-    expect(replySubject(null)).toBe('Support reply');
-    expect(replySubject('')).toBe('Support reply');
-    expect(replySubject('   \t  ')).toBe('Support reply');
+  it('preserves empty subject for null / empty / whitespace (Gmail thread continuity)', () => {
+    expect(replySubject(null)).toBe('');
+    expect(replySubject('')).toBe('');
+    expect(replySubject('   \t  ')).toBe('');
   });
 
   it('prepends "Re: " to a fresh subject', () => {
@@ -39,9 +39,9 @@ describe('replySubject', () => {
     );
   });
 
-  it('falls back to "Support reply" when stripping empties the subject', () => {
-    expect(replySubject('Re:')).toBe('Support reply');
-    expect(replySubject('Re: Fwd: ')).toBe('Support reply');
+  it('preserves empty subject when stripping removes everything (Gmail thread continuity)', () => {
+    expect(replySubject('Re:')).toBe('');
+    expect(replySubject('Re: Fwd: ')).toBe('');
   });
 });
 

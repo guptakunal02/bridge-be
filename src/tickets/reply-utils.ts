@@ -16,18 +16,25 @@ const SUBJECT_PREFIX_RE =
 /**
  * Build the outbound Subject: strip any known reply/forward prefix
  * (iteratively — "Re: Fwd: Re: X" collapses to "Re: X") and prepend
- * a single "Re: ". Empty/null falls back to a neutral "Support
- * reply" so a stripped-to-empty subject doesn't hit strict MTAs.
+ * a single "Re: ". When the inbound subject is empty / null / just a
+ * stripped-away prefix, return "" rather than a synthetic fallback.
+ *
+ * Scar: a previous "Support reply" fallback hijacked Gmail threading
+ * — Gmail blends subject-similarity with Message-ID matching, and a
+ * jump from "(no subject)" to "Support reply" was enough to spawn a
+ * new thread even with correct In-Reply-To / References headers. See
+ * ticket #1207 (2026-10-10). An empty Subject matches the thread's
+ * canonical "(no subject)" and keeps continuity intact.
  */
 export function replySubject(original: string | null): string {
   const trimmed = (original ?? '').trim();
-  if (!trimmed) return 'Support reply';
+  if (!trimmed) return '';
   let stripped = trimmed;
   while (SUBJECT_PREFIX_RE.test(stripped)) {
     stripped = stripped.replace(SUBJECT_PREFIX_RE, '');
   }
   const body = stripped.trim();
-  return body ? `Re: ${body}` : 'Support reply';
+  return body ? `Re: ${body}` : '';
 }
 
 /**
