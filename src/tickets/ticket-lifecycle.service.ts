@@ -48,6 +48,21 @@ const SWEEP_ADVISORY_LOCK_KEY = 4726050001;
 const ONLINE_DRAIN_MAX = 50;
 
 /**
+ * How long an assignee must have been OFFLINE before auto-reopen
+ * falls the ticket back to the BOT queue instead of parking it in
+ * their personal pile. Short absences (lunch, meeting-run-over,
+ * dropped VPN) keep the original ownership so the member's "I'll
+ * come back to this at X" contract isn't broken. Longer than this
+ * threshold = probably off-shift or on leave; the customer must not
+ * be ghosted while we wait for them.
+ *
+ * Non-OFFLINE statuses (MEETING / BREAK / EMERGENCY) never trigger
+ * fallback — the member is at work, just temporarily unavailable;
+ * they'll clear their queue soon.
+ */
+const REOPEN_OFFLINE_FALLBACK_MS = 4 * 60 * 60 * 1000;
+
+/**
  * Owns the automated lifecycle transitions that aren't triggered
  * directly by an agent's PATCH:
  *
@@ -109,9 +124,17 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Auto-resolve WAITING tickets whose timer elapsed. IN_FOLLOWUP is
-   * intentionally left alone — the capacity hook wakes those on
-   * demand.
+   * Auto-resolve or auto-reopen WAITING tickets whose timer elapsed.
+   * IN_FOLLOWUP is intentionally left alone — the capacity hook
+   * wakes those on demand.
+   *
+   * Auto-reopen with presence check: if the original assignee is
+   * ONLINE (or MEETING/BREAK/EMERGENCY — present but busy) the
+   * ticket stays with them, preserving the member's "I'll follow up
+   * at X" contract. If they've been OFFLINE for longer than
+   * REOPEN_OFFLINE_FALLBACK_MS, the ticket is re-queued to BOT so
+   * `pullFromBotQueue` can route it to a live teammate (prevents
+   * customer ghosting when a member is off-shift / on leave).
    *
    * Runs behind a session-scoped advisory lock so only ONE worker
    * sweeps per tick; the others try, fail to acquire, and go back to
@@ -172,7 +195,68 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
             .whereInIds(toResolve.map((t) => t.id))
             .execute();
         }
-        if (toReopen.length > 0) {
+        // Presence check for the REOPEN branch. Load every unique
+        // assignee referenced by the ripe set in one query — bounded
+        // by SWEEP_BATCH (200) so this is cheap. We only need the
+        // status + status_changed_at columns.
+        const assigneeIds = Array.from(
+          new Set(
+            toReopen
+              .map((t) => t.assignee)
+              .filter((id): id is string => Boolean(id)),
+          ),
+        );
+        const assigneeRecords =
+          assigneeIds.length > 0
+            ? await mgr.getRepository(User).find({
+                where: assigneeIds.map((id) => ({ id })),
+                select: { id: true, status: true, status_changed_at: true },
+              })
+            : [];
+        const assigneeById = new Map(
+          assigneeRecords.map((u) => [u.id, u] as const),
+        );
+
+        const offlineCutoff = Date.now() - REOPEN_OFFLINE_FALLBACK_MS;
+        const shouldFallbackToBot = (t: Ticket): boolean => {
+          // No assignee at all → always re-queue (defensive; a
+          // WAITING ticket shouldn't normally be unassigned).
+          if (!t.assignee) return true;
+          const user = assigneeById.get(t.assignee);
+          // Assignee deleted / not in cache → re-queue so we don't
+          // orphan the ticket on a dead ID.
+          if (!user) return true;
+          // Member is at work (ONLINE / MEETING / BREAK / EMERGENCY)
+          // — keep ownership. They'll clear it when free.
+          if (user.status !== UserStatus.OFFLINE) return false;
+          // OFFLINE but recent: lunch, outage, meeting-run-over.
+          // Keep the ticket with them; they're likely back soon.
+          return user.status_changed_at.getTime() <= offlineCutoff;
+        };
+
+        const toReopenKeep = toReopen.filter((t) => !shouldFallbackToBot(t));
+        const toReopenToBot = toReopen.filter(shouldFallbackToBot);
+
+        // Fallback cases need the BOT user id. Load lazily — if
+        // nothing's falling back this sweep, don't bother.
+        let botId: string | null = null;
+        if (toReopenToBot.length > 0) {
+          const bot = await mgr
+            .getRepository(User)
+            .findOne({ where: { role: UserRole.BOT } });
+          botId = bot?.id ?? null;
+          if (!botId) {
+            // No BOT user configured — surface it as a warning and
+            // keep the fallback tickets with their original owner
+            // (safer than nulling them out). Admin needs to seed a
+            // BOT user; see UsersService.ensureBotUser.
+            this.logger.warn(
+              `Auto-reopen fallback skipped for ${toReopenToBot.length} ticket(s): no BOT user found`,
+            );
+          }
+        }
+
+        if (toReopenKeep.length > 0) {
           await ticketRepo
             .createQueryBuilder()
             .update()
@@ -181,14 +265,34 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
               resume_at: null,
               waiting_action: null,
             })
-            .whereInIds(toReopen.map((t) => t.id))
+            .whereInIds(toReopenKeep.map((t) => t.id))
+            .execute();
+        }
+        if (toReopenToBot.length > 0) {
+          await ticketRepo
+            .createQueryBuilder()
+            .update()
+            .set({
+              status: TicketStatus.OPEN,
+              resume_at: null,
+              waiting_action: null,
+              // If BOT user is missing we fall back to keeping the
+              // original assignee (botId stays null → NOOP on this
+              // column via the conditional). TypeORM's .set() with
+              // undefined would exclude the column; null would clobber
+              // it. We only clobber when we actually have a BOT id.
+              ...(botId ? { assignee: botId } : {}),
+            })
+            .whereInIds(toReopenToBot.map((t) => t.id))
             .execute();
         }
 
         // Activity log entries — one per ticket, actor NULL means
         // "system." REOPEN branch uses REOPENED to match customer-
         // triggered reopens semantically; the free-text log field
-        // disambiguates that this was the timer firing.
+        // disambiguates that this was the timer firing. Fallback
+        // tickets additionally get an ASSIGNED_TO_BOT entry so the
+        // audit trail shows where ownership moved and why.
         await logRepo.save([
           ...toResolve.map((t) => ({
             ticket_id: t.id,
@@ -202,6 +306,14 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
             actor_id: null,
             log: 'Auto-reopened — waiting period elapsed with no customer reply',
           })),
+          ...(botId
+            ? toReopenToBot.map((t) => ({
+                ticket_id: t.id,
+                event: TicketActivity.ASSIGNED_TO_BOT,
+                actor_id: null,
+                log: 'Re-queued on reopen — original assignee offline',
+              }))
+            : []),
         ]);
         return ripeWaiting.length;
       });
