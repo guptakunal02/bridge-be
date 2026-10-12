@@ -329,7 +329,18 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   /**
    * Customer just replied on this ticket. WAITING is exactly the
    * state that gets unblocked by a customer reply — flip it back
-   * to OPEN and drop the timer. Assignee unchanged.
+   * to OPEN and drop the timer.
+   *
+   * Presence-aware ownership: this is an UNCHOSEN reopen (customer
+   * forced the moment, not the member), so if the original assignee
+   * isn't ONLINE right now, re-queue to BOT in the same team so an
+   * available teammate can pick it up via the normal capacity-
+   * backfill path. MEETING / BREAK / EMERGENCY / OFFLINE all
+   * re-queue — only ONLINE counts as assignable here (see
+   * memory/feedback-auto-reopen-fallback.md). Presence alone — no
+   * bandwidth check. Distinct from the timer-based sweep which uses
+   * a looser OFFLINE-only / 4h cutoff because the member explicitly
+   * chose that re-engagement time.
    *
    * IN_FOLLOWUP is DELIBERATELY not woken here. Followup means "we
    * told the customer we'd come back to them at a specific time";
@@ -352,20 +363,55 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   async wakeIfPaused(ticketId: string, mgr: EntityManager): Promise<void> {
     const ticketRepo = mgr.getRepository(Ticket);
     const logRepo = mgr.getRepository(TicketActivityLog);
+    const userRepo = mgr.getRepository(User);
 
-    // Fetch just the current status for the log message; the write
-    // is conditional so we don't need the whole row locked.
+    // Fetch status + current assignee in one read so we can decide
+    // the fallback without a second round-trip.
     const ticket = await ticketRepo.findOne({
       where: { id: ticketId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, assignee: true },
     });
     if (!ticket) return;
     if (ticket.status !== TicketStatus.WAITING) return;
 
+    // Presence check — same model as reopenResolved. Re-queue when
+    // the real-user assignee isn't ONLINE; BOT-assigned tickets stay
+    // on BOT (nothing to reroute).
+    let fallbackBotId: string | null = null;
+    let fallbackFromStatus: UserStatus | 'DELETED' | null = null;
+    if (ticket.assignee) {
+      const assignee = await userRepo.findOne({
+        where: { id: ticket.assignee },
+        select: { id: true, status: true, role: true },
+      });
+      const shouldFallback =
+        !assignee ||
+        (assignee.role !== UserRole.BOT &&
+          assignee.status !== UserStatus.ONLINE);
+      if (shouldFallback) {
+        const bot = await userRepo.findOne({
+          where: { role: UserRole.BOT },
+        });
+        if (bot) {
+          fallbackBotId = bot.id;
+          fallbackFromStatus = assignee?.status ?? 'DELETED';
+        } else {
+          this.logger.warn(
+            `wakeIfPaused fallback skipped for ticket=${ticketId}: no BOT user found`,
+          );
+        }
+      }
+    }
+
     const result = await ticketRepo
       .createQueryBuilder()
       .update()
-      .set({ status: TicketStatus.OPEN, resume_at: null, waiting_action: null })
+      .set({
+        status: TicketStatus.OPEN,
+        resume_at: null,
+        waiting_action: null,
+        ...(fallbackBotId ? { assignee: fallbackBotId } : {}),
+      })
       .where('id = :id', { id: ticketId })
       .andWhere('status = :s', { s: TicketStatus.WAITING })
       .execute();
@@ -381,6 +427,14 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         actor_id: null,
         log: 'Auto-woken from WAITING — customer replied',
       });
+      if (fallbackBotId) {
+        await logRepo.save({
+          ticket_id: ticketId,
+          event: TicketActivity.ASSIGNED_TO_BOT,
+          actor_id: null,
+          log: `Re-queued on wake — original assignee not ONLINE (${fallbackFromStatus})`,
+        });
+      }
     }
   }
 

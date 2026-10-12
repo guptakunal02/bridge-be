@@ -14,6 +14,7 @@ import {
   TicketActivity,
   TicketStatus,
   UserRole,
+  UserStatus,
 } from '../database/enums';
 import { RoutingService } from '../rules/routing.service';
 import { AppSettingsService } from '../settings/app-settings.service';
@@ -26,10 +27,7 @@ import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entit
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
 import { User } from '../users/entities/user.entity';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
-import type {
-  IngestEmailAttachment,
-  IngestEmailInbox,
-} from './dto/req.dto';
+import type { IngestEmailAttachment, IngestEmailInbox } from './dto/req.dto';
 import { EmailMessage } from './entities/email-message.entity';
 import { EmailMessageAttachment } from './entities/email-message-attachment.entity';
 import { EmailMessageRepository } from './providers/email-message.repository';
@@ -152,8 +150,8 @@ export class EmailInboxService {
     // Non-null only when we just created a fresh ticket AND the
     // picker landed on a human agent. When it's null, no drain runs.
     let pickedAssigneeId: string | null = null;
-    const { message, ticket, wasNewTicket, reopenedFromResolved } = await this.dataSource.transaction(
-      async (mgr) => {
+    const { message, ticket, wasNewTicket, reopenedFromResolved } =
+      await this.dataSource.transaction(async (mgr) => {
         const threadKey = req.external_message_id;
         const ticketRepo = mgr.getRepository(Ticket);
         const logRepo = mgr.getRepository(TicketActivityLog);
@@ -395,8 +393,7 @@ export class EmailInboxService {
           wasNewTicket: isNew,
           reopenedFromResolved,
         };
-      },
-    );
+      });
 
     // Fire automation events post-commit, pre-bot. Fire-and-forget;
     // the engine queues via EventEmitter2 so slow / failing rules
@@ -702,6 +699,15 @@ export class EmailInboxService {
    * (resolve → reopen → resolve → reopen) keeps working, and logs
    * a REOPENED activity entry for the audit trail.
    *
+   * Presence-aware ownership: this is an UNCHOSEN reopen (customer
+   * forced the moment, not the member), so if the original assignee
+   * isn't ONLINE right now, park the ticket back on BOT in the SAME
+   * team so an available teammate can pick it up via the normal
+   * capacity-backfill path. MEETING / BREAK / EMERGENCY / OFFLINE
+   * all re-queue — matches the user's model that only ONLINE counts
+   * as assignable here (see memory/feedback-auto-reopen-fallback.md).
+   * No bandwidth check — presence alone decides.
+   *
    * Conditional UPDATE on status = RESOLVED — if the row already
    * flipped away in a race (unlikely since the caller holds a row
    * lock, but cheap defense), the write is a no-op and we skip the
@@ -714,6 +720,44 @@ export class EmailInboxService {
   ): Promise<boolean> {
     const ticketRepo = mgr.getRepository(Ticket);
     const logRepo = mgr.getRepository(TicketActivityLog);
+    const userRepo = mgr.getRepository(User);
+
+    // Decide fallback based on the ticket's current assignee presence.
+    // We only re-queue when there's a real-user assignee who isn't
+    // ONLINE; BOT-assigned tickets stay on BOT (nothing to reroute),
+    // and ONLINE assignees keep ownership (she can respond now).
+    const ticket = await ticketRepo.findOne({
+      where: { id: ticketId },
+      select: { id: true, assignee: true },
+    });
+    let fallbackBotId: string | null = null;
+    let fallbackFromStatus: UserStatus | 'DELETED' | null = null;
+    if (ticket?.assignee) {
+      const assignee = await userRepo.findOne({
+        where: { id: ticket.assignee },
+        select: { id: true, status: true, role: true },
+      });
+      const shouldFallback =
+        !assignee || // deleted user → re-queue
+        (assignee.role !== UserRole.BOT &&
+          assignee.status !== UserStatus.ONLINE);
+      if (shouldFallback) {
+        const bot = await userRepo.findOne({
+          where: { role: UserRole.BOT },
+        });
+        if (bot) {
+          fallbackBotId = bot.id;
+          fallbackFromStatus = assignee?.status ?? 'DELETED';
+        } else {
+          // No BOT seeded → keep original assignee + warn. Prevents
+          // orphaning the ticket on an unassignable id.
+          this.logger.warn(
+            `reopenResolved fallback skipped for ticket=${ticketId}: no BOT user found`,
+          );
+        }
+      }
+    }
+
     const result = await ticketRepo
       .createQueryBuilder()
       .update()
@@ -721,6 +765,11 @@ export class EmailInboxService {
         status: TicketStatus.OPEN,
         is_reopened: true,
         resolved_at: null,
+        // TypeORM: `undefined` excludes the column from the SET list;
+        // use spread so we only touch assignee when we actually have
+        // a BOT id to swap to. team_id intentionally untouched — the
+        // re-queue lands in the SAME team's BOT pool.
+        ...(fallbackBotId ? { assignee: fallbackBotId } : {}),
       })
       .where('id = :id', { id: ticketId })
       .andWhere('status = :resolved', { resolved: TicketStatus.RESOLVED })
@@ -733,6 +782,14 @@ export class EmailInboxService {
         actor_id: null,
         log: 'Auto-reopened — customer replied within the reopen window',
       });
+      if (fallbackBotId) {
+        await logRepo.save({
+          ticket_id: ticketId,
+          event: TicketActivity.ASSIGNED_TO_BOT,
+          actor_id: null,
+          log: `Re-queued on reopen — original assignee not ONLINE (${fallbackFromStatus})`,
+        });
+      }
     }
     return affected > 0;
   }
@@ -777,8 +834,7 @@ export class EmailInboxService {
       latestCustomerMessageAt: new Date(),
     };
     const routed = await this.router.routeFacts(facts, mgr);
-    const nextTeamId =
-      routed?.teamId ?? (await this.teams.getDefault()).id;
+    const nextTeamId = routed?.teamId ?? (await this.teams.getDefault()).id;
     if (nextTeamId === ticket.team_id) return;
 
     // Log first so the sequence reads "customer message → reroute"
