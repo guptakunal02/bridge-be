@@ -18,6 +18,7 @@ import { User } from '../users/entities/user.entity';
 import {
   PRESENCE_EVENTS,
   type PresenceCameOnlineEvent,
+  type PresenceWentEmergencyEvent,
 } from '../users/presence.service';
 import { Ticket } from './entities/ticket.entity';
 import { TicketActivityLog } from './entities/ticket-activity-log.entity';
@@ -491,6 +492,84 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
     if (drained > 0) {
       this.logger.log(
         `Drained ${drained} ticket(s) to user=${payload.userId} on Online transition`,
+      );
+    }
+  }
+
+  /**
+   * Agent just flipped to EMERGENCY. Bounce every OPEN ticket they
+   * own back to the BOT queue in the SAME team so a live teammate
+   * can pick them up via the normal capacity-backfill path. The
+   * enum docstring at database/enums.ts has always promised this
+   * behaviour; nothing wired it up until the WENT_EMERGENCY event
+   * was added.
+   *
+   * Scope — only OPEN tickets:
+   *   * WAITING / IN_FOLLOWUP intentionally stay — they'll reopen on
+   *     the member's timer, and the wake / reopen paths already have
+   *     presence-aware fallbacks (ONLINE-only, re-queue if not).
+   *   * BOT-assigned tickets are already in the queue — skipped by
+   *     the assignee filter.
+   *
+   * Best-effort: swallows errors internally so a DB blip here doesn't
+   * surface on an already-committed status change in the caller.
+   */
+  @OnEvent(PRESENCE_EVENTS.WENT_EMERGENCY)
+  async bounceOnEmergency(
+    payload: PresenceWentEmergencyEvent,
+  ): Promise<void> {
+    try {
+      await this.dataSource.transaction(async (mgr) => {
+        const ticketRepo = mgr.getRepository(Ticket);
+        const userRepo = mgr.getRepository(User);
+        const logRepo = mgr.getRepository(TicketActivityLog);
+
+        const openTickets = await ticketRepo
+          .createQueryBuilder('t')
+          .where('t.assignee = :userId', { userId: payload.userId })
+          .andWhere('t.status = :s', { s: TicketStatus.OPEN })
+          .andWhere('t."deletedAt" IS NULL')
+          .select(['t.id'])
+          .getMany();
+        if (openTickets.length === 0) return;
+
+        const bot = await userRepo.findOne({
+          where: { role: UserRole.BOT },
+        });
+        if (!bot) {
+          // Keep the status change but surface the warning so admin
+          // can seed the BOT user. Prevents orphaning on a dead id.
+          this.logger.warn(
+            `EMERGENCY bounce skipped for user=${payload.userId}: no BOT user found`,
+          );
+          return;
+        }
+
+        await ticketRepo
+          .createQueryBuilder()
+          .update()
+          .set({ assignee: bot.id })
+          .whereInIds(openTickets.map((t) => t.id))
+          .execute();
+
+        await logRepo.save(
+          openTickets.map((t) => ({
+            ticket_id: t.id,
+            event: TicketActivity.ASSIGNED_TO_BOT,
+            actor_id: null,
+            log: 'Re-queued — assignee set status to EMERGENCY',
+          })),
+        );
+
+        this.logger.log(
+          `Bounced ${openTickets.length} OPEN ticket(s) off user=${payload.userId} on EMERGENCY transition`,
+        );
+      });
+    } catch (err) {
+      this.logger.warn(
+        `EMERGENCY bounce failed for user=${payload.userId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
       );
     }
   }

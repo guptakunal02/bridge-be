@@ -13,9 +13,15 @@ import { User } from './entities/user.entity';
 export const PRESENCE_EVENTS = {
   /** Emitted only when the user transitioned to ONLINE from a non-ONLINE state. */
   CAME_ONLINE: 'presence.came_online',
+  /** Emitted only when the user transitioned to EMERGENCY from a non-EMERGENCY state. */
+  WENT_EMERGENCY: 'presence.went_emergency',
 } as const;
 
 export interface PresenceCameOnlineEvent {
+  userId: string;
+}
+
+export interface PresenceWentEmergencyEvent {
   userId: string;
 }
 
@@ -43,11 +49,13 @@ export class PresenceService {
   ) {}
 
   async setStatus(userId: string, next: UserStatus): Promise<User> {
-    // Read the previous status first so we can detect the ONLINE
-    // transition after the write. Skipping this if next !== ONLINE
-    // (we only care about the flip TO online).
+    // Read the previous status first so we can detect transitions.
+    // Only reads when the destination is ONLINE or EMERGENCY — the
+    // two states that trigger downstream work. For other destinations
+    // (MEETING / BREAK / OFFLINE) the extra round-trip would be
+    // wasted so we skip it.
     const prev =
-      next === UserStatus.ONLINE
+      next === UserStatus.ONLINE || next === UserStatus.EMERGENCY
         ? await this.users.findOne({
             where: { id: userId },
             select: { id: true, status: true },
@@ -71,6 +79,20 @@ export class PresenceService {
     ) {
       const payload: PresenceCameOnlineEvent = { userId };
       this.events.emit(PRESENCE_EVENTS.CAME_ONLINE, payload);
+    }
+
+    // Fire the "went emergency" event on the actual transition.
+    // Subscribers (TicketLifecycleService) will re-queue the user's
+    // OPEN tickets to BOT so another live teammate can pick them up —
+    // the behaviour the enum docstring at database/enums.ts promises
+    // but was never implemented until now.
+    if (
+      next === UserStatus.EMERGENCY &&
+      prev &&
+      prev.status !== UserStatus.EMERGENCY
+    ) {
+      const payload: PresenceWentEmergencyEvent = { userId };
+      this.events.emit(PRESENCE_EVENTS.WENT_EMERGENCY, payload);
     }
 
     return this.users.findOneOrFail({ where: { id: userId } });
