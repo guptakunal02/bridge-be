@@ -245,10 +245,30 @@ export class EmailInboxService {
         const isNew = !ticket;
 
         // Reply to an existing paused ticket → wake it now so the
-        // status is OPEN by the time this txn commits. Assignee
-        // unchanged; timer cleared.
+        // status is OPEN by the time this txn commits. Timer cleared.
+        // Assignee MAY be re-queued to BOT (presence fallback —
+        // see TicketLifecycleService.wakeIfPaused), so we refresh
+        // the in-memory ticket before any downstream code reads
+        // its assignee. The downstream rerouteOnCustomerMessage
+        // uses ticket.assignee to decide whether the owner follows
+        // a team move; a stale read silently restored the pre-wake
+        // owner and nullified the fallback. See ticket #1351
+        // (2026-10-13). The reopenResolved branch above already
+        // refreshes at line :237 — this is the sibling fix.
         if (ticket) {
           await this.lifecycle.wakeIfPaused(ticket.id, mgr);
+          const refreshed = await ticketRepo.findOne({
+            where: { id: ticket.id },
+          });
+          if (!refreshed) {
+            // Impossible under the surrounding row lock; defensive
+            // so a vanished row surfaces as an error rather than
+            // silently corrupting the reroute decision.
+            throw new Error(
+              `Ticket ${ticket.id} vanished after wakeIfPaused`,
+            );
+          }
+          ticket = refreshed;
         }
 
         if (!ticket) {
