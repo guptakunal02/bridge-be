@@ -180,7 +180,13 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           .limit(SWEEP_BATCH)
           .getMany();
 
-        if (ripeWaiting.length === 0) return 0;
+        // Fall through even when WAITING is empty — the IN_FOLLOWUP
+        // branch below still needs to run. Earlier revisions bailed
+        // here with `if (ripeWaiting.length === 0) return 0;` which
+        // short-circuited the followup processing entirely when the
+        // only ripe timer in the DB was an IN_FOLLOWUP ticket. See
+        // ticket #1436 (2026-10-14) — a solo ripe followup never
+        // got swept because no WAITING tickets were ripe alongside.
 
         // Split by waiting_action so we issue at most two UPDATEs per
         // batch (one per branch) instead of one per ticket.
