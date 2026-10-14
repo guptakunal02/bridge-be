@@ -263,6 +263,43 @@ describe('splitBody — HTML', () => {
     expect(out.quotedContentHtml).toBeNull();
   });
 
+  it('[regression #1432] falls back to full HTML when the splitter over-matches and newContentHtml is empty', () => {
+    // Real-shape capture: iPhone Mail reply whose entire visible
+    // body (customer's actual words AND the inline images from the
+    // quoted order confirmation they're pointing at) sits BELOW the
+    // gmail_quote boundary. Pre-fix, our DOM splitter put everything
+    // in `quotedHtml` and left `newContentHtml` empty — the FE
+    // then rendered the plain-text branch, where image-cid refs
+    // show as "[image: image.png]" placeholders. See the ticket for
+    // the Gmail-vs-Bridge screenshots.
+    const html = [
+      '<div class="gmail_quote">',
+      '<p>Hi Sheryl, in reference to this order…</p>',
+      '<img src="https://cdn.example.com/product.jpg" alt="product">',
+      '</div>',
+    ].join('');
+    const text =
+      'Hi Sheryl, in reference to this order…\n[image: product.jpg]';
+    const out = splitBody(text, html, []);
+    // Fallback: the FE should get the full HTML back so the iframe
+    // renders the image inline instead of the text placeholder.
+    expect(out.newContentHtml).toBe(html);
+    expect(out.quotedContentHtml).toBeNull();
+  });
+
+  it('does NOT trigger the fallback when the splitter leaves substantive newContentHtml', () => {
+    // Confirms the fallback is scoped to "splitter produced empty new"
+    // and doesn't swallow genuine quote splits.
+    const html = [
+      '<p>Fresh reply from me.</p>',
+      '<div class="gmail_quote">quoted history</div>',
+    ].join('');
+    const out = splitBody('', html, []);
+    expect(out.newContentHtml).toContain('Fresh reply from me');
+    expect(out.newContentHtml).not.toContain('gmail_quote');
+    expect(out.quotedContentHtml).toContain('gmail_quote');
+  });
+
   it('splits short-new + long-blockquote (the #556 case)', () => {
     // Reply body: ~200 chars of new content followed by 3000+ chars
     // of quoted history in a bare blockquote. Real replies that

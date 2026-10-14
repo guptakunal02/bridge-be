@@ -117,13 +117,34 @@ export function splitBody(
     quotedContent: textSplit ? textSplit.quotedText : null,
     quotedContentHtml: htmlSplit.quotedHtml,
   };
-  // Safety net: if newContent still contains a prior body verbatim,
+  // Safety net 1: if newContent still contains a prior body verbatim,
   // our split missed the mark. Rather than silently showing the
   // agent a mixed new+quoted blob, fall back to "everything is
   // fresh" so no content is hidden. Better to over-show than
   // under-show — the "Show earlier messages" toggle disappears
   // for this message, and the agent sees the full body inline.
   if (containsPriorContent(result.newContent, priorBodies)) {
+    return {
+      newContent: text,
+      newContentHtml: html,
+      quotedContent: null,
+      quotedContentHtml: null,
+    };
+  }
+  // Safety net 2: HTML quote splitter over-matched — the entire HTML
+  // was swallowed into the "quoted" bucket, leaving newContentHtml
+  // empty. The FE's `{newContentHtml ? iframe : plainText}` branch
+  // then falls through to the plain-text version, where email
+  // clients (iPhone Mail, Gmail Mobile) render inline images as
+  // "[image: image.png]" placeholder text. Agent sees text
+  // placeholders instead of the images that Gmail happily shows
+  // from the HTML. Fall back to the full HTML so the iframe renders
+  // what the sender actually sent. See ticket #1432 (2026-10-14).
+  if (
+    html &&
+    html.trim().length > 0 &&
+    (!result.newContentHtml || result.newContentHtml.trim().length === 0)
+  ) {
     return {
       newContent: text,
       newContentHtml: html,
