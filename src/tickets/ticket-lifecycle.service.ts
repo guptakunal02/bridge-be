@@ -580,6 +580,21 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   ): Promise<boolean> {
     const ticketRepo = mgr.getRepository(Ticket);
     const logRepo = mgr.getRepository(TicketActivityLog);
+    const userRepo = mgr.getRepository(User);
+
+    // Presence gate — mirrors pullFromBotQueue:552. onCapacityFreed
+    // doesn't check presence itself (it fires on any action that
+    // moves one of the agent's tickets off OPEN, including admins /
+    // automations / the sweep resolving a ticket owned by an
+    // offline member), so without this check a followup ticket
+    // would wake onto an offline agent. The agent is unreachable;
+    // the customer waits; nobody picks it up. The ticket just
+    // stays IN_FOLLOWUP until the agent comes back online — at
+    // which point drainOnCameOnline → onCapacityFreed → this
+    // method runs again and wakes it onto them. See ticket #1357
+    // (2026-10-14).
+    const user = await userRepo.findOne({ where: { id: userId } });
+    if (!user || user.status !== UserStatus.ONLINE) return false;
 
     const ripe = await ticketRepo
       .createQueryBuilder('t')
