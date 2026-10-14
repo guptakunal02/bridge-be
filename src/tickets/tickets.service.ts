@@ -31,6 +31,7 @@ import { EmailMessageAttachment } from '../email-inbox/entities/email-message-at
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
+import { loadBot } from '../users/presence-helpers';
 import { PresenceService } from '../users/presence.service';
 import type { ListTicketsQuery, TicketScope } from './dto/list-tickets.dto';
 import type { CreateTicketNoteDto } from './dto/create-ticket-note.dto';
@@ -243,7 +244,7 @@ export class TicketsService {
     activeOnMe: number;
     resolvedTodayByMe: number;
   }> {
-    const bot = await this.users.findOne({ where: { role: UserRole.BOT } });
+    const bot = await loadBot(this.users);
     const botId = bot?.id ?? null;
 
     // Scope by team_member: caller only counts BOT-parked tickets in
@@ -1246,7 +1247,7 @@ export class TicketsService {
       return;
     }
     if (scope === 'unassigned') {
-      const bot = await this.users.findOne({ where: { role: UserRole.BOT } });
+      const bot = await loadBot(this.users);
       if (!bot) {
         // No bot seeded means no ticket can be "unassigned" under this model.
         qb.andWhere('1 = 0');

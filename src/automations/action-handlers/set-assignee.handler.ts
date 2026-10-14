@@ -1,8 +1,8 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { UserRole } from '../../database/enums';
 import { User } from '../../users/entities/user.entity';
+import { loadBot } from '../../users/presence-helpers';
 import { TicketsService } from '../../tickets/tickets.service';
 import type { Action, ActionHandler } from '../action';
 import { AutomationSystemActor } from '../automation-system-actor';
@@ -35,7 +35,7 @@ export class SetAssigneeHandler
     let targetId: string | null = action.userId;
 
     if (targetId === null) {
-      const bot = await this.users.findOne({ where: { role: UserRole.BOT } });
+      const bot = await loadBot(this.users);
       if (!bot) {
         this.logger.warn(
           `set_assignee(null) skipped on ticket=${ctx.ticket.id}: no BOT user`,

@@ -26,6 +26,7 @@ import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
 import { User } from '../users/entities/user.entity';
+import { isAssignable, loadBot } from '../users/presence-helpers';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
 import type { IngestEmailAttachment, IngestEmailInbox } from './dto/req.dto';
 import { EmailMessage } from './entities/email-message.entity';
@@ -328,9 +329,16 @@ export class EmailInboxService {
               mgr,
             );
           }
-          const bot = await userRepo.findOneOrFail({
-            where: { role: UserRole.BOT },
-          });
+          // New-ticket initial assignee is always BOT — the picker
+          // decides the real human target, but the ticket is parked
+          // on BOT so the drain loop can pull FIFO. loadBot() returns
+          // null if missing; a missing BOT at ticket-mint time is a
+          // deployment misconfiguration we can't recover from, so
+          // throw a loud error (findOneOrFail-equivalent).
+          const bot = await loadBot(mgr);
+          if (!bot) {
+            throw new Error('BOT user not seeded — cannot mint ticket');
+          }
           const initialAssigneeId = bot.id;
           ticket = await ticketRepo.save(
             ticketRepo.create({
@@ -757,20 +765,22 @@ export class EmailInboxService {
         where: { id: ticket.assignee },
         select: { id: true, status: true, role: true },
       });
-      const shouldFallback =
-        !assignee || // deleted user → re-queue
-        (assignee.role !== UserRole.BOT &&
-          assignee.status !== UserStatus.ONLINE);
-      if (shouldFallback) {
-        const bot = await userRepo.findOne({
-          where: { role: UserRole.BOT },
-        });
+      // Capture status up front — isAssignable narrows `assignee`
+      // away in the else-branch so a `.status` access after would
+      // not type-check.
+      const previousStatus: UserStatus | 'DELETED' =
+        assignee?.status ?? 'DELETED';
+      // Shared ONLINE-only policy. Skip the fallback when the current
+      // assignee is BOT — the ticket is already in the queue; there's
+      // nothing to reroute. Everything else (not ONLINE, deactivated,
+      // deleted) → re-queue.
+      const assigneeIsBot = assignee?.role === UserRole.BOT;
+      if (!assigneeIsBot && !isAssignable(assignee)) {
+        const bot = await loadBot(mgr);
         if (bot) {
           fallbackBotId = bot.id;
-          fallbackFromStatus = assignee?.status ?? 'DELETED';
+          fallbackFromStatus = previousStatus;
         } else {
-          // No BOT seeded → keep original assignee + warn. Prevents
-          // orphaning the ticket on an unassignable id.
           this.logger.warn(
             `reopenResolved fallback skipped for ticket=${ticketId}: no BOT user found`,
           );
@@ -886,9 +896,10 @@ export class EmailInboxService {
         where: { team_id: nextTeamId, user_id: ticket.assignee },
       });
       if (!stillMember) {
-        const bot = await mgr
-          .getRepository(User)
-          .findOneOrFail({ where: { role: UserRole.BOT } });
+        const bot = await loadBot(mgr);
+        if (!bot) {
+          throw new Error('BOT user not seeded — cannot reroute to BOT queue');
+        }
         nextAssignee = bot.id;
       }
     }

@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { UserRole } from '../database/enums';
 import { User } from '../users/entities/user.entity';
+import { loadBot } from '../users/presence-helpers';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 
 /**
@@ -25,7 +25,7 @@ export class AutomationSystemActor {
 
   async resolve(): Promise<AuthenticatedUser | null> {
     if (this.cached) return this.cached;
-    const bot = await this.users.findOne({ where: { role: UserRole.BOT } });
+    const bot = await loadBot(this.users);
     if (!bot) return null;
     this.cached = {
       id: bot.id,

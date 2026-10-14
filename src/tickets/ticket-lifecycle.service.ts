@@ -15,6 +15,7 @@ import {
   WaitingAction,
 } from '../database/enums';
 import { User } from '../users/entities/user.entity';
+import { isAssignable, loadBot } from '../users/presence-helpers';
 import {
   PRESENCE_EVENTS,
   type PresenceCameOnlineEvent,
@@ -221,43 +222,24 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           assigneeRecords.map((u) => [u.id, u] as const),
         );
 
-        const shouldFallbackToBot = (t: Ticket): boolean => {
-          // No assignee at all → always re-queue (defensive; a
-          // WAITING ticket shouldn't normally be unassigned).
-          if (!t.assignee) return true;
-          const user = assigneeById.get(t.assignee);
-          // Assignee deleted / not in cache → re-queue so we don't
-          // orphan the ticket on a dead ID.
-          if (!user) return true;
-          // ONLINE-only. Any other state (MEETING / BREAK /
-          // EMERGENCY / OFFLINE) → re-queue so a live teammate can
-          // pick it up via BOT backfill. Policy matches the
-          // IN_FOLLOWUP sweep branch below and the two customer-
-          // reply reopen paths (wakeIfPaused, reopenResolved) —
-          // consistency across every "ticket needs a live owner
-          // right now" moment. Was previously OFFLINE-only with a
-          // 4h grace; the grace left tickets ghosted on members
-          // who were on short-term break and never saw the reopen.
-          // See ticket #1438 (2026-10-14).
-          return user.status !== UserStatus.ONLINE;
-        };
+        // Shared ONLINE-only policy across every reopen / wake path —
+        // see memory/feedback-auto-reopen-fallback.md and
+        // src/users/presence-helpers.ts.
+        const shouldFallbackToBot = (t: Ticket): boolean =>
+          !t.assignee || !isAssignable(assigneeById.get(t.assignee));
 
         const toReopenKeep = toReopen.filter((t) => !shouldFallbackToBot(t));
         const toReopenToBot = toReopen.filter(shouldFallbackToBot);
 
         // Fallback cases need the BOT user id. Load lazily — if
-        // nothing's falling back this sweep, don't bother.
+        // nothing's falling back this sweep, don't bother. Missing
+        // BOT → keep tickets with their original owner + warn
+        // (prevents orphaning on a dead id; admin needs to seed BOT).
         let botId: string | null = null;
         if (toReopenToBot.length > 0) {
-          const bot = await mgr
-            .getRepository(User)
-            .findOne({ where: { role: UserRole.BOT } });
+          const bot = await loadBot(mgr);
           botId = bot?.id ?? null;
           if (!botId) {
-            // No BOT user configured — surface it as a warning and
-            // keep the fallback tickets with their original owner
-            // (safer than nulling them out). Admin needs to seed a
-            // BOT user; see UsersService.ensureBotUser.
             this.logger.warn(
               `Auto-reopen fallback skipped for ${toReopenToBot.length} ticket(s): no BOT user found`,
             );
@@ -357,23 +339,19 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           const followupAssigneeById = new Map(
             followupAssignees.map((u) => [u.id, u] as const),
           );
-          const toRequeueFollowup = ripeFollowup.filter((t) => {
-            // No assignee → re-queue defensively.
-            if (!t.assignee) return true;
-            const u = followupAssigneeById.get(t.assignee);
-            // Deleted user → re-queue.
-            if (!u) return true;
-            // ONLINE assignee: leave alone, capacity hook handles.
-            return u.status !== UserStatus.ONLINE;
-          });
+          // ONLINE assignee → leave alone, capacity hook handles.
+          // Anything else → re-queue to BOT. Same policy as the
+          // WAITING branch above (isAssignable predicate).
+          const toRequeueFollowup = ripeFollowup.filter(
+            (t) =>
+              !t.assignee || !isAssignable(followupAssigneeById.get(t.assignee)),
+          );
 
           if (toRequeueFollowup.length > 0) {
             // Lazy-load BOT (reuse WAITING branch's lookup when it
             // already fetched one this sweep).
             if (!botId) {
-              const bot = await mgr
-                .getRepository(User)
-                .findOne({ where: { role: UserRole.BOT } });
+              const bot = await loadBot(mgr);
               botId = bot?.id ?? null;
             }
             if (botId) {
@@ -469,9 +447,10 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
     if (!ticket) return;
     if (ticket.status !== TicketStatus.WAITING) return;
 
-    // Presence check — same model as reopenResolved. Re-queue when
-    // the real-user assignee isn't ONLINE; BOT-assigned tickets stay
-    // on BOT (nothing to reroute).
+    // Shared ONLINE-only policy via isAssignable. BOT-assigned
+    // tickets fall through (isAssignable returns false for BOT),
+    // but we skip the fallback for them anyway because there's
+    // nothing to reroute off BOT.
     let fallbackBotId: string | null = null;
     let fallbackFromStatus: UserStatus | 'DELETED' | null = null;
     if (ticket.assignee) {
@@ -479,17 +458,17 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         where: { id: ticket.assignee },
         select: { id: true, status: true, role: true },
       });
-      const shouldFallback =
-        !assignee ||
-        (assignee.role !== UserRole.BOT &&
-          assignee.status !== UserStatus.ONLINE);
-      if (shouldFallback) {
-        const bot = await userRepo.findOne({
-          where: { role: UserRole.BOT },
-        });
+      // Capture status up front — the isAssignable predicate narrows
+      // `assignee` away in the else-branch, so a `.status` access
+      // after would not type-check.
+      const previousStatus: UserStatus | 'DELETED' =
+        assignee?.status ?? 'DELETED';
+      const assigneeIsBot = assignee?.role === UserRole.BOT;
+      if (!assigneeIsBot && !isAssignable(assignee)) {
+        const bot = await loadBot(mgr);
         if (bot) {
           fallbackBotId = bot.id;
-          fallbackFromStatus = assignee?.status ?? 'DELETED';
+          fallbackFromStatus = previousStatus;
         } else {
           this.logger.warn(
             `wakeIfPaused fallback skipped for ticket=${ticketId}: no BOT user found`,
@@ -627,9 +606,7 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           .getMany();
         if (openTickets.length === 0) return;
 
-        const bot = await userRepo.findOne({
-          where: { role: UserRole.BOT },
-        });
+        const bot = await loadBot(mgr);
         if (!bot) {
           // Keep the status change but surface the warning so admin
           // can seed the BOT user. Prevents orphaning on a dead id.
@@ -688,7 +665,7 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
     // method runs again and wakes it onto them. See ticket #1357
     // (2026-10-14).
     const user = await userRepo.findOne({ where: { id: userId } });
-    if (!user || user.status !== UserStatus.ONLINE) return false;
+    if (!isAssignable(user)) return false;
 
     const ripe = await ticketRepo
       .createQueryBuilder('t')
@@ -726,20 +703,19 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
     const ticketRepo = mgr.getRepository(Ticket);
     const logRepo = mgr.getRepository(TicketActivityLog);
 
-    // Only ONLINE + non-BOT users pull from the queue. If the agent
-    // stepped away (break / meeting / signed out) between the slot
-    // freeing and this hook firing, leave the ticket parked on BOT
-    // — they'll get it when they come back (drainOnCameOnline
-    // handles the catch-up), or someone else online will take it.
+    // Only assignable (ONLINE, non-BOT, non-deactivated) users pull
+    // from the queue. If the agent stepped away between the slot
+    // freeing and this hook firing, leave the ticket parked on BOT —
+    // they'll get it when they come back (drainOnCameOnline handles
+    // the catch-up), or someone else online will take it.
     // Historical bug (ticket #544/#545, 2026-10-06): the comment
     // claimed this gate existed but the code only checked role.
     // Offline Divya got auto-assigned a backfill when a resolved
     // ticket freed her slot.
     const user = await userRepo.findOne({ where: { id: userId } });
-    if (!user || user.role === UserRole.BOT) return false;
-    if (user.status !== UserStatus.ONLINE) return false;
+    if (!isAssignable(user)) return false;
 
-    const bot = await userRepo.findOne({ where: { role: UserRole.BOT } });
+    const bot = await loadBot(mgr);
     if (!bot) return false;
 
     // Same cap check the assignment picker uses — freeing a slot in
