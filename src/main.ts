@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { REQUEST_ID_HEADER } from './common/logger/logger.module';
@@ -18,6 +19,20 @@ async function bootstrap(): Promise<void> {
 
   app.use(cookieParser());
   app.set('trust proxy', 1);
+
+  // Capture the raw request body on JSON POSTs so webhook signature
+  // guards (currently just WhatsApp) can HMAC-verify against the
+  // exact bytes Meta signed. Nest's default body parser only exposes
+  // the parsed JSON, which can serialise back to a slightly different
+  // byte sequence than the sender produced.
+  app.use(
+    express.json({
+      verify: (req, _res, buf) => {
+        (req as { rawBody?: Buffer }).rawBody = buf;
+      },
+      limit: '2mb',
+    }),
+  );
 
   app.enableCors({
     origin: config.get('FRONTEND_ORIGIN', { infer: true }),

@@ -8,9 +8,12 @@ import {
   Post,
   Query,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
+import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
+import { WhatsappIngestService } from './whatsapp-ingest.service';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
 /**
@@ -29,7 +32,10 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
 @Public()
 @Controller('webhooks/whatsapp')
 export class WhatsappWebhookController {
-  constructor(private readonly service: WhatsappWebhookService) {}
+  constructor(
+    private readonly service: WhatsappWebhookService,
+    private readonly ingest: WhatsappIngestService,
+  ) {}
 
   /**
    * Meta sends this ONCE at subscription setup to prove we own the
@@ -68,10 +74,36 @@ export class WhatsappWebhookController {
    * payload-logger is fast enough for a direct call; once ticket
    * minting lands it'll move to an enqueue+background-worker pattern.
    */
+  /**
+   * V2 — signature-verified ingest. @UseGuards runs the HMAC check
+   * against the raw body + APP_SECRET BEFORE the handler, so a forged
+   * payload at our public URL never reaches ingest. 200s immediately
+   * (Meta retries if we don't ack in ~20s); ingest runs in-handler
+   * for simplicity, since it's bounded by payload size and transaction
+   * duration.
+   */
   @Post()
   @HttpCode(HttpStatus.OK)
+  @UseGuards(WhatsappSignatureGuard)
   async receive(@Body() payload: unknown): Promise<{ received: true }> {
+    // Still log the payload shape (helps debug the next time Meta
+    // changes the shape or we add a new field subscription).
     await this.service.handleInbound(payload);
+    try {
+      await this.ingest.ingest(payload as never);
+    } catch (err) {
+      // Any ingest failure is logged but doesn't 500 the webhook —
+      // Meta would retry forever otherwise, DOSing the ingest path
+      // on a bug. Admins see the warn and fix forward.
+      // (Known limitation: individual message failures are swallowed
+      // inside ingest.ingestOne, so this catch is a top-level net.)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.service as any).logger?.warn?.(
+        `WhatsApp ingest crashed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
     return { received: true };
   }
 }
