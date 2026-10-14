@@ -32,6 +32,10 @@ export class AutomationSystemActor {
       email: bot.email ?? null,
       role: bot.role,
       isApproved: true,
+      // Carried so activity log strings render "by {bot.name}" (e.g.
+      // "by Groot") instead of a bare UUID. See ticket #1444
+      // (2026-10-14) + actorLabel in tickets.service.
+      name: bot.name,
     };
     return this.cached;
   }

@@ -688,7 +688,7 @@ export class TicketsService {
         if (heldOpenByHuman) freedCapacityFor = ticket.assignee;
         logs.push({
           event,
-          log: `Assignee changed to ${nextUser.name} (${nextUser.role}) by ${actingUser.email ?? actingUser.id}`,
+          log: `Assignee changed to ${nextUser.name} (${nextUser.role}) by ${actorLabel(actingUser)}`,
         });
       }
 
@@ -705,7 +705,7 @@ export class TicketsService {
         patch.team_id = nextTeam.id;
         logs.push({
           event: TicketActivity.SENT_BACK_TO_QUEUE,
-          log: `Team changed to "${nextTeam.name}" by ${actingUser.email ?? actingUser.id}`,
+          log: `Team changed to "${nextTeam.name}" by ${actorLabel(actingUser)}`,
         });
       }
 
@@ -786,7 +786,7 @@ export class TicketsService {
           log: buildTransitionLog(
             ticket.status,
             dto.status,
-            actingUser.email ?? actingUser.id,
+            actorLabel(actingUser),
             dto.resumeAtHours,
             dto.waitingAction,
           ),
@@ -834,7 +834,7 @@ export class TicketsService {
           if (removed.length) parts.push(`removed [${removed.join(', ')}]`);
           logs.push({
             event: TicketActivity.NOTES_ADDED,
-            log: `Tags ${parts.join('; ')} by ${actingUser.email ?? actingUser.id}`,
+            log: `Tags ${parts.join('; ')} by ${actorLabel(actingUser)}`,
           });
         }
       }
@@ -1194,7 +1194,7 @@ export class TicketsService {
           ticket_id: id,
           event: TicketActivity.AGENT_REPLIED,
           actor_id: actingUser.id,
-          log: `Replied to ${recipientSummary} by ${actingUser.email ?? actingUser.id}`,
+          log: `Replied to ${recipientSummary} by ${actorLabel(actingUser)}`,
         });
       });
     } catch (persistErr) {
@@ -1334,6 +1334,20 @@ function lastReceivedMsgAt(detail: {
     if (m.direction === 'RECEIVED') return new Date(m.createdAt);
   }
   return new Date(detail.createdAt);
+}
+
+/**
+ * Human-friendly label for the "by {X}" tail on activity log strings.
+ * Prefer the user's display name when the actor carries one — that's
+ * the only sensible identifier for the automation system actor (BOT),
+ * which has no email. Falls back to email for human agents (familiar
+ * identifier in the UI) and only to the raw id as a last resort for
+ * actors minted before `name` was carried on the token. See ticket
+ * #1444 (2026-10-14) — automations were showing a bare UUID.
+ */
+function actorLabel(user: AuthenticatedUser): string {
+  if (user.role === UserRole.BOT) return user.name ?? 'Automation';
+  return user.email ?? user.name ?? user.id;
 }
 
 function pickAssigneeEvent(
