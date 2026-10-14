@@ -125,17 +125,27 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Auto-resolve or auto-reopen WAITING tickets whose timer elapsed.
-   * IN_FOLLOWUP is intentionally left alone — the capacity hook
-   * wakes those on demand.
+   * Auto-resolve or auto-reopen WAITING tickets whose timer elapsed,
+   * and re-queue ripe IN_FOLLOWUP tickets whose assignee is OFFLINE.
    *
-   * Auto-reopen with presence check: if the original assignee is
-   * ONLINE (or MEETING/BREAK/EMERGENCY — present but busy) the
-   * ticket stays with them, preserving the member's "I'll follow up
-   * at X" contract. If they've been OFFLINE for longer than
-   * REOPEN_OFFLINE_FALLBACK_MS, the ticket is re-queued to BOT so
-   * `pullFromBotQueue` can route it to a live teammate (prevents
-   * customer ghosting when a member is off-shift / on leave).
+   * Auto-reopen with presence check (WAITING branch): if the original
+   * assignee is ONLINE (or MEETING/BREAK/EMERGENCY — present but
+   * busy) the ticket stays with them. If they've been OFFLINE for
+   * longer than REOPEN_OFFLINE_FALLBACK_MS, the ticket is re-queued
+   * to BOT so `pullFromBotQueue` can route it to a live teammate.
+   *
+   * Ripe-followup re-queue (IN_FOLLOWUP branch): the capacity hook
+   * (`drainRipeFollowup`) wakes followups onto their ONLINE assignee
+   * when a slot frees. If the assignee is NOT ONLINE when the timer
+   * elapses, nothing else would move the ticket — the customer who
+   * was promised a follow-up at a specific time would be ghosted.
+   * This branch handles that: ripe IN_FOLLOWUP with a non-ONLINE
+   * assignee gets flipped to OPEN + re-queued to BOT in the same
+   * team. The destination is BOT (not another agent), so no cap is
+   * bypassed. ONLINE assignees are deliberately left alone — the
+   * capacity hook will wake their followups into their personal
+   * queue respecting their cap, as before. See ticket #1436
+   * (2026-10-14).
    *
    * Runs behind a session-scoped advisory lock so only ONE worker
    * sweeps per tick; the others try, fail to acquire, and go back to
@@ -316,14 +326,104 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
               }))
             : []),
         ]);
-        return ripeWaiting.length;
+
+        // IN_FOLLOWUP branch — re-queue to BOT when assignee not
+        // ONLINE. Done inside the same sweep tick so a single
+        // transaction handles all ripe timers (WAITING + followup).
+        const ripeFollowup = await ticketRepo
+          .createQueryBuilder('t')
+          .where('t.status = :s', { s: TicketStatus.IN_FOLLOWUP })
+          .andWhere('t.resume_at IS NOT NULL')
+          .andWhere('t.resume_at < NOW()')
+          .andWhere('t."deletedAt" IS NULL')
+          .setLock('pessimistic_write')
+          .setOnLocked('skip_locked')
+          .limit(SWEEP_BATCH)
+          .getMany();
+
+        let followupRequeued = 0;
+        if (ripeFollowup.length > 0) {
+          const followupAssigneeIds = Array.from(
+            new Set(
+              ripeFollowup
+                .map((t) => t.assignee)
+                .filter((id): id is string => Boolean(id)),
+            ),
+          );
+          const followupAssignees =
+            followupAssigneeIds.length > 0
+              ? await mgr.getRepository(User).find({
+                  where: followupAssigneeIds.map((id) => ({ id })),
+                  select: { id: true, status: true },
+                })
+              : [];
+          const followupAssigneeById = new Map(
+            followupAssignees.map((u) => [u.id, u] as const),
+          );
+          const toRequeueFollowup = ripeFollowup.filter((t) => {
+            // No assignee → re-queue defensively.
+            if (!t.assignee) return true;
+            const u = followupAssigneeById.get(t.assignee);
+            // Deleted user → re-queue.
+            if (!u) return true;
+            // ONLINE assignee: leave alone, capacity hook handles.
+            return u.status !== UserStatus.ONLINE;
+          });
+
+          if (toRequeueFollowup.length > 0) {
+            // Lazy-load BOT (reuse WAITING branch's lookup when it
+            // already fetched one this sweep).
+            if (!botId) {
+              const bot = await mgr
+                .getRepository(User)
+                .findOne({ where: { role: UserRole.BOT } });
+              botId = bot?.id ?? null;
+            }
+            if (botId) {
+              await ticketRepo
+                .createQueryBuilder()
+                .update()
+                .set({
+                  status: TicketStatus.OPEN,
+                  resume_at: null,
+                  assignee: botId,
+                })
+                .whereInIds(toRequeueFollowup.map((t) => t.id))
+                .execute();
+
+              await logRepo.save(
+                toRequeueFollowup.flatMap((t) => [
+                  {
+                    ticket_id: t.id,
+                    event: TicketActivity.SENT_BACK_TO_QUEUE,
+                    actor_id: null,
+                    log: 'Auto-woken from followup — timer elapsed and assignee offline',
+                  },
+                  {
+                    ticket_id: t.id,
+                    event: TicketActivity.ASSIGNED_TO_BOT,
+                    actor_id: null,
+                    log: 'Re-queued on followup wake — original assignee offline',
+                  },
+                ]),
+              );
+              followupRequeued = toRequeueFollowup.length;
+            } else {
+              this.logger.warn(
+                `Followup re-queue skipped for ${toRequeueFollowup.length} ticket(s): no BOT user found`,
+              );
+            }
+          }
+        }
+
+        return ripeWaiting.length + followupRequeued;
       });
       if (swept === 0) break;
       processed += swept;
       if (swept < SWEEP_BATCH) break;
     }
     if (processed > 0) {
-      this.logger.log(`Auto-resolved ${processed} WAITING ticket(s)`);
+      this.logger.log(`Timer sweep processed ${processed} ticket(s)`);
     }
   }
 
