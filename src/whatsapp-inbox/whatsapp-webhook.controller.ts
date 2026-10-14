@@ -7,7 +7,9 @@ import {
   HttpStatus,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
@@ -38,7 +40,8 @@ export class WhatsappWebhookController {
   @Get()
   verify(
     @Query() query: Record<string, string | undefined>,
-  ): string {
+    @Res() res: Response,
+  ): void {
     const challenge = this.service.verify({
       mode: query['hub.mode'],
       token: query['hub.verify_token'],
@@ -51,9 +54,11 @@ export class WhatsappWebhookController {
       throw new ForbiddenException('Webhook verify failed');
     }
     // Meta expects the raw challenge string as the response body —
-    // not JSON-wrapped. Returning a plain string from a Nest handler
-    // sends it with text/html by default, which Meta accepts.
-    return challenge;
+    // NOT the standard Bridge SuccessEnvelope. @Res() + .send()
+    // bypasses the ResponseEnvelopeInterceptor so we can write the
+    // raw string directly. text/plain content-type keeps Meta's
+    // parser from guessing JSON.
+    res.status(HttpStatus.OK).type('text/plain').send(challenge);
   }
 
   /**
