@@ -122,8 +122,8 @@ describe('AssignmentPickerService.pickNextAssigneeForTeam', () => {
     expect(picked).toBe('alice');
     // last_assigned_at bumped so the next pick skips her first.
     expect(ctx.updateCalls).toHaveLength(1);
-    expect(ctx.updateCalls[0].criteria).toEqual({ id: 'alice' });
-    expect(ctx.updateCalls[0].patch).toMatchObject({
+    expect(ctx.updateCalls[0]!.criteria).toEqual({ id: 'alice' });
+    expect(ctx.updateCalls[0]!.patch).toMatchObject({
       last_assigned_at: expect.any(Date),
     });
   });

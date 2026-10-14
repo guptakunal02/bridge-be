@@ -116,6 +116,44 @@ export class EnvVars {
   @IsString()
   @MinLength(1)
   S3_ATTACHMENTS_BUCKET!: string;
+
+  /**
+   * WhatsApp Business Platform Cloud API credentials. All seven are
+   * REQUIRED — missing any one makes the webhook / send flows
+   * unusable, so we fail fast at boot instead of lazy-detecting
+   * halfway through processing an inbound message.
+   */
+  @IsString()
+  @MinLength(10)
+  WHATSAPP_PHONE_NUMBER_ID!: string;
+
+  @IsString()
+  @MinLength(10)
+  WHATSAPP_BUSINESS_ACCOUNT_ID!: string;
+
+  @IsString()
+  @MinLength(50)
+  WHATSAPP_ACCESS_TOKEN!: string;
+
+  @IsString()
+  @MinLength(10)
+  WHATSAPP_APP_ID!: string;
+
+  @IsString()
+  @MinLength(16)
+  WHATSAPP_APP_SECRET!: string;
+
+  // Pinned Graph API version — change here when Meta deprecates ours.
+  @IsString()
+  @MinLength(3)
+  WHATSAPP_GRAPH_API_VERSION!: string;
+
+  // Shared secret we hand to Meta on webhook subscription. Meta echoes
+  // it back on every verify request; a mismatch means someone forged
+  // the request. 32+ chars of random entropy expected.
+  @IsString()
+  @MinLength(32)
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

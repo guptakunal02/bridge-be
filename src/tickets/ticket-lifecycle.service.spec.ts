@@ -146,10 +146,11 @@ function buildCtx(): Ctx {
     repo.createQueryBuilder = jest.fn((_alias?: string) => {
       const qb = makeQB();
       const originalSet = qb.set as jest.Mock;
-      qb.set = jest.fn((patch: Record<string, unknown>) => {
+      qb.set = jest.fn((...args: unknown[]) => {
+        const patch = args[0] as Record<string, unknown>;
         ticketUpdates.push(patch);
         return (originalSet as jest.Mock)(patch);
-      });
+      }) as AnyFn;
       return qb;
     });
     return repo;
@@ -234,7 +235,6 @@ function ticket(
   overrides: Partial<Ticket> & { id: string } = { id: 't1' },
 ): Ticket {
   return {
-    id: 't1',
     status: TicketStatus.WAITING,
     assignee: USER_ONLINE_ID,
     team_id: TEAM_ID,
@@ -271,7 +271,7 @@ describe('TicketLifecycleService.wakeIfPaused', () => {
 
     // Single activity log, no fallback-to-BOT entry.
     expect(ctx.savedLogs).toHaveLength(1);
-    expect(ctx.savedLogs[0].event).toBe(TicketActivity.SENT_BACK_TO_QUEUE);
+    expect(ctx.savedLogs[0]!.event).toBe(TicketActivity.SENT_BACK_TO_QUEUE);
   });
 
   it('[regression #1330] re-queues to BOT when assignee is OFFLINE at wake time', async () => {
@@ -361,7 +361,7 @@ describe('TicketLifecycleService.sweepTimers — WAITING branch', () => {
       const qb = makeQB({ getMany: ripeFollowup });
       // Preserve the ticketUpdates capture that buildCtx installed.
       const originalSet = qb.set as jest.Mock;
-      qb.set = jest.fn((patch: Record<string, unknown>) => {
+      qb.set = jest.fn((...args: unknown[]) => { const patch = args[0] as Record<string, unknown>;
         ctx.ticketUpdates.push(patch);
         return (originalSet as jest.Mock)(patch);
       });
@@ -517,7 +517,7 @@ describe('TicketLifecycleService.onCapacityFreed', () => {
     ctx.ticketRepo.createQueryBuilder = jest.fn(() => {
       const qb = makeQB({ getOne: ripe });
       const originalSet = qb.set as jest.Mock;
-      qb.set = jest.fn((patch: Record<string, unknown>) => {
+      qb.set = jest.fn((...args: unknown[]) => { const patch = args[0] as Record<string, unknown>;
         ctx.ticketUpdates.push(patch);
         return (originalSet as jest.Mock)(patch);
       });
@@ -561,7 +561,7 @@ describe('TicketLifecycleService.bounceOnEmergency', () => {
     ctx.ticketRepo.createQueryBuilder = jest.fn(() => {
       const qb = makeQB({ getMany: [open1, open2] });
       const originalSet = qb.set as jest.Mock;
-      qb.set = jest.fn((patch: Record<string, unknown>) => {
+      qb.set = jest.fn((...args: unknown[]) => { const patch = args[0] as Record<string, unknown>;
         ctx.ticketUpdates.push(patch);
         return (originalSet as jest.Mock)(patch);
       });

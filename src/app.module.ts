@@ -19,6 +19,7 @@ import { TagsModule } from './tags/tags.module';
 import { TeamsModule } from './teams/teams.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { UsersModule } from './users/users.module';
+import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { UsersModule } from './users/users.module';
     TagsModule,
     BotModule,
     AutomationsModule,
+    WhatsappInboxModule,
   ],
 })
 export class AppModule {}

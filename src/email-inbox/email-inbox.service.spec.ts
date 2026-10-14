@@ -121,10 +121,11 @@ function buildService(wire?: {
     repo.createQueryBuilder = jest.fn((...args: unknown[]) => {
       const qb = originalCQB(...args) as Record<string, AnyFn>;
       const originalSet = qb.set as jest.Mock;
-      qb.set = jest.fn((patch: Record<string, unknown>) => {
+      qb.set = jest.fn((...setArgs: unknown[]) => {
+        const patch = setArgs[0] as Record<string, unknown>;
         ticketUpdates.push(patch);
         return (originalSet as jest.Mock)(patch);
-      });
+      }) as AnyFn;
       return qb;
     });
   };
@@ -339,10 +340,11 @@ describe('EmailInboxService.reopenResolved', () => {
     ctx.ticketRepo.createQueryBuilder = jest.fn(() => {
       const qb = makeQB({ execute: { affected: 0 } });
       const originalSet = qb.set as jest.Mock;
-      qb.set = jest.fn((patch: Record<string, unknown>) => {
+      qb.set = jest.fn((...args: unknown[]) => {
+        const patch = args[0] as Record<string, unknown>;
         ctx.ticketUpdates.push(patch);
         return (originalSet as jest.Mock)(patch);
-      });
+      }) as AnyFn;
       return qb;
     });
 
