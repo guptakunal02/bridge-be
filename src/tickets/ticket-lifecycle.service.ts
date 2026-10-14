@@ -49,21 +49,6 @@ const SWEEP_ADVISORY_LOCK_KEY = 4726050001;
 const ONLINE_DRAIN_MAX = 50;
 
 /**
- * How long an assignee must have been OFFLINE before auto-reopen
- * falls the ticket back to the BOT queue instead of parking it in
- * their personal pile. Short absences (lunch, meeting-run-over,
- * dropped VPN) keep the original ownership so the member's "I'll
- * come back to this at X" contract isn't broken. Longer than this
- * threshold = probably off-shift or on leave; the customer must not
- * be ghosted while we wait for them.
- *
- * Non-OFFLINE statuses (MEETING / BREAK / EMERGENCY) never trigger
- * fallback — the member is at work, just temporarily unavailable;
- * they'll clear their queue soon.
- */
-const REOPEN_OFFLINE_FALLBACK_MS = 4 * 60 * 60 * 1000;
-
-/**
  * Owns the automated lifecycle transitions that aren't triggered
  * directly by an agent's PATCH:
  *
@@ -129,10 +114,12 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
    * and re-queue ripe IN_FOLLOWUP tickets whose assignee is OFFLINE.
    *
    * Auto-reopen with presence check (WAITING branch): if the original
-   * assignee is ONLINE (or MEETING/BREAK/EMERGENCY — present but
-   * busy) the ticket stays with them. If they've been OFFLINE for
-   * longer than REOPEN_OFFLINE_FALLBACK_MS, the ticket is re-queued
-   * to BOT so `pullFromBotQueue` can route it to a live teammate.
+   * assignee is ONLINE the ticket stays with them. Any non-ONLINE
+   * state (MEETING / BREAK / EMERGENCY / OFFLINE) → re-queue to BOT
+   * so `pullFromBotQueue` can route it to a live teammate. Policy
+   * matches the IN_FOLLOWUP branch below and both customer-reply
+   * reopen paths — one invariant across every "ticket needs a live
+   * owner right now" moment.
    *
    * Ripe-followup re-queue (IN_FOLLOWUP branch): the capacity hook
    * (`drainRipeFollowup`) wakes followups onto their ONLINE assignee
@@ -214,8 +201,8 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         }
         // Presence check for the REOPEN branch. Load every unique
         // assignee referenced by the ripe set in one query — bounded
-        // by SWEEP_BATCH (200) so this is cheap. We only need the
-        // status + status_changed_at columns.
+        // by SWEEP_BATCH (200) so this is cheap. Only the status
+        // column matters under the ONLINE-only policy.
         const assigneeIds = Array.from(
           new Set(
             toReopen
@@ -227,14 +214,13 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           assigneeIds.length > 0
             ? await mgr.getRepository(User).find({
                 where: assigneeIds.map((id) => ({ id })),
-                select: { id: true, status: true, status_changed_at: true },
+                select: { id: true, status: true },
               })
             : [];
         const assigneeById = new Map(
           assigneeRecords.map((u) => [u.id, u] as const),
         );
 
-        const offlineCutoff = Date.now() - REOPEN_OFFLINE_FALLBACK_MS;
         const shouldFallbackToBot = (t: Ticket): boolean => {
           // No assignee at all → always re-queue (defensive; a
           // WAITING ticket shouldn't normally be unassigned).
@@ -243,12 +229,17 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           // Assignee deleted / not in cache → re-queue so we don't
           // orphan the ticket on a dead ID.
           if (!user) return true;
-          // Member is at work (ONLINE / MEETING / BREAK / EMERGENCY)
-          // — keep ownership. They'll clear it when free.
-          if (user.status !== UserStatus.OFFLINE) return false;
-          // OFFLINE but recent: lunch, outage, meeting-run-over.
-          // Keep the ticket with them; they're likely back soon.
-          return user.status_changed_at.getTime() <= offlineCutoff;
+          // ONLINE-only. Any other state (MEETING / BREAK /
+          // EMERGENCY / OFFLINE) → re-queue so a live teammate can
+          // pick it up via BOT backfill. Policy matches the
+          // IN_FOLLOWUP sweep branch below and the two customer-
+          // reply reopen paths (wakeIfPaused, reopenResolved) —
+          // consistency across every "ticket needs a live owner
+          // right now" moment. Was previously OFFLINE-only with a
+          // 4h grace; the grace left tickets ghosted on members
+          // who were on short-term break and never saw the reopen.
+          // See ticket #1438 (2026-10-14).
+          return user.status !== UserStatus.ONLINE;
         };
 
         const toReopenKeep = toReopen.filter((t) => !shouldFallbackToBot(t));
@@ -328,7 +319,7 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
                 ticket_id: t.id,
                 event: TicketActivity.ASSIGNED_TO_BOT,
                 actor_id: null,
-                log: 'Re-queued on reopen — original assignee offline',
+                log: 'Re-queued on reopen — original assignee not ONLINE',
               }))
             : []),
         ]);
@@ -438,16 +429,13 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
    * state that gets unblocked by a customer reply — flip it back
    * to OPEN and drop the timer.
    *
-   * Presence-aware ownership: this is an UNCHOSEN reopen (customer
-   * forced the moment, not the member), so if the original assignee
-   * isn't ONLINE right now, re-queue to BOT in the same team so an
-   * available teammate can pick it up via the normal capacity-
-   * backfill path. MEETING / BREAK / EMERGENCY / OFFLINE all
-   * re-queue — only ONLINE counts as assignable here (see
-   * memory/feedback-auto-reopen-fallback.md). Presence alone — no
-   * bandwidth check. Distinct from the timer-based sweep which uses
-   * a looser OFFLINE-only / 4h cutoff because the member explicitly
-   * chose that re-engagement time.
+   * Presence-aware ownership: if the original assignee isn't ONLINE
+   * right now, re-queue to BOT in the same team so an available
+   * teammate can pick it up via the normal capacity-backfill path.
+   * MEETING / BREAK / EMERGENCY / OFFLINE all re-queue — only ONLINE
+   * counts as assignable (see memory/feedback-auto-reopen-fallback.md).
+   * Presence alone — no bandwidth check. Same policy as the sweep
+   * (both WAITING-reopen and IN_FOLLOWUP branches) and reopenResolved.
    *
    * IN_FOLLOWUP is DELIBERATELY not woken here. Followup means "we
    * told the customer we'd come back to them at a specific time";
