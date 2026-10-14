@@ -8,17 +8,23 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Public } from '../auth/decorators/public.decorator';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
 /**
- * Public — Meta's webhook sender has no auth header to show us. Signed
- * requests (X-Hub-Signature-256) will be enforced before any DB write
- * happens; V1 just logs + 200s.
+ * Public — Meta's webhook sender has no auth header to show us. The
+ * `@Public()` class decorator opts both GET + POST out of the global
+ * JwtAuth / Approved guards; without it the global guard chain
+ * returns 401 before our handler runs and Meta's verification fails
+ * with "The callback URL or verify token couldn't be validated."
+ * Signed requests (X-Hub-Signature-256) will be enforced before any
+ * DB write happens; V1 just logs + 200s.
  *
  * Path kept URL-stable: Meta's webhook registration lives on the
  * subscription, not in Bridge's config, so moving this route would
  * break the live verification.
  */
+@Public()
 @Controller('webhooks/whatsapp')
 export class WhatsappWebhookController {
   constructor(private readonly service: WhatsappWebhookService) {}
