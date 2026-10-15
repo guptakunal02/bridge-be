@@ -6,6 +6,7 @@ import { User } from '../users/entities/user.entity';
 import { ActionDispatcher } from './action-dispatcher.service';
 import { AddTagHandler } from './action-handlers/add-tag.handler';
 import { RemoveTagHandler } from './action-handlers/remove-tag.handler';
+import { SendReplyHandler } from './action-handlers/send-reply.handler';
 import { SetAssigneeHandler } from './action-handlers/set-assignee.handler';
 import { SetStatusHandler } from './action-handlers/set-status.handler';
 import { SetTeamHandler } from './action-handlers/set-team.handler';
@@ -41,6 +42,7 @@ import { RuleEvaluator } from './rule-evaluator.service';
     SetStatusHandler,
     SetAssigneeHandler,
     SetTeamHandler,
+    SendReplyHandler,
   ],
   exports: [AutomationEngine],
 })

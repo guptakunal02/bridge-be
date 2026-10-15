@@ -35,6 +35,7 @@ const VALID_ACTION_TYPES: ReadonlySet<Action['type']> = new Set<Action['type']>(
   'set_status',
   'set_assignee',
   'set_team',
+  'send_reply',
 ]);
 
 const V1_SETTABLE_STATUSES: ReadonlySet<TicketStatus> = new Set<TicketStatus>([
@@ -193,6 +194,13 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
     case 'set_team':
       if (typeof obj.teamId !== 'string' || obj.teamId.length === 0) {
         errors.push(`${path}.teamId: must be a non-empty string`);
+      }
+      break;
+    case 'send_reply':
+      if (typeof obj.body !== 'string' || obj.body.trim().length === 0) {
+        errors.push(`${path}.body: must be a non-empty string`);
+      } else if (obj.body.length > 10_000) {
+        errors.push(`${path}.body: cannot exceed 10000 characters`);
       }
       break;
   }

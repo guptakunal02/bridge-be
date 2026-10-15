@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Action, ActionHandler } from './action';
 import { AddTagHandler } from './action-handlers/add-tag.handler';
 import { RemoveTagHandler } from './action-handlers/remove-tag.handler';
+import { SendReplyHandler } from './action-handlers/send-reply.handler';
 import { SetAssigneeHandler } from './action-handlers/set-assignee.handler';
 import { SetStatusHandler } from './action-handlers/set-status.handler';
 import { SetTeamHandler } from './action-handlers/set-team.handler';
@@ -29,6 +30,7 @@ export class ActionDispatcher {
     setStatus: SetStatusHandler,
     setAssignee: SetAssigneeHandler,
     setTeam: SetTeamHandler,
+    sendReply: SendReplyHandler,
   ) {
     // Keys are hard-coded strings instead of reading `handler.type`
     // from the instance. The handlers participate in the
@@ -46,6 +48,7 @@ export class ActionDispatcher {
       ['set_status', setStatus as ActionHandler],
       ['set_assignee', setAssignee as ActionHandler],
       ['set_team', setTeam as ActionHandler],
+      ['send_reply', sendReply as ActionHandler],
     ]);
   }
 

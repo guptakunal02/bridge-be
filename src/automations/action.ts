@@ -14,7 +14,8 @@ export type ActionType =
   | 'remove_tag'
   | 'set_status'
   | 'set_assignee'
-  | 'set_team';
+  | 'set_team'
+  | 'send_reply';
 
 export type Action =
   | { type: 'add_tag'; tagName: string }
@@ -26,7 +27,22 @@ export type Action =
        *  BOT queue (i.e. "unassign"). */
       userId: string | null;
     }
-  | { type: 'set_team'; teamId: string };
+  | { type: 'set_team'; teamId: string }
+  | {
+      type: 'send_reply';
+      /**
+       * Message body sent back to the customer, routed through the
+       * ticket's channel (email → SMTP, whatsapp → Meta Graph).
+       * Supports two tokens expanded at send time:
+       *   {customerName} — a human-ish name derived from the sender
+       *                     (email local-part capitalised, or
+       *                     "there" when no name is available —
+       *                     whatsapp numbers can't yield a name).
+       *   {ticketId}      — the Bridge ticket id as a number.
+       * Everything else is treated as literal text.
+       */
+      body: string;
+    };
 
 /**
  * Contract every action handler implements. Receives the dispatched
