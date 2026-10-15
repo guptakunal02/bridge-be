@@ -238,6 +238,57 @@ describe('splitBody — HTML', () => {
     expect(out.quotedContentHtml).toContain('yahoo_quoted');
   });
 
+  it('[regression #1456] splits Yahoo iPhone Mail without swallowing the signature + body details', () => {
+    // Real-shape capture: Yahoo iPhone Mail wraps the ENTIRE reply —
+    // first line, bank details, "Thanks, Neeta", signature link, AND
+    // the quoted history — inside one top-level <div>. The quote
+    // boundary is a <p class="yahoo-quoted-begin"> sibling to the
+    // <blockquote class="iosymail">, both deep inside the wrapper.
+    //
+    // Pre-fix our splitter walked up to the top-level ancestor and
+    // dropped the whole wrapper into quotedHtml, so the agent saw
+    // only "Yes. Right. I want to return Sunday mellow red set." in
+    // the message card — bank details and sign-off vanished.
+    //
+    // Post-fix: in-place split at the boundary preserves pre-boundary
+    // siblings at every ancestor level.
+    const html = [
+      'Yes. Right. I want to return Sunday mellow red set.',
+      '<div>',
+      '<br>',
+      '<div><div dir="ltr">* Account holder’s name - Neeta Tawde<br></div>',
+      '<div dir="ltr">* Account number -20005849619<br></div>',
+      '<div dir="ltr">* IFSC code - SBIN0000562</div></div>',
+      '<div dir="ltr">Thanks,</div><div dir="ltr">Neeta</div>',
+      '<div><br><div class="yahoo-signature"><a href="#">Sent from Yahoo Mail for iPhone</a></div><br>',
+      '<p class="yahoo-quoted-begin">On Monday, Oct 12, Surma wrote:</p>',
+      '<blockquote class="iosymail"><div>Hi Neeta,...quoted body...</div></blockquote>',
+      '</div></div>',
+    ].join('');
+    const out = splitBody('', html, []);
+    // Fresh side: must retain the body details that pre-fix got
+    // stripped. Checking the three bank-detail fields is enough —
+    // they're the user's reason for sending the mail.
+    expect(out.newContentHtml).toContain('Yes. Right');
+    expect(out.newContentHtml).toContain('Account holder');
+    expect(out.newContentHtml).toContain('Account number');
+    expect(out.newContentHtml).toContain('IFSC code');
+    expect(out.newContentHtml).toContain('Thanks,');
+    expect(out.newContentHtml).toContain('Neeta');
+    expect(out.newContentHtml).toContain('Sent from Yahoo Mail for iPhone');
+    // Quoted side: contains the preamble + the blockquote. Both are
+    // on the quoted side because yahoo-quoted-begin is a sibling to
+    // the blockquote and marks the boundary.
+    expect(out.quotedContentHtml).toContain('yahoo-quoted-begin');
+    expect(out.quotedContentHtml).toContain('iosymail');
+    expect(out.quotedContentHtml).toContain('quoted body');
+    // No leakage either way.
+    expect(out.newContentHtml).not.toContain('yahoo-quoted-begin');
+    expect(out.newContentHtml).not.toContain('iosymail');
+    expect(out.quotedContentHtml).not.toContain('Yes. Right');
+    expect(out.quotedContentHtml).not.toContain('Account holder');
+  });
+
   it('tolerates attribute order (id before class)', () => {
     const html = '<p>hi</p><div id="foo" data-x="1" class="prefix gmail_quote suffix">old</div>';
     const out = splitBody('', html, []);

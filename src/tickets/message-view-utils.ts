@@ -279,8 +279,13 @@ const QUOTE_BOUNDARY_SELECTORS = [
   // Outlook web
   '#appendonsend',
   '[id="mail-editor-reference-message-container"]',
-  // Yahoo
+  // Yahoo — web (yahoo_quoted) + iPhone Mail (yahoo-quoted-begin).
+  // The iPhone variant marks a <p> preamble that sits SIBLING to the
+  // actual <blockquote class="iosymail">, so matching the preamble
+  // directly keeps both halves on the quoted side.
   '.yahoo_quoted',
+  '.yahoo-quoted-begin',
+  'blockquote.iosymail',
   // Zoho
   '.zmail_signature ~ blockquote',
   // Generic — any blockquote that's not just a tiny pull-quote at
@@ -325,28 +330,51 @@ function splitHtmlBody(html: string): {
     return { newHtml: html, quotedHtml: null };
   }
 
-  // Split the DOM: everything at or after `boundary` (in document
-  // order, considering all ancestors) is quoted content. We walk
-  // upward from the boundary until we reach a child of the root,
-  // then take that node + all its following siblings as quoted, and
-  // reserialize the root's remaining children as newHtml.
-  const topLevelAncestor = getTopLevelAncestor($, boundary, root);
-  if (!topLevelAncestor) {
-    return { newHtml: html, quotedHtml: null };
+  // Split the DOM in place at the boundary.
+  //
+  // The previous implementation walked up to the top-level ancestor
+  // (a direct child of root) and treated THAT whole subtree as
+  // quoted. That over-matched for clients like Yahoo iPhone Mail
+  // whose body wraps the ENTIRE message — fresh reply + signature +
+  // quote — inside one outer <div>. Walking up swallowed the fresh
+  // content.
+  //
+  // Correct behavior: at each level on the path from boundary to
+  // root, keep the pre-boundary siblings in `new` and move the
+  // boundary-side portion into `quoted`. Only the boundary itself is
+  // removed (level 0); on ancestor levels we remove its following
+  // siblings but keep the ancestor as a container for the pre-
+  // boundary siblings that stay on the `new` side.
+  //
+  // Capture the serialization of removed portions BEFORE mutating,
+  // walking inside-out so each pass sees the DOM as it was.
+  const path: cheerio.Cheerio<AnyNode>[] = [];
+  {
+    let node: cheerio.Cheerio<AnyNode> = boundary;
+    const rootNode = root.get(0);
+    while (node.length > 0 && node.get(0) !== rootNode) {
+      path.push(node);
+      node = node.parent();
+      if (path.length > 100) break; // defensive — pathological nesting
+    }
   }
 
-  // Collect quoted: topLevelAncestor and every subsequent sibling.
   const quotedParts: string[] = [];
-  quotedParts.push($.html(topLevelAncestor) ?? '');
-  const following = $(topLevelAncestor).nextAll();
-  following.each((_, el) => {
-    quotedParts.push($.html(el) ?? '');
-  });
+  for (let i = 0; i < path.length; i++) {
+    const pivot = path[i];
+    if (!pivot) continue;
+    const nextSibs = pivot.nextAll();
+    if (i === 0) {
+      // Boundary level — pivot + everything after is quoted.
+      quotedParts.push($.html(pivot) ?? '');
+    }
+    nextSibs.each((_, el) => {
+      quotedParts.push($.html(el) ?? '');
+    });
+    nextSibs.remove();
+    if (i === 0) pivot.remove();
+  }
   const quotedHtml = quotedParts.join('');
-
-  // Remove the quoted portion from the root and serialize the rest.
-  $(topLevelAncestor).nextAll().remove();
-  $(topLevelAncestor).remove();
   const newHtml = root.html() ?? '';
 
   // Trim empty tail (trailing <br>, <div><br></div>, etc.) so
@@ -387,33 +415,6 @@ function isTinyPullQuote(
   // Strip tags to get just text-ish length.
   const beforeText = cheerio.load(before).text().trim();
   return beforeText.length < 40;
-}
-
-/**
- * Walk up from `el` until we reach a direct child of `root`. That
- * top-level ancestor + everything after it at the top level is what
- * becomes the quoted section. Returns null when we somehow can't
- * reach a top-level ancestor (shouldn't happen for cheerio-parsed
- * DOMs, but defensive).
- */
-function getTopLevelAncestor(
-  $: cheerio.CheerioAPI,
-  el: cheerio.Cheerio<AnyNode>,
-  root: cheerio.Cheerio<AnyNode>,
-): AnyNode | null {
-  let current: cheerio.Cheerio<AnyNode> = el;
-  const rootNode = root.get(0);
-  if (!rootNode) return null;
-  for (let i = 0; i < 100; i++) {
-    const parent = current.parent();
-    if (parent.length === 0) return current.get(0) ?? null;
-    const parentNode = parent.get(0);
-    if (parentNode === rootNode) {
-      return current.get(0) ?? null;
-    }
-    current = parent;
-  }
-  return null;
 }
 
 /**
