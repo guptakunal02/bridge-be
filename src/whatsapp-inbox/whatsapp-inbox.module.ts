@@ -39,8 +39,11 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     UsersModule,
     // AutomationEngine — ingest emits MESSAGE_RECEIVED /
     // TICKET_CREATED / TICKET_REOPENED so rules fire on WhatsApp
-    // inbound exactly like they do on email.
-    AutomationsModule,
+    // inbound exactly like they do on email. forwardRef because
+    // the cycle is Whatsapp → Automations → Tickets → Whatsapp;
+    // without it the AutomationsModule reference is undefined by
+    // the time Nest sets up WhatsappInboxModule.
+    forwardRef(() => AutomationsModule),
     // forwardRef because TicketsModule now also imports this module
     // (so TicketsService can reach WhatsappSenderService for the
     // outbound reply path).
