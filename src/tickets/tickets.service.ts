@@ -1568,26 +1568,25 @@ export class TicketsService {
       // "assigned to me" surfaces zero rows when they look for a
       // teammate's ticket (common when a customer calls in asking
       // about a ticket a colleague handled), which reads like a bug.
-      // Broadening to "any ticket in a team I'm a non-paused member of"
-      // keeps the search useful without exposing cross-team tickets.
+      //
+      // Bridge treats teams as ROUTING units, not permission walls —
+      // every member works the same organisation's queue, so a search
+      // can span the full ticket set without crossing any trust
+      // boundary. When searching, we drop the assignee filter
+      // entirely so members can find any ticket by id or content.
+      // Admin-only paths like scope=all still require ADMIN above —
+      // this widening ONLY applies to the member's own search-typing
+      // flow.
+      //
       // When no search is typed, scope stays strict to "mine" so the
       // default inbox view is the agent's own work list.
       if (opts.widenForSearch) {
-        qb.andWhere(
-          `(
-             t.assignee = :meId
-             OR t.team_id IN (
-               SELECT tm.team_id
-                 FROM public.team_member tm
-                WHERE tm.user_id = :meId
-                  AND tm.paused_in_team = false
-             )
-           )`,
-          { meId: actingUser.id },
-        );
-      } else {
-        qb.andWhere('t.assignee = :meId', { meId: actingUser.id });
+        // No additional WHERE — the applyMessageSearch predicate (if
+        // any) already narrows the result set. The caller is a MEMBER
+        // typing in the inbox search; the search token IS the filter.
+        return;
       }
+      qb.andWhere('t.assignee = :meId', { meId: actingUser.id });
       return;
     }
     if (scope === 'unassigned') {
