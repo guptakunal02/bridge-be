@@ -72,6 +72,13 @@ export function validateCasesAndActions(
           validatePredicate(p, `${path}.conditions[${j}]`, errors),
         );
       }
+      if (
+        obj.match !== undefined &&
+        obj.match !== 'all' &&
+        obj.match !== 'any'
+      ) {
+        errors.push(`${path}.match: must be "all" or "any" when set`);
+      }
       if (!Array.isArray(obj.actions)) {
         errors.push(`${path}.actions: must be an array`);
       } else if (obj.actions.length === 0) {

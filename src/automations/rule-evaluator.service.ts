@@ -5,7 +5,7 @@ import { ActionDispatcher } from './action-dispatcher.service';
 import type { Action } from './action';
 import { AutomationRule } from './entities/automation-rule.entity';
 import type { AutomationEventPayload } from './events';
-import { evaluateAll, type Predicate } from './predicate';
+import { evaluateAll, evaluateAny, type Predicate } from './predicate';
 
 /**
  * Decoded shape of `automation_rule.cases`. Validated at the DTO
@@ -16,6 +16,15 @@ import { evaluateAll, type Predicate } from './predicate';
 interface Case {
   conditions: Predicate[];
   actions: Action[];
+  /**
+   * How to combine conditions within this case.
+   *   'all' → every condition must be true (AND; default)
+   *   'any' → at least one condition must be true (OR)
+   * Older rules written before the toggle landed don't carry the
+   * field; the parser defaults them to 'all' so semantics stay
+   * backward-compatible.
+   */
+  match: 'all' | 'any';
 }
 
 /**
@@ -59,7 +68,11 @@ export class RuleEvaluator {
 
     let anyMatched = false;
     for (const c of cases) {
-      if (evaluateAll(c.conditions, ctx)) {
+      const matched =
+        c.match === 'any'
+          ? evaluateAny(c.conditions, ctx)
+          : evaluateAll(c.conditions, ctx);
+      if (matched) {
         anyMatched = true;
         for (const action of c.actions) {
           await this.dispatcher.dispatch(action, ctx);
@@ -90,7 +103,12 @@ export class RuleEvaluator {
       const actions = Array.isArray(obj.actions)
         ? (obj.actions as Action[])
         : [];
-      out.push({ conditions, actions });
+      // Default to 'all' for backward compat — rules written before
+      // the match toggle landed don't carry the field, and their
+      // semantics MUST stay AND or they'd silently start matching
+      // on different rows.
+      const match: 'all' | 'any' = obj.match === 'any' ? 'any' : 'all';
+      out.push({ conditions, actions, match });
     }
     return out;
   }

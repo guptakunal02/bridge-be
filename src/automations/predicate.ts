@@ -165,3 +165,17 @@ export function evaluateAll(
 ): boolean {
   return predicates.every((p) => evaluatePredicate(p, ctx));
 }
+
+/**
+ * OR semantics across a case's conditions. Empty array → false (an
+ * "any" case with no conditions should NOT match on vacuous truth —
+ * the author clearly meant "any one of these" and there are none).
+ * Short-circuits on first truthy predicate.
+ */
+export function evaluateAny(
+  predicates: Predicate[],
+  ctx: AutomationEventPayload,
+): boolean {
+  if (predicates.length === 0) return false;
+  return predicates.some((p) => evaluatePredicate(p, ctx));
+}
