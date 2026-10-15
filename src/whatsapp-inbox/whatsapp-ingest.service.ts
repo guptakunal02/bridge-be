@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { AutomationEngine } from '../automations/automation-engine.service';
+import { AUTOMATION_EVENT } from '../automations/events';
 import { Channel } from '../channels/entities/channel.entity';
 import {
   ChannelStatus,
@@ -69,6 +71,7 @@ export class WhatsappIngestService {
     private readonly picker: AssignmentPickerService,
     private readonly teams: TeamsService,
     private readonly lifecycle: TicketLifecycleService,
+    private readonly automations: AutomationEngine,
   ) {}
 
   /**
@@ -193,9 +196,19 @@ export class WhatsappIngestService {
       return;
     }
 
+    // Snapshotted outside the txn so the post-commit automation emit
+    // can read them. The txn callback assigns these as it goes.
+    let ticket!: Ticket;
+    let message!: WhatsappMessage;
+    let wasNewTicket = false;
+    let reopenedFromResolved = false;
+
     await this.dataSource.transaction(async (mgr) => {
-      const ticket = await this.findOrCreateTicket(mgr, channel, msg.from!);
-      await mgr.getRepository(WhatsappMessage).save(
+      const result = await this.findOrCreateTicket(mgr, channel, msg.from!);
+      ticket = result.ticket;
+      wasNewTicket = result.wasNewTicket;
+      reopenedFromResolved = result.reopenedFromResolved;
+      message = await mgr.getRepository(WhatsappMessage).save(
         mgr.getRepository(WhatsappMessage).create({
           channelId: channel.id,
           ticket_id: ticket.id,
@@ -212,6 +225,63 @@ export class WhatsappIngestService {
       // where a customer reply is the wake trigger.
       await this.lifecycle.wakeIfPaused(ticket.id, mgr);
     });
+
+    // Fire automation events post-commit. Fire-and-forget; the engine
+    // queues via EventEmitter2 so slow / failing rules never block
+    // the ingest's return path. Mirrors the email ingest's emit
+    // triple exactly — same event names, same payload shape — so
+    // rules written for email automatically evaluate on WhatsApp.
+    // Subject is null (WhatsApp has no subject); predicates comparing
+    // event.subject will simply not match, which is the correct
+    // behaviour for a channel without that concept.
+    const hourIst = computeHourIst(message.createdAt);
+    const ticketSnapshot = {
+      id: ticket.id,
+      channelId: ticket.channel_id,
+      status: ticket.status,
+      tags: ticket.tags ?? [],
+      assigneeId: ticket.assignee,
+      teamId: ticket.team_id,
+      subject: ticket.thread_key ?? null,
+    };
+    this.automations.emit({
+      event: AUTOMATION_EVENT.MESSAGE_RECEIVED,
+      ticket: ticketSnapshot,
+      payload: {
+        ticketId: ticket.id,
+        messageId: message.id,
+        channelId: channel.id,
+        sender: msg.from!,
+        subject: null,
+        body: message.content ?? '',
+        hourIst,
+      },
+    });
+    if (wasNewTicket) {
+      this.automations.emit({
+        event: AUTOMATION_EVENT.TICKET_CREATED,
+        ticket: ticketSnapshot,
+        payload: {
+          ticketId: ticket.id,
+          channelId: channel.id,
+          sender: msg.from!,
+          subject: null,
+          body: message.content ?? '',
+          hourIst,
+        },
+      });
+    }
+    if (reopenedFromResolved) {
+      this.automations.emit({
+        event: AUTOMATION_EVENT.TICKET_REOPENED,
+        ticket: ticketSnapshot,
+        payload: {
+          ticketId: ticket.id,
+          newStatus: ticket.status,
+          hourIst,
+        },
+      });
+    }
   }
 
   /**
@@ -225,7 +295,11 @@ export class WhatsappIngestService {
     mgr: EntityManager,
     channel: Channel,
     waId: string,
-  ): Promise<Ticket> {
+  ): Promise<{
+    ticket: Ticket;
+    wasNewTicket: boolean;
+    reopenedFromResolved: boolean;
+  }> {
     const ticketRepo = mgr.getRepository(Ticket);
     const logRepo = mgr.getRepository(TicketActivityLog);
     const threadKey = `wa:${waId}`;
@@ -252,12 +326,20 @@ export class WhatsappIngestService {
           actor_id: null,
           log: 'Auto-reopened — new WhatsApp message from customer',
         });
-        // Return the refreshed row so callers see the new status.
-        return (await ticketRepo.findOneOrFail({
+        const refreshed = await ticketRepo.findOneOrFail({
           where: { id: existing.id },
-        })) as Ticket;
+        });
+        return {
+          ticket: refreshed,
+          wasNewTicket: false,
+          reopenedFromResolved: true,
+        };
       }
-      return existing;
+      return {
+        ticket: existing,
+        wasNewTicket: false,
+        reopenedFromResolved: false,
+      };
     }
 
     // Fresh conversation → mint a ticket. Routing rules aren't ported
@@ -328,6 +410,17 @@ export class WhatsappIngestService {
         });
       });
     }
-    return ticket;
+    return { ticket, wasNewTicket: true, reopenedFromResolved: false };
   }
+}
+
+/**
+ * Hour of day in IST — convenience for the common "OOH" automation
+ * predicate. Mirrors the email ingest's helper so predicate authors
+ * see the same integer regardless of channel.
+ */
+function computeHourIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCHours();
 }

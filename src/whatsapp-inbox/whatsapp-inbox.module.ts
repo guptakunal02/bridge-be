@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AutomationsModule } from '../automations/automations.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { TeamsModule } from '../teams/teams.module';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
@@ -36,6 +37,10 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     TypeOrmModule.forFeature([Channel, Ticket, TicketActivityLog, User, WhatsappMessage]),
     TeamsModule,
     UsersModule,
+    // AutomationEngine — ingest emits MESSAGE_RECEIVED /
+    // TICKET_CREATED / TICKET_REOPENED so rules fire on WhatsApp
+    // inbound exactly like they do on email.
+    AutomationsModule,
     // forwardRef because TicketsModule now also imports this module
     // (so TicketsService can reach WhatsappSenderService for the
     // outbound reply path).
