@@ -29,7 +29,11 @@ import {
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
-import { WhatsappSenderService } from '../whatsapp-inbox/whatsapp-sender.service';
+import {
+  resolveMediaKind,
+  WhatsappSenderService,
+  WHATSAPP_MEDIA_SIZE_CAPS,
+} from '../whatsapp-inbox/whatsapp-sender.service';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
@@ -1116,6 +1120,14 @@ export class TicketsService {
       return this.replyWhatsapp(ticket, channel, dto, actingUser);
     }
 
+    // Email requires a body — attachments without body aren't a
+    // supported pattern on the email path (SMTP accepts them, but
+    // our composer wouldn't generate that shape). WhatsApp's branch
+    // above handles the optional-body case.
+    if (!dto.body || dto.body.trim().length === 0) {
+      throw new BadRequestException('Reply body is required for email');
+    }
+
     // Ordered oldest → newest. Cheap: bounded by messages-per-thread
     // which is dozens at most in practice.
     const thread = await this.emails.find({
@@ -1300,9 +1312,15 @@ export class TicketsService {
    * window only; template support is V4. Reject early if there's no
    * inbound to anchor the window against.
    *
-   * Attachments / CC / BCC / subject on the DTO are ignored — none
-   * of them map to WhatsApp text sends. The FE's chat composer sends
-   * `body` only.
+   * Attachments: each gets its own Meta round-trip (download from
+   * S3 → upload bytes to Meta /media → send a type:image|video|
+   * document|audio message). Each media send writes its own
+   * whatsapp_message row with its own wamid, mirroring how WhatsApp
+   * Web renders multi-file sends. Text body goes out as a final
+   * separate text message, if present.
+   *
+   * CC / BCC / subject on the DTO are ignored — none of them map to
+   * WhatsApp.
    */
   private async replyWhatsapp(
     ticket: Ticket,
@@ -1311,8 +1329,11 @@ export class TicketsService {
     actingUser: AuthenticatedUser,
   ): Promise<TicketDetail> {
     const trimmed = (dto.body ?? '').trim();
-    if (!trimmed) {
-      throw new BadRequestException('Message body is empty');
+    const attachments = dto.attachments ?? [];
+    if (!trimmed && attachments.length === 0) {
+      throw new BadRequestException(
+        'Reply must have a message or at least one attachment',
+      );
     }
     if (!channel.inbox_contact) {
       // Channel row without an inbox_contact means ingest never
@@ -1323,6 +1344,25 @@ export class TicketsService {
         'WhatsApp channel is missing its phone_number_id — reconnect it in Settings.',
       );
     }
+
+    // Pre-validate every attachment's mime + size before touching
+    // Meta — a reject half-way through a multi-file batch leaves the
+    // customer with a partial payload, so fail-closed up front.
+    const resolvedAttachments = attachments.map((a) => {
+      const kind = resolveMediaKind(a.contentType);
+      if (!kind) {
+        throw new BadRequestException(
+          `WhatsApp doesn't accept this file type: ${a.contentType} (${a.filename})`,
+        );
+      }
+      if (a.sizeBytes > WHATSAPP_MEDIA_SIZE_CAPS[kind]) {
+        const capMb = (WHATSAPP_MEDIA_SIZE_CAPS[kind] / 1024 / 1024).toFixed(0);
+        throw new BadRequestException(
+          `${a.filename} is larger than WhatsApp's ${capMb} MB cap for ${kind} files`,
+        );
+      }
+      return { ref: a, kind };
+    });
 
     const inbound = await this.whatsapps.findOne({
       where: {
@@ -1350,54 +1390,94 @@ export class TicketsService {
       );
     }
 
-    // 1. Meta Graph send.
-    const { wamid, raw } = await this.whatsappSender.sendText(
-      inbound.sender,
-      trimmed,
-    );
+    // Collect every send that succeeded on Meta's side — we persist
+    // all of them in a single commit at the end, so a late persist
+    // failure logs a divergence record covering every outbound.
+    interface PendingSend {
+      wamid: string;
+      raw: unknown;
+      content: string | null;
+      messageType: 'text' | 'image' | 'video' | 'document' | 'audio';
+    }
+    const sent: PendingSend[] = [];
 
-    // 2. Persist. Mirrors the email path's try/catch — a successful
-    //    send with a failed persist is a divergence that admins need
-    //    to see in the activity log.
+    // 1. Media sends — one Meta round-trip per file. Download bytes
+    //    from our S3, upload to Meta's /media, send a type:<kind>
+    //    message. Each is independent — if the 3rd fails, the first
+    //    two already reached the customer. We persist what did go,
+    //    then rethrow.
     try {
-      await this.dataSource.transaction(async (mgr) => {
-        const waRepo = mgr.getRepository(WhatsappMessage);
-        const logRepo = mgr.getRepository(TicketActivityLog);
-        await waRepo.save(
-          waRepo.create({
-            channelId: ticket.channel_id,
-            ticket_id: ticket.id,
-            type: MessageDirection.SENT,
-            // The business's phone_number_id — same stable Meta id we
-            // store on channel.inbox_contact at ingest time. Not the
-            // human-readable number; that can change on display edits.
-            // Non-null-asserted — guarded at the top of this method.
-            sender: channel.inbox_contact!,
-            content: trimmed,
-            external_message_id: wamid,
-            message_type: 'text',
-            raw_payload: raw,
-          }),
+      for (const { ref, kind } of resolvedAttachments) {
+        const { body } = await this.storage.download(ref.storageKey);
+        const mediaId = await this.whatsappSender.uploadMediaToMeta(
+          body,
+          ref.contentType,
+          ref.filename,
         );
-        await logRepo.save({
-          ticket_id: ticket.id,
-          event: TicketActivity.AGENT_REPLIED,
-          actor_id: actingUser.id,
-          log: `Replied via WhatsApp by ${actorLabel(actingUser)}`,
+        const { wamid, raw } = await this.whatsappSender.sendMedia(
+          inbound.sender,
+          kind,
+          mediaId,
+        );
+        sent.push({
+          wamid,
+          raw,
+          // Store the filename as content so the ticket thread has
+          // SOMETHING readable — the FE media renderer (V4b) will
+          // render the actual asset separately when it lands.
+          content: ref.filename,
+          messageType: kind,
         });
-      });
+      }
+
+      // 2. Text body — if the agent typed one, goes out as its own
+      //    message after all media. Follows WhatsApp Web ordering.
+      if (trimmed) {
+        const { wamid, raw } = await this.whatsappSender.sendText(
+          inbound.sender,
+          trimmed,
+        );
+        sent.push({
+          wamid,
+          raw,
+          content: trimmed,
+          messageType: 'text',
+        });
+      }
+    } catch (sendErr) {
+      // Partial send — persist what succeeded before rethrowing so
+      // the thread shows the customer's actual received state.
+      if (sent.length > 0) {
+        await this.persistWhatsappSends(
+          ticket,
+          channel,
+          sent,
+          actingUser,
+        ).catch((persistErr) => {
+          this.logger.error(
+            `WhatsApp partial-batch persist failed. ticket=${ticket.id} successes=${sent.length} error=${persistErr instanceof Error ? persistErr.message : String(persistErr)}`,
+          );
+        });
+      }
+      throw sendErr;
+    }
+
+    // 3. Persist all successful sends in one txn. On persist failure
+    //    log a divergence row — Meta already delivered.
+    try {
+      await this.persistWhatsappSends(ticket, channel, sent, actingUser);
     } catch (persistErr) {
       const errMsg =
         persistErr instanceof Error ? persistErr.message : String(persistErr);
       this.logger.error(
-        `WhatsApp send succeeded but DB persist failed. ticket=${ticket.id} wamid=${wamid} error=${errMsg}`,
+        `WhatsApp sends succeeded but DB persist failed. ticket=${ticket.id} successes=${sent.length} error=${errMsg}`,
       );
       try {
         await this.activity.save({
           ticket_id: ticket.id,
           event: TicketActivity.AGENT_REPLIED,
           actor_id: actingUser.id,
-          log: `WhatsApp send succeeded but DB persist failed. wamid=${wamid}. Error: ${errMsg}`,
+          log: `WhatsApp send succeeded but DB persist failed. ${sent.length} message(s) delivered. Error: ${errMsg}`,
         });
       } catch {
         // ignore
@@ -1412,6 +1492,55 @@ export class TicketsService {
     }
 
     return this.get(ticket.id);
+  }
+
+  /**
+   * Persist a batch of successful WhatsApp sends — media + text —
+   * atomically with a single AGENT_REPLIED activity log row. The
+   * log line summarises WHAT went out (file names + whether a text
+   * body followed) so the audit trail reads clearly in the sidebar.
+   */
+  private async persistWhatsappSends(
+    ticket: Ticket,
+    channel: Channel,
+    sent: Array<{
+      wamid: string;
+      raw: unknown;
+      content: string | null;
+      messageType: 'text' | 'image' | 'video' | 'document' | 'audio';
+    }>,
+    actingUser: AuthenticatedUser,
+  ): Promise<void> {
+    if (sent.length === 0) return;
+    await this.dataSource.transaction(async (mgr) => {
+      const waRepo = mgr.getRepository(WhatsappMessage);
+      const logRepo = mgr.getRepository(TicketActivityLog);
+      await waRepo.save(
+        sent.map((s) =>
+          waRepo.create({
+            channelId: ticket.channel_id,
+            ticket_id: ticket.id,
+            type: MessageDirection.SENT,
+            // channel.inbox_contact is guarded as non-null at the
+            // top of replyWhatsapp.
+            sender: channel.inbox_contact!,
+            content: s.content,
+            external_message_id: s.wamid,
+            message_type: s.messageType,
+            raw_payload: s.raw,
+          }),
+        ),
+      );
+      const summary = sent
+        .map((s) => (s.messageType === 'text' ? 'text' : `${s.messageType}: ${s.content ?? ''}`))
+        .join('; ');
+      await logRepo.save({
+        ticket_id: ticket.id,
+        event: TicketActivity.AGENT_REPLIED,
+        actor_id: actingUser.id,
+        log: `Replied via WhatsApp by ${actorLabel(actingUser)} — ${summary}`,
+      });
+    });
   }
 
   private async applyScope(

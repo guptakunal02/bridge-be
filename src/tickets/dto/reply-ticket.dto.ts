@@ -53,16 +53,18 @@ export class ReplyAttachmentRef {
 }
 
 /**
- * Payload for POST /tickets/:id/reply. `body` is the only required
- * field. CC / BCC each cap at 20 recipients (SMTP servers commonly
- * enforce ~50 total; keeping our own cap tight prevents fat-finger
- * blasts). Attachments cap at 10 per reply.
+ * Payload for POST /tickets/:id/reply. One of `body` or `attachments`
+ * must be present — the service layer rejects the request otherwise
+ * (WhatsApp agents commonly attach a photo with no caption, which
+ * can't be modeled by making body required). CC / BCC each cap at
+ * 20 recipients. Attachments cap at 10 per reply.
  */
 export class ReplyTicketDto {
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(50_000)
-  body!: string;
+  body?: string;
 
   @IsOptional()
   @IsString()
