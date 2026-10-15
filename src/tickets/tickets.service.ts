@@ -29,6 +29,7 @@ import {
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
+import { WhatsappSenderService } from '../whatsapp-inbox/whatsapp-sender.service';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
@@ -87,6 +88,7 @@ export class TicketsService {
     private readonly runtime: BotRuntimeService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly sender: EmailSenderService,
+    private readonly whatsappSender: WhatsappSenderService,
     private readonly tagsService: TagsService,
     @Inject(forwardRef(() => AutomationEngine))
     private readonly automations: AutomationEngine,
@@ -1105,6 +1107,15 @@ export class TicketsService {
       throw new NotFoundException('Ticket channel no longer exists');
     }
 
+    // Channel branch: EMAIL stays on the SMTP path below. WHATSAPP
+    // delegates to replyWhatsapp — Meta Graph send, whatsapp_message
+    // row, same AGENT_REPLIED activity log. Routing happens up here
+    // so the rest of this method stays an email-specific flow and
+    // doesn't accrete per-channel conditionals.
+    if (ticket.channel_type === ChannelType.WHATSAPP) {
+      return this.replyWhatsapp(ticket, channel, dto, actingUser);
+    }
+
     // Ordered oldest → newest. Cheap: bounded by messages-per-thread
     // which is dozens at most in practice.
     const thread = await this.emails.find({
@@ -1271,6 +1282,136 @@ export class TicketsService {
     }
 
     return this.get(id);
+  }
+
+  /**
+   * WhatsApp branch of reply(). Mirrors the email path's shape:
+   *   1. Resolve the customer wa_id from the last RECEIVED whatsapp
+   *      message (the sender column holds Meta's canonical wa_id, no
+   *      "+" prefix — perfect for Graph API).
+   *   2. Send via Meta Graph (outside the txn — HTTP call must not
+   *      sit inside a DB transaction).
+   *   3. Persist the SENT whatsapp_message row + AGENT_REPLIED log
+   *      in one txn once the send succeeds.
+   *
+   * Why we require a prior inbound: WhatsApp's platform rules disallow
+   * unsolicited business-initiated text — the first message on any
+   * conversation has to be an approved template. V3 ships text-in-
+   * window only; template support is V4. Reject early if there's no
+   * inbound to anchor the window against.
+   *
+   * Attachments / CC / BCC / subject on the DTO are ignored — none
+   * of them map to WhatsApp text sends. The FE's chat composer sends
+   * `body` only.
+   */
+  private async replyWhatsapp(
+    ticket: Ticket,
+    channel: Channel,
+    dto: ReplyTicketDto,
+    actingUser: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    const trimmed = (dto.body ?? '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('Message body is empty');
+    }
+    if (!channel.inbox_contact) {
+      // Channel row without an inbox_contact means ingest never
+      // provisioned the phone_number_id — a WhatsApp channel can't
+      // function in that state. Reject fast rather than persist a
+      // row with a null sender.
+      throw new BadRequestException(
+        'WhatsApp channel is missing its phone_number_id — reconnect it in Settings.',
+      );
+    }
+
+    const inbound = await this.whatsapps.findOne({
+      where: {
+        ticket_id: ticket.id,
+        type: MessageDirection.RECEIVED,
+      },
+      order: { createdAt: 'DESC' },
+    });
+    if (!inbound) {
+      throw new BadRequestException(
+        'This WhatsApp ticket has no inbound message to reply to.',
+      );
+    }
+
+    // 24-hour customer-service window check. Meta would reject outside
+    // this window anyway, but the error class comes back as a 400 with
+    // code 131047 — surfacing it as a clear BE message here avoids a
+    // confusing round-trip through the sender's generic error path and
+    // signals intent (we chose to not implement templates yet).
+    const windowMs = 24 * 60 * 60 * 1000;
+    const ageMs = Date.now() - inbound.createdAt.getTime();
+    if (ageMs > windowMs) {
+      throw new BadRequestException(
+        "The 24-hour reply window on this conversation has closed. WhatsApp requires an approved template to re-engage — Bridge doesn't support templates yet, so this reply can't go out.",
+      );
+    }
+
+    // 1. Meta Graph send.
+    const { wamid, raw } = await this.whatsappSender.sendText(
+      inbound.sender,
+      trimmed,
+    );
+
+    // 2. Persist. Mirrors the email path's try/catch — a successful
+    //    send with a failed persist is a divergence that admins need
+    //    to see in the activity log.
+    try {
+      await this.dataSource.transaction(async (mgr) => {
+        const waRepo = mgr.getRepository(WhatsappMessage);
+        const logRepo = mgr.getRepository(TicketActivityLog);
+        await waRepo.save(
+          waRepo.create({
+            channelId: ticket.channel_id,
+            ticket_id: ticket.id,
+            type: MessageDirection.SENT,
+            // The business's phone_number_id — same stable Meta id we
+            // store on channel.inbox_contact at ingest time. Not the
+            // human-readable number; that can change on display edits.
+            // Non-null-asserted — guarded at the top of this method.
+            sender: channel.inbox_contact!,
+            content: trimmed,
+            external_message_id: wamid,
+            message_type: 'text',
+            raw_payload: raw,
+          }),
+        );
+        await logRepo.save({
+          ticket_id: ticket.id,
+          event: TicketActivity.AGENT_REPLIED,
+          actor_id: actingUser.id,
+          log: `Replied via WhatsApp by ${actorLabel(actingUser)}`,
+        });
+      });
+    } catch (persistErr) {
+      const errMsg =
+        persistErr instanceof Error ? persistErr.message : String(persistErr);
+      this.logger.error(
+        `WhatsApp send succeeded but DB persist failed. ticket=${ticket.id} wamid=${wamid} error=${errMsg}`,
+      );
+      try {
+        await this.activity.save({
+          ticket_id: ticket.id,
+          event: TicketActivity.AGENT_REPLIED,
+          actor_id: actingUser.id,
+          log: `WhatsApp send succeeded but DB persist failed. wamid=${wamid}. Error: ${errMsg}`,
+        });
+      } catch {
+        // ignore
+      }
+      throw persistErr;
+    }
+
+    try {
+      await this.presence.slideOnActivity(actingUser.id);
+    } catch {
+      // presence slide is telemetry-adjacent; safe to swallow.
+    }
+
+    return this.get(ticket.id);
   }
 
   private async applyScope(

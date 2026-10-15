@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Channel } from '../channels/entities/channel.entity';
 import { TeamsModule } from '../teams/teams.module';
@@ -10,6 +10,7 @@ import { UsersModule } from '../users/users.module';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
 import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
+import { WhatsappSenderService } from './whatsapp-sender.service';
 import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
@@ -35,9 +36,21 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     TypeOrmModule.forFeature([Channel, Ticket, TicketActivityLog, User, WhatsappMessage]),
     TeamsModule,
     UsersModule,
-    TicketsModule,
+    // forwardRef because TicketsModule now also imports this module
+    // (so TicketsService can reach WhatsappSenderService for the
+    // outbound reply path).
+    forwardRef(() => TicketsModule),
   ],
   controllers: [WhatsappWebhookController],
-  providers: [WhatsappWebhookService, WhatsappIngestService, WhatsappSignatureGuard],
+  providers: [
+    WhatsappWebhookService,
+    WhatsappIngestService,
+    WhatsappSenderService,
+    WhatsappSignatureGuard,
+  ],
+  // WhatsappSenderService is exported so TicketsService can branch
+  // outbound reply on channel_type (EMAIL → SMTP, WHATSAPP → Meta
+  // Graph) without reaching across module boundaries.
+  exports: [WhatsappSenderService],
 })
 export class WhatsappInboxModule {}

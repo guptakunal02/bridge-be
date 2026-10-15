@@ -10,6 +10,7 @@ import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { SettingsModule } from '../settings/settings.module';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
+import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { TagsModule } from '../tags/tags.module';
 import { Team } from '../teams/entities/team.entity';
 import { User } from '../users/entities/user.entity';
@@ -55,6 +56,13 @@ import { TicketsService } from './tickets.service';
     OpsModule,
     // S3StorageService — reply-attachment uploads.
     StorageModule,
+    // WhatsappSenderService — Meta Graph outbound for WhatsApp
+    // tickets' reply path. EmailSenderService handles EMAIL via
+    // ChannelsModule above; tickets.service branches on channel_type.
+    // forwardRef because WhatsappInboxModule imports TicketsModule
+    // (its ingest service calls TicketLifecycleService on new
+    // customer messages).
+    forwardRef(() => WhatsappInboxModule),
     // AutomationEngine — emit tag.applied events post-mutation.
     // forwardRef because AutomationsModule imports TicketsModule
     // (its action handlers call back into TicketsService.update).
