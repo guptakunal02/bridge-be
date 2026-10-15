@@ -28,6 +28,7 @@ import {
 } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
+import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
@@ -73,6 +74,8 @@ export class TicketsService {
     private readonly activity: Repository<TicketActivityLog>,
     @InjectRepository(EmailMessage)
     private readonly emails: Repository<EmailMessage>,
+    @InjectRepository(WhatsappMessage)
+    private readonly whatsapps: Repository<WhatsappMessage>,
     @InjectRepository(TicketReadState)
     private readonly readStates: Repository<TicketReadState>,
     @InjectRepository(TicketNote)
@@ -168,7 +171,7 @@ export class TicketsService {
       // materialised `last_message_at` on ticket keeps the same
       // sort key without the subquery per row.
       qb.orderBy(
-        `COALESCE((SELECT MAX(m."createdAt") FROM email_message m WHERE m.ticket_id = t.id), t."createdAt")`,
+        `COALESCE((SELECT MAX(m."createdAt") FROM message m WHERE m.ticket_id = t.id), t."createdAt")`,
         'DESC',
       );
     }
@@ -382,10 +385,9 @@ export class TicketsService {
     const customerRow: Array<{ sender: string | null }> = await this.emails
       .query(
         `SELECT sender
-           FROM public.email_message
+           FROM public.message
           WHERE ticket_id = $1
-            AND type = 'RECEIVED'
-            AND "deletedAt" IS NULL
+            AND direction = 'RECEIVED'
           ORDER BY "createdAt" ASC
           LIMIT 1`,
         [ticketId],
@@ -393,9 +395,11 @@ export class TicketsService {
     const customerEmail = customerRow[0]?.sender;
     if (!customerEmail) return [];
 
-    // DISTINCT ON keeps one row per ticket while joining email_message.
-    // Subject comes from the earliest message on each ticket so it
-    // matches the header the ticket detail page shows.
+    // DISTINCT ON keeps one row per ticket while joining the message
+    // view. Subject comes from the earliest message on each ticket so
+    // it matches the header the ticket detail page shows (null for
+    // WhatsApp tickets, which the FE already renders as "(no
+    // subject)").
     const rows: Array<{
       id: string;
       status: TicketStatus;
@@ -409,16 +413,14 @@ export class TicketsService {
               t.id, t.status, t.is_reopened, t.channel_type,
               t."createdAt", t."updatedAt",
               (SELECT m2.subject
-                 FROM public.email_message m2
+                 FROM public.message m2
                 WHERE m2.ticket_id = t.id
-                  AND m2."deletedAt" IS NULL
                 ORDER BY m2."createdAt" ASC
                 LIMIT 1) AS subject
          FROM public.ticket t
-         INNER JOIN public.email_message m
+         INNER JOIN public.message m
                  ON m.ticket_id = t.id
-                AND m."deletedAt" IS NULL
-                AND m.type = 'RECEIVED'
+                AND m.direction = 'RECEIVED'
                 AND m.sender = $1
         WHERE t.id <> $2
           AND t."deletedAt" IS NULL
@@ -485,13 +487,12 @@ export class TicketsService {
     const rows: Array<{ ticket_id: string; unread: string }> =
       await this.emails.query(
         `SELECT m.ticket_id, COUNT(*)::text AS unread
-           FROM public.email_message m
+           FROM public.message m
            LEFT JOIN public.ticket_read_state rs
                   ON rs.ticket_id = m.ticket_id
                  AND rs.user_id = $1
           WHERE m.ticket_id = ANY($2::bigint[])
-            AND m."deletedAt" IS NULL
-            AND m.type = 'RECEIVED'
+            AND m.direction = 'RECEIVED'
             AND (rs.last_read_at IS NULL
                  OR m."createdAt" > rs.last_read_at)
           GROUP BY m.ticket_id`,
@@ -521,11 +522,20 @@ export class TicketsService {
       // works because ancestor tickets resolved before the current
       // one was created, so message timestamps stay monotonic across
       // the chain.
-      this.emails.find({
-        where: { ticket_id: In(chainIds) },
-        relations: { attachments: true },
-        order: { createdAt: 'ASC' },
-      }),
+      //
+      // Channel branch: a ticket's channel_type is fixed at mint, and
+      // reopen/continuation keeps the same channel + thread_key, so
+      // every row in the ancestor chain shares one channel. We load
+      // from the matching physical table — email_message (with its
+      // attachments relation) OR whatsapp_message (adapted into the
+      // EmailMessage shape toTicketDetail already consumes).
+      //
+      // Why not route through the `message` view here: the view is
+      // narrow (list-path columns only). The detail mapper needs
+      // channel-specific extras — attachments for email, raw media
+      // metadata for whatsapp when V3 renders it — and those belong
+      // on the typed entity, not a stripped projection.
+      this.loadDetailMessages(ticket.channel_type, chainIds),
       // Activity log stays scoped to THIS ticket. Ancestor activity
       // is operational (assignments, timers, etc.) and belongs to
       // each ticket individually.
@@ -544,6 +554,41 @@ export class TicketsService {
     ]);
 
     return toTicketDetail(ticket, messages, activity, notes);
+  }
+
+  /**
+   * Channel-aware loader for the detail view's message array. Email
+   * returns typed EmailMessage rows (with eager attachments) straight
+   * from TypeORM. WhatsApp rows are shaped on the fly into the same
+   * EmailMessage interface so the downstream mapper (toTicketDetail
+   * → toEmailMessage) can stay channel-agnostic:
+   *
+   *   subject       → null (WhatsApp has no subject concept)
+   *   content_html  → null (text payloads only in V2; V3 media work
+   *                   will likely surface an HTML rendering here)
+   *   receiver      → [] (we don't track the recipient — only one
+   *                   business number per channel for now)
+   *   attachments   → [] (media payloads live in raw_payload; the FE
+   *                   doesn't render them yet)
+   *   sender        → pretty-formatted wa_id ("+91 85699 93083")
+   *                   so the ticket header renders a readable number
+   */
+  private async loadDetailMessages(
+    channel: ChannelType,
+    chainIds: string[],
+  ): Promise<EmailMessage[]> {
+    if (channel === ChannelType.WHATSAPP) {
+      const rows = await this.whatsapps.find({
+        where: { ticket_id: In(chainIds) },
+        order: { createdAt: 'ASC' },
+      });
+      return rows.map(adaptWhatsappMessage);
+    }
+    return this.emails.find({
+      where: { ticket_id: In(chainIds) },
+      relations: { attachments: true },
+      order: { createdAt: 'ASC' },
+    });
   }
 
   /**
@@ -1258,26 +1303,24 @@ export class TicketsService {
   }
 
   /**
-   * Fetch the newest EmailMessage for each ticket id in a single
-   * round trip. Uses Postgres' `DISTINCT ON` — one row per ticket
-   * via the existing (ticket_id, createdAt) index in a single
-   * backward scan. Prior implementation loaded every message for
-   * every listed ticket and picked the max in JS, which on 10
-   * tickets with multi-message threads was pulling hundreds of
-   * rows and driving the ticket list past 3 seconds.
+   * Fetch the newest message for each ticket id in a single round
+   * trip, across every channel. Reads from the `message` view (see
+   * MessageView migration) which UNIONs email_message + whatsapp_
+   * message with a narrow shape, so one scan covers both tables.
+   * Prior implementation loaded every email_message for every listed
+   * ticket and picked the max in JS; the DISTINCT ON scan is O(rows
+   * returned) and uses the per-table (ticket_id, createdAt) indexes
+   * on each UNION arm.
    */
   private async fetchLatestMessages(
     ticketIds: string[],
-  ): Promise<Map<string, EmailMessage>> {
+  ): Promise<Map<string, LatestMessageRow>> {
     if (ticketIds.length === 0) return new Map();
-    // ticket_id is bigint on the entity — TypeORM returns it as a
-    // string, which is what the map key is compared against
-    // downstream, so we don't cast either side.
-    const rows: EmailMessage[] = await this.emails.query(
-      `SELECT DISTINCT ON (ticket_id) *
-         FROM email_message
+    const rows: LatestMessageRow[] = await this.emails.query(
+      `SELECT DISTINCT ON (ticket_id)
+              ticket_id, direction, sender, subject, content, "createdAt"
+         FROM public.message
         WHERE ticket_id = ANY($1::bigint[])
-          AND "deletedAt" IS NULL
         ORDER BY ticket_id, "createdAt" DESC`,
       [ticketIds],
     );
@@ -1288,9 +1331,10 @@ export class TicketsService {
    * Oldest RECEIVED message's sender per ticket — i.e. the customer
    * who opened the ticket. Backs the inbox list's "who" column so
    * agents always see the customer, not our own inbox bouncing back
-   * on a reply. Same DISTINCT ON shape as fetchLatestMessages but
-   * ASC and filtered to inbound; the (ticket_id, createdAt) index
-   * covers both scans.
+   * on a reply. Reads from the `message` view so email + whatsapp
+   * share the same scan; raw sender (email address OR raw wa_id) is
+   * returned here, pretty-formatting happens in toTicketListItem
+   * where channel_type is available for routing.
    */
   private async fetchFirstInboundSenders(
     ticketIds: string[],
@@ -1299,10 +1343,9 @@ export class TicketsService {
     const rows: Array<{ ticket_id: string; sender: string | null }> =
       await this.emails.query(
         `SELECT DISTINCT ON (ticket_id) ticket_id, sender
-           FROM email_message
+           FROM public.message
           WHERE ticket_id = ANY($1::bigint[])
-            AND type = 'RECEIVED'
-            AND "deletedAt" IS NULL
+            AND direction = 'RECEIVED'
           ORDER BY ticket_id, "createdAt" ASC`,
         [ticketIds],
       );
@@ -1312,6 +1355,51 @@ export class TicketsService {
     }
     return out;
   }
+}
+
+/**
+ * Narrow row shape returned by fetchLatestMessages. Mirrors the
+ * `message` view's columns + the fields toTicketListItem reads off
+ * the latest message — subject, sender, content, createdAt,
+ * direction. Keeping it narrow so the mapper never accidentally
+ * reaches for an email-only field like content_html.
+ */
+export interface LatestMessageRow {
+  ticket_id: string;
+  direction: MessageDirection;
+  sender: string | null;
+  subject: string | null;
+  content: string | null;
+  createdAt: Date;
+}
+
+/**
+ * Shape a WhatsApp row into the EmailMessage interface the detail
+ * mapper (toTicketDetail → toEmailMessage) consumes. Channel-
+ * specific gaps (subject, HTML body, receiver list, attachments) are
+ * filled with the "nothing to render" values the mapper already
+ * handles; sender is pretty-formatted so the FE header reads
+ * "+91 85699 93083" instead of "918569993083".
+ */
+function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
+  // sender stays raw here — the DTO mapper (toEmailMessage) does
+  // channel-aware formatting so there's exactly one place to change
+  // phone presentation.
+  const shaped: Partial<EmailMessage> = {
+    id: row.id,
+    channelId: row.channelId,
+    ticket_id: row.ticket_id,
+    type: row.type,
+    sender: row.sender,
+    subject: null,
+    content: row.content ?? '',
+    content_html: null,
+    receiver: [],
+    external_message_id: row.external_message_id,
+    createdAt: row.createdAt,
+    attachments: [],
+  };
+  return shaped as EmailMessage;
 }
 
 /**
@@ -1485,9 +1573,8 @@ function applyMessageSearch(
       `(
          t.id::text = :bridgeIdExact
          OR EXISTS (
-           SELECT 1 FROM public.email_message m
+           SELECT 1 FROM public.message m
             WHERE m.ticket_id = t.id
-              AND m."deletedAt" IS NULL
               AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
          )
        )`,
@@ -1496,9 +1583,8 @@ function applyMessageSearch(
   } else {
     qb.andWhere(
       `EXISTS (
-         SELECT 1 FROM public.email_message m
+         SELECT 1 FROM public.message m
           WHERE m.ticket_id = t.id
-            AND m."deletedAt" IS NULL
             AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
        )`,
       { bridgeQ: `%${q}%` },

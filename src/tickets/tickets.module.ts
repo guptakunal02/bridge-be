@@ -9,6 +9,7 @@ import { StorageModule } from '../common/storage/storage.module';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { SettingsModule } from '../settings/settings.module';
+import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { TagsModule } from '../tags/tags.module';
 import { Team } from '../teams/entities/team.entity';
 import { User } from '../users/entities/user.entity';
@@ -32,6 +33,7 @@ import { TicketsService } from './tickets.service';
       TicketNote,
       EmailMessage,
       EmailMessageAttachment,
+      WhatsappMessage,
       User,
       Channel,
       Team,

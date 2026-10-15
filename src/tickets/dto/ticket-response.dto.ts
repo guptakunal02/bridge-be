@@ -7,6 +7,7 @@ import {
   WaitingAction,
 } from '../../database/enums';
 import { EmailMessage } from '../../email-inbox/entities/email-message.entity';
+import { formatWaId } from '../../whatsapp-inbox/wa-id-format';
 import { Ticket } from '../entities/ticket.entity';
 import { TicketActivityLog } from '../entities/ticket-activity-log.entity';
 import { TicketNote } from '../entities/ticket-note.entity';
@@ -15,6 +16,22 @@ import {
   shouldShowSubjectHeader,
   splitBody,
 } from '../message-view-utils';
+
+/**
+ * Narrow shape toLatestMessage reads off a message row. Satisfied by
+ * both EmailMessage (the detail path still passes the typed entity
+ * in via adapters) and the raw LatestMessageRow from the `message`
+ * view the inbox list hits. Kept here, not in the service, so the
+ * mapper's contract is visible alongside its implementation.
+ */
+export interface LatestMessageSource {
+  subject: string | null;
+  sender: string | null;
+  content: string | null;
+  createdAt: Date;
+  type?: MessageDirection;
+  direction?: MessageDirection;
+}
 
 export interface TicketAssigneeSummary {
   id: string;
@@ -206,10 +223,20 @@ const PREVIEW_MAX = 140;
 
 export function toTicketListItem(
   ticket: Ticket,
-  latest: EmailMessage | null,
+  latest: LatestMessageSource | null,
   unreadCount: number = 0,
   customerEmail: string | null = null,
 ): TicketListItem {
+  // Channel-aware presentation: WhatsApp senders are raw wa_ids
+  // (digits only) in the DB — format for display so the inbox row's
+  // "who" column reads like a phone number, not a serial.
+  const formattedCustomer = formatSenderForChannel(
+    customerEmail,
+    ticket.channel_type,
+  );
+  const latestMessage = latest
+    ? toLatestMessage(latest, ticket.channel_type)
+    : null;
   return {
     id: ticket.id,
     channelId: ticket.channel_id,
@@ -228,8 +255,8 @@ export function toTicketListItem(
       : null,
     teamId: ticket.team_id,
     teamName: ticket.team?.name ?? null,
-    latestMessage: latest ? toLatestMessage(latest) : null,
-    customerEmail,
+    latestMessage,
+    customerEmail: formattedCustomer,
     resumeAt: ticket.resume_at ? ticket.resume_at.toISOString() : null,
     waitingAction: ticket.waiting_action,
     previousTicketId: ticket.previous_ticket_id ?? null,
@@ -237,6 +264,14 @@ export function toTicketListItem(
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
   };
+}
+
+function formatSenderForChannel(
+  raw: string | null,
+  channel: ChannelType,
+): string | null {
+  if (!raw) return null;
+  return channel === ChannelType.WHATSAPP ? formatWaId(raw) : raw;
 }
 
 export function toTicketDetail(
@@ -256,7 +291,9 @@ export function toTicketDetail(
   const priorBodies: string[] = [];
   const mappedMessages: EmailMessageResponse[] = [];
   for (const m of messages) {
-    mappedMessages.push(toEmailMessage(m, ticketSubject, priorBodies));
+    mappedMessages.push(
+      toEmailMessage(m, ticketSubject, priorBodies, ticket.channel_type),
+    );
     priorBodies.push(m.content ?? '');
   }
   // Customer = first inbound sender. Walking messages ascending
@@ -287,16 +324,26 @@ function toNote(n: TicketNote): TicketNoteResponse {
   };
 }
 
-function toLatestMessage(m: EmailMessage): TicketLatestMessage {
+function toLatestMessage(
+  m: LatestMessageSource,
+  channel: ChannelType,
+): TicketLatestMessage {
   const raw = (m.content ?? '').replace(/\s+/g, ' ').trim();
   const preview =
     raw.length > PREVIEW_MAX ? `${raw.slice(0, PREVIEW_MAX)}…` : raw;
+  // Direction lives on `type` for EmailMessage entity rows and on
+  // `direction` for the narrow LatestMessageRow from the message
+  // view — accept either so this mapper covers both paths.
+  const direction = m.type ?? m.direction;
+  if (!direction) {
+    throw new Error('toLatestMessage: message row missing direction');
+  }
   return {
     subject: m.subject,
-    sender: m.sender,
+    sender: formatSenderForChannel(m.sender, channel),
     preview,
     at: m.createdAt.toISOString(),
-    direction: m.type,
+    direction,
   };
 }
 
@@ -304,6 +351,7 @@ function toEmailMessage(
   m: EmailMessage,
   ticketSubject: string | null,
   priorBodies: string[],
+  channel: ChannelType,
 ): EmailMessageResponse {
   const split = splitBody(m.content ?? '', m.content_html ?? null, priorBodies);
   const reconstructedThread = split.quotedContent
@@ -315,7 +363,7 @@ function toEmailMessage(
     ticketId: m.ticket_id,
     direction: m.type,
     subject: m.subject,
-    sender: m.sender,
+    sender: formatSenderForChannel(m.sender, channel),
     receiver: m.receiver,
     content: m.content,
     contentHtml: m.content_html,
