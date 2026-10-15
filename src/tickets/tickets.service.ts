@@ -205,7 +205,9 @@ export class TicketsService {
       });
     }
     applyMessageSearch(qb, query.q);
-    await this.applyScope(qb, query.scope ?? 'all', actingUser);
+    await this.applyScope(qb, query.scope ?? 'all', actingUser, {
+      widenForSearch: Boolean(query.q?.trim()),
+    });
 
     const rows = await qb.getMany();
     if (rows.length === 0) return [];
@@ -336,7 +338,9 @@ export class TicketsService {
     // this response, so applying a status filter would collapse
     // every row to zero except the picked one.
     applyMessageSearch(qb, query.q);
-    await this.applyScope(qb, query.scope ?? 'all', actingUser);
+    await this.applyScope(qb, query.scope ?? 'all', actingUser, {
+      widenForSearch: Boolean(query.q?.trim()),
+    });
 
     const rows: Array<{ status: TicketStatus; count: string }> =
       await qb.getRawMany();
@@ -1547,6 +1551,7 @@ export class TicketsService {
     qb: ReturnType<Repository<Ticket>['createQueryBuilder']>,
     scope: TicketScope,
     actingUser: AuthenticatedUser,
+    opts: { widenForSearch?: boolean } = {},
   ): Promise<void> {
     // Role check: `all` and `unassigned` are admin-only surfaces.
     // A member sending scope=all could otherwise pull the whole
@@ -1558,7 +1563,31 @@ export class TicketsService {
       );
     }
     if (scope === 'mine') {
-      qb.andWhere('t.assignee = :meId', { meId: actingUser.id });
+      // widenForSearch covers the specific case: a MEMBER is typing in
+      // the inbox search bar. Default-scoping their results to
+      // "assigned to me" surfaces zero rows when they look for a
+      // teammate's ticket (common when a customer calls in asking
+      // about a ticket a colleague handled), which reads like a bug.
+      // Broadening to "any ticket in a team I'm a non-paused member of"
+      // keeps the search useful without exposing cross-team tickets.
+      // When no search is typed, scope stays strict to "mine" so the
+      // default inbox view is the agent's own work list.
+      if (opts.widenForSearch) {
+        qb.andWhere(
+          `(
+             t.assignee = :meId
+             OR t.team_id IN (
+               SELECT tm.team_id
+                 FROM public.team_member tm
+                WHERE tm.user_id = :meId
+                  AND tm.paused_in_team = false
+             )
+           )`,
+          { meId: actingUser.id },
+        );
+      } else {
+        qb.andWhere('t.assignee = :meId', { meId: actingUser.id });
+      }
       return;
     }
     if (scope === 'unassigned') {
