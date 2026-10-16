@@ -8,13 +8,19 @@ import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/m
  *
  * Rules:
  *   - 25 MB per file (matches Gmail's max message size headroom;
- *     the SMTP relay would bounce anything larger)
+ *     the SMTP relay would bounce anything larger). Note: WhatsApp
+ *     has its own per-kind caps (image 5 MB / video + audio 16 MB /
+ *     document 100 MB) enforced in replyWhatsapp — the 25 MB cap
+ *     here is the hard upper bound regardless of channel. The one
+ *     real exception is PDFs bigger than 25 MB going to WhatsApp
+ *     (which allows 100 MB docs); if that becomes a real request
+ *     we lift to 100 MB here and tighten the per-channel cap below.
  *   - 1 file per request (the FE calls this endpoint per-file)
  *   - MIME allowlist: images / office docs / pdf / text / archives
- *     / json. Everything else is rejected before bytes touch disk.
- *     SVG is out on purpose (XSS via script tags in the SVG). HTML
- *     and JS are out (public bucket + serving arbitrary HTML under
- *     our domain would be a phishing kit).
+ *     / json / video / audio. Everything else is rejected before
+ *     bytes touch disk. SVG is out on purpose (XSS via script tags
+ *     in the SVG). HTML and JS are out (public bucket + serving
+ *     arbitrary HTML under our domain would be a phishing kit).
  *   - Filename cannot contain path separators or "..".
  */
 const MIME_ALLOWLIST: ReadonlySet<string> = new Set([
@@ -46,6 +52,27 @@ const MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   'application/x-tar',
   'application/gzip',
   'application/x-7z-compressed',
+  // Video — mp4 + mov are the common ones agents will upload from a
+  // phone or screen recording; 3gp is WhatsApp's secondary; webm is
+  // Chrome/Firefox recordings; avi is legacy but still shows up.
+  'video/mp4',
+  'video/mpeg',
+  'video/quicktime',
+  'video/webm',
+  'video/3gpp',
+  'video/3gpp2',
+  'video/x-msvideo',
+  // Audio — covers mp3/m4a/wav/ogg/aac/amr (WhatsApp voice-note
+  // compatible) and the full set of common formats email clients
+  // produce as recordings.
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/ogg',
+  'audio/aac',
+  'audio/amr',
+  'audio/webm',
 ]);
 
 export const REPLY_ATTACHMENT_UPLOAD_OPTIONS: MulterOptions = {
