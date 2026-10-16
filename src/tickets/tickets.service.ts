@@ -1402,6 +1402,10 @@ export class TicketsService {
       raw: unknown;
       content: string | null;
       messageType: 'text' | 'image' | 'video' | 'document' | 'audio';
+      /** S3 info — only set for media sends; text sends leave these null. */
+      mediaUrl: string | null;
+      mediaMime: string | null;
+      mediaSize: number | null;
     }
     const sent: PendingSend[] = [];
 
@@ -1433,6 +1437,9 @@ export class TicketsService {
           // render the actual asset separately when it lands.
           content: ref.filename,
           messageType: kind,
+          mediaUrl: ref.storageUrl,
+          mediaMime: ref.contentType,
+          mediaSize: ref.sizeBytes,
         });
       }
 
@@ -1448,6 +1455,9 @@ export class TicketsService {
           raw,
           content: trimmed,
           messageType: 'text',
+          mediaUrl: null,
+          mediaMime: null,
+          mediaSize: null,
         });
       }
     } catch (sendErr) {
@@ -1514,6 +1524,9 @@ export class TicketsService {
       raw: unknown;
       content: string | null;
       messageType: 'text' | 'image' | 'video' | 'document' | 'audio';
+      mediaUrl: string | null;
+      mediaMime: string | null;
+      mediaSize: number | null;
     }>,
     actingUser: AuthenticatedUser,
   ): Promise<void> {
@@ -1534,6 +1547,11 @@ export class TicketsService {
             external_message_id: s.wamid,
             message_type: s.messageType,
             raw_payload: s.raw,
+            media_url: s.mediaUrl,
+            media_mime_type: s.mediaMime,
+            // bigint column — TypeORM wants a string on the write path
+            // too. null stays null for text sends.
+            media_size_bytes: s.mediaSize === null ? null : String(s.mediaSize),
           }),
         ),
       );
@@ -1685,6 +1703,30 @@ function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
   // sender stays raw here — the DTO mapper (toEmailMessage) does
   // channel-aware formatting so there's exactly one place to change
   // phone presentation.
+  //
+  // Synthesize a one-entry attachments array for media rows so the
+  // FE can render the clickable card from the same shape it already
+  // uses for email attachments (filename, contentType, sizeBytes,
+  // url). Email paths map these from the email_attachment table;
+  // WhatsApp doesn't have a side table — the media columns live
+  // inline on whatsapp_message. Attachment id = message id (unique
+  // per row, stable, satisfies the React key).
+  const kind = normaliseWaMediaKind(row.message_type);
+  const attachments: EmailMessageAttachment[] =
+    kind !== 'text' && row.media_url
+      ? [
+          {
+            id: row.id,
+            message_id: row.id,
+            filename: row.content ?? 'attachment',
+            content_type: row.media_mime_type ?? 'application/octet-stream',
+            size_bytes: row.media_size_bytes ?? '0',
+            storage_key: '',
+            storage_url: row.media_url,
+            createdAt: row.createdAt,
+          } as EmailMessageAttachment,
+        ]
+      : [];
   const shaped: Partial<EmailMessage> = {
     id: row.id,
     channelId: row.channelId,
@@ -1697,11 +1739,11 @@ function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
     receiver: [],
     external_message_id: row.external_message_id,
     createdAt: row.createdAt,
-    attachments: [],
+    attachments,
     // Carry the WhatsApp message kind through to the DTO mapper so
     // the FE can render media rows as attachment cards instead of
     // text bubbles. Falls back to 'text' for anything unexpected.
-    _waMediaKind: normaliseWaMediaKind(row.message_type),
+    _waMediaKind: kind,
   };
   return shaped as EmailMessage;
 }

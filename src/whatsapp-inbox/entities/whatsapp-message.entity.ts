@@ -73,6 +73,24 @@ export class WhatsappMessage {
   @Column({ type: 'jsonb', nullable: true, name: 'raw_payload' })
   raw_payload!: unknown;
 
+  /**
+   * S3 URL for SENT media rows — the agent uploaded the file via
+   * our standard reply-attachment path, so the public bucket URL is
+   * what the FE's attachment card hrefs. Null for text sends and
+   * for inbound rows (V5 slice: download Meta media id to S3 at
+   * ingest time + populate these).
+   */
+  @Column({ type: 'text', nullable: true, name: 'media_url' })
+  media_url!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'media_mime_type' })
+  media_mime_type!: string | null;
+
+  // bigint ↔ string per TypeORM default (JS number can't safely hold
+  // 64-bit ints). Formatted/parsed at the DTO boundary.
+  @Column({ type: 'bigint', nullable: true, name: 'media_size_bytes' })
+  media_size_bytes!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 }
