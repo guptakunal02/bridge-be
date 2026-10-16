@@ -1711,7 +1711,7 @@ function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
   // WhatsApp doesn't have a side table — the media columns live
   // inline on whatsapp_message. Attachment id = message id (unique
   // per row, stable, satisfies the React key).
-  const kind = normaliseWaMediaKind(row.message_type);
+  const kind = normaliseWaMediaKind(row.message_type, row.media_mime_type);
   const attachments: EmailMessageAttachment[] =
     kind !== 'text' && row.media_url
       ? [
@@ -1748,16 +1748,43 @@ function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
   return shaped as EmailMessage;
 }
 
+/**
+ * Decide the display kind for a WhatsApp message row. The mime type
+ * on media_mime_type is the authoritative signal — it's the actual
+ * byte content. Meta's `message_type` can be wrong because
+ * WhatsApp's "Document" picker lets a customer upload any file,
+ * including videos / images, and labels the whole thing as
+ * `document`. Treating a `message_type=document` with
+ * `mime=video/mp4` as a document means the FE renders a slate FILE
+ * tile instead of the inline video player — bad UX for the agent.
+ *
+ * Falls back to message_type when the mime is missing (older rows
+ * before V4b / V5a) or when it's generic (application/octet-stream).
+ */
 function normaliseWaMediaKind(
-  raw: string | null | undefined,
+  rawType: string | null | undefined,
+  mime: string | null | undefined,
 ): 'text' | 'image' | 'video' | 'document' | 'audio' {
-  switch (raw) {
+  const m = (mime ?? '').toLowerCase();
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  if (
+    m === 'application/pdf' ||
+    m.startsWith('application/msword') ||
+    m.startsWith('application/vnd.') ||
+    m === 'text/plain' ||
+    m === 'text/csv'
+  ) {
+    return 'document';
+  }
+  switch (rawType) {
     case 'image':
     case 'video':
     case 'document':
     case 'audio':
     case 'text':
-      return raw;
+      return rawType;
     default:
       return 'text';
   }
