@@ -1422,6 +1422,8 @@ export class TicketsService {
           inbound.sender,
           kind,
           mediaId,
+          undefined,
+          ref.filename,
         );
         sent.push({
           wamid,
@@ -1696,8 +1698,27 @@ function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
     external_message_id: row.external_message_id,
     createdAt: row.createdAt,
     attachments: [],
+    // Carry the WhatsApp message kind through to the DTO mapper so
+    // the FE can render media rows as attachment cards instead of
+    // text bubbles. Falls back to 'text' for anything unexpected.
+    _waMediaKind: normaliseWaMediaKind(row.message_type),
   };
   return shaped as EmailMessage;
+}
+
+function normaliseWaMediaKind(
+  raw: string | null | undefined,
+): 'text' | 'image' | 'video' | 'document' | 'audio' {
+  switch (raw) {
+    case 'image':
+    case 'video':
+    case 'document':
+    case 'audio':
+    case 'text':
+      return raw;
+    default:
+      return 'text';
+  }
 }
 
 /**

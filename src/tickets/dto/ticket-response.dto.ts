@@ -138,6 +138,15 @@ export interface EmailMessageResponse {
   contentHtml: string | null;
   externalMessageId: string;
   attachments: EmailAttachmentResponse[];
+  /**
+   * Channel-specific payload kind. For email this is always 'text'.
+   * For WhatsApp it mirrors the Meta `type` field — 'text' for
+   * normal messages, 'image' / 'video' / 'document' / 'audio' for
+   * media sends. The FE's WhatsApp chat bubble renders media rows
+   * as an attachment card (icon + filename) instead of a text
+   * bubble so agents can tell at a glance that a file was sent.
+   */
+  mediaKind: 'text' | 'image' | 'video' | 'document' | 'audio';
   createdAt: string;
 
   /* -------------------------- View fields ------------------------- */
@@ -380,6 +389,10 @@ function toEmailMessage(
       sizeBytes: Number(a.size_bytes),
       url: a.storage_url,
     })),
+    // _waMediaKind is set by adaptWhatsappMessage on the WhatsApp
+    // detail path; email never sets it so default to 'text'. The FE
+    // branches on this to render media as an attachment card.
+    mediaKind: m._waMediaKind ?? 'text',
     createdAt: m.createdAt.toISOString(),
     // Server-computed view fields — see message-view-utils.ts for
     // the strategy stack (heuristics → prior-content fallback).

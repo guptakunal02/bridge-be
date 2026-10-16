@@ -86,4 +86,15 @@ export class EmailMessage {
 
   @OneToMany(() => EmailMessageAttachment, (a) => a.message)
   attachments!: EmailMessageAttachment[];
+
+  /**
+   * Transient — NOT a DB column. The ticket detail path adapts
+   * whatsapp_message rows into this shape so toTicketDetail can
+   * render both channels through one mapper. For WhatsApp, the
+   * adapter stashes the Meta message_type ('text' / 'image' /
+   * 'video' / 'document' / 'audio') here so the DTO mapper can
+   * decide whether to render a text bubble or an attachment card.
+   * Email rows never set this; the mapper defaults to 'text'.
+   */
+  _waMediaKind?: 'text' | 'image' | 'video' | 'document' | 'audio' | null;
 }

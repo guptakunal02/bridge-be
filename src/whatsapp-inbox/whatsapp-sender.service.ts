@@ -255,6 +255,7 @@ export class WhatsappSenderService {
     kind: 'image' | 'video' | 'document' | 'audio',
     mediaId: string,
     caption?: string,
+    filename?: string,
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -272,6 +273,12 @@ export class WhatsappSenderService {
 
     const mediaPayload: Record<string, string> = { id: mediaId };
     if (caption && kind !== 'audio') mediaPayload.caption = caption;
+    // Document filename — without this Meta shows "Untitled" on the
+    // recipient's WhatsApp. Only honored for the document kind; images
+    // and videos ignore it. Also strip the extension? No — WhatsApp
+    // displays the filename as-is, extension included, which is what
+    // the agent uploaded + what the recipient expects.
+    if (filename && kind === 'document') mediaPayload.filename = filename;
 
     const payload = {
       messaging_product: 'whatsapp',
