@@ -250,6 +250,81 @@ export class WhatsappSenderService {
    * payloads ignore it (Meta drops it silently). We pass it through
    * for the supported kinds and skip for audio.
    */
+  /**
+   * Two-step Meta media fetch used by the inbound ingest path. Meta's
+   * webhook delivers only a media_id for inbound image/video/doc/
+   * audio messages; the actual bytes have to be pulled separately.
+   *
+   *   1. GET /{media_id} returns { url, mime_type, file_size, ... }
+   *      with a short-lived download URL (5 min TTL per Meta's docs).
+   *   2. GET {url} with the same Bearer auth returns the raw bytes.
+   *
+   * Both steps use the WHATSAPP_ACCESS_TOKEN. Failures bubble as
+   * BadRequestException so the ingest can log + continue (the row
+   * still gets persisted without media, and the agent sees an empty
+   * bubble — much better than crashing ingestOne mid-batch).
+   */
+  async downloadMetaMedia(
+    mediaId: string,
+  ): Promise<{ body: Buffer; mime: string; size: number }> {
+    const token = this.config.get('WHATSAPP_ACCESS_TOKEN', { infer: true });
+    const version = this.config.get('WHATSAPP_GRAPH_API_VERSION', {
+      infer: true,
+    });
+
+    // Step 1 — resolve the download URL.
+    const metaUrl = `https://graph.facebook.com/${version}/${mediaId}`;
+    const metaRes = await fetch(metaUrl, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const metaText = await metaRes.text();
+    let metaParsed: {
+      url?: string;
+      mime_type?: string;
+      file_size?: number;
+    } & MetaErrorEnvelope;
+    try {
+      metaParsed = metaText ? JSON.parse(metaText) : {};
+    } catch {
+      throw new BadRequestException(
+        'WhatsApp media fetch failed — Meta returned an unexpected response (step 1)',
+      );
+    }
+    if (!metaRes.ok || metaParsed.error || !metaParsed.url) {
+      const code = metaParsed.error?.code;
+      const metaMsg =
+        metaParsed.error?.error_user_msg ||
+        metaParsed.error?.message ||
+        'Unknown error';
+      this.logger.warn(
+        `WhatsApp media metadata fetch rejected media_id=${mediaId} status=${metaRes.status} code=${code ?? 'none'} msg="${metaMsg}"`,
+      );
+      throw new BadRequestException(friendlyError(code, metaMsg));
+    }
+
+    // Step 2 — fetch the bytes. Meta's download URL requires the
+    // same Bearer token; anonymous GETs return 401.
+    const bytesRes = await fetch(metaParsed.url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!bytesRes.ok) {
+      this.logger.warn(
+        `WhatsApp media byte fetch failed media_id=${mediaId} status=${bytesRes.status}`,
+      );
+      throw new BadRequestException(
+        'WhatsApp media fetch failed — Meta download URL returned non-2xx',
+      );
+    }
+    const buf = Buffer.from(await bytesRes.arrayBuffer());
+    return {
+      body: buf,
+      mime: metaParsed.mime_type ?? 'application/octet-stream',
+      size: metaParsed.file_size ?? buf.length,
+    };
+  }
+
   async sendMedia(
     waId: string,
     kind: 'image' | 'video' | 'document' | 'audio',

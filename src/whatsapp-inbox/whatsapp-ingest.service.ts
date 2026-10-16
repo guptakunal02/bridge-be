@@ -4,6 +4,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AutomationEngine } from '../automations/automation-engine.service';
 import { AUTOMATION_EVENT } from '../automations/events';
 import { Channel } from '../channels/entities/channel.entity';
+import { S3StorageService } from '../common/storage/s3-storage.service';
 import {
   ChannelStatus,
   ChannelType,
@@ -18,6 +19,7 @@ import { Ticket } from '../tickets/entities/ticket.entity';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
 import { loadBot } from '../users/presence-helpers';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
+import { WhatsappSenderService } from './whatsapp-sender.service';
 
 /* ------------------------------------------------------------------ */
 /* Payload types                                                      */
@@ -48,6 +50,19 @@ interface WhatsappInboundMessage {
   timestamp?: string;
   type?: string;
   text?: { body?: string };
+  // Media variants — Meta's webhook delivers only a media_id; the
+  // bytes have to be fetched via a second Graph API call. filename
+  // is only present on documents; caption is optional on all media
+  // kinds except audio.
+  image?: { id?: string; mime_type?: string; caption?: string };
+  video?: { id?: string; mime_type?: string; caption?: string };
+  document?: {
+    id?: string;
+    mime_type?: string;
+    filename?: string;
+    caption?: string;
+  };
+  audio?: { id?: string; mime_type?: string };
 }
 interface WhatsappWebhookPayload {
   object?: string;
@@ -72,6 +87,8 @@ export class WhatsappIngestService {
     private readonly teams: TeamsService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly automations: AutomationEngine,
+    private readonly sender: WhatsappSenderService,
+    private readonly storage: S3StorageService,
   ) {}
 
   /**
@@ -203,6 +220,12 @@ export class WhatsappIngestService {
     let wasNewTicket = false;
     let reopenedFromResolved = false;
 
+    // Resolve media (if any) BEFORE the txn so the Meta API round-
+    // trip (network I/O) doesn't sit inside the Postgres transaction.
+    // On failure we persist the row without media — agent sees an
+    // empty bubble labelled by message_type, no crash.
+    const media = await this.resolveInboundMedia(msg);
+
     await this.dataSource.transaction(async (mgr) => {
       const result = await this.findOrCreateTicket(mgr, channel, msg.from!);
       ticket = result.ticket;
@@ -214,10 +237,19 @@ export class WhatsappIngestService {
           ticket_id: ticket.id,
           type: MessageDirection.RECEIVED,
           sender: msg.from!,
-          content: msg.text?.body ?? null,
+          // For text sends: the actual message body.
+          // For media sends: filename (if any) so the ticket thread
+          // has SOMETHING readable; caption would also go here but
+          // we prefer filename when both are present. For media
+          // without a filename (image/video/audio with caption or
+          // without), use the caption or null.
+          content: msg.text?.body ?? media?.content ?? null,
           external_message_id: msg.id!,
           message_type: msg.type ?? 'unknown',
           raw_payload: msg,
+          media_url: media?.url ?? null,
+          media_mime_type: media?.mime ?? null,
+          media_size_bytes: media?.size != null ? String(media.size) : null,
         }),
       );
       // WAITING → OPEN wake. reopenResolved was handled inline above
@@ -281,6 +313,75 @@ export class WhatsappIngestService {
           hourIst,
         },
       });
+    }
+  }
+
+  /**
+   * Resolve the media payload (if any) on an inbound message:
+   * fetch the bytes from Meta → upload to our S3 → return the
+   * attachment metadata the ingest will persist on the row.
+   *
+   * Returns null for text / unknown / reaction / interactive /
+   * sticker / location kinds we don't surface yet; those keep the
+   * old "message_type recorded, no bytes" behavior. Failures
+   * (expired media_id, Meta transient 5xx, S3 upload failure) log a
+   * warn and return null so the row is still persisted — the agent
+   * sees an empty bubble instead of the message disappearing.
+   */
+  private async resolveInboundMedia(
+    msg: WhatsappInboundMessage,
+  ): Promise<{
+    url: string;
+    mime: string;
+    size: number;
+    content: string | null;
+  } | null> {
+    const kind = msg.type;
+    let payload:
+      | { id?: string; mime_type?: string; filename?: string; caption?: string }
+      | undefined;
+    if (kind === 'image') payload = msg.image;
+    else if (kind === 'video') payload = msg.video;
+    else if (kind === 'document') payload = msg.document;
+    else if (kind === 'audio') payload = msg.audio;
+    else return null;
+    if (!payload?.id) {
+      this.logger.warn(
+        `Inbound ${kind} message has no media id — wamid=${msg.id ?? 'missing'}`,
+      );
+      return null;
+    }
+    try {
+      const { body, mime, size } = await this.sender.downloadMetaMedia(
+        payload.id,
+      );
+      // Filename: for documents Meta gives us the real one. For
+      // other kinds the customer didn't name the file (phone upload)
+      // — synthesise a sensible one off the mime so the S3 object
+      // key doesn't end in an empty segment and the Download menu
+      // on the FE has something to show.
+      const filename =
+        payload.filename ?? `whatsapp-${kind}-${payload.id}${extForMime(mime)}`;
+      const uploaded = await this.storage.upload({
+        filename,
+        contentType: mime,
+        body,
+      });
+      // Content line surfaced in the thread for media messages:
+      // caption wins (customer wrote it), then filename for docs,
+      // then null for a nameless image/video/audio. The FE bubble
+      // ignores this for images (thumbnail only) but shows it in
+      // the file card for other kinds.
+      const content =
+        payload.caption ?? (kind === 'document' ? filename : null);
+      return { url: uploaded.url, mime, size, content };
+    } catch (err) {
+      this.logger.warn(
+        `Failed to download inbound ${kind} media for wamid=${msg.id ?? 'missing'}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
     }
   }
 
@@ -423,4 +524,29 @@ function computeHourIst(at: Date): number {
   const utcMs = at.getTime();
   const istMs = utcMs + 5.5 * 60 * 60 * 1000;
   return new Date(istMs).getUTCHours();
+}
+
+/**
+ * Minimal mime → extension map for synthesising filenames on
+ * nameless inbound media. S3 keys end in the extension so the
+ * browser's Save-As dialog defaults to a usable name. Covers every
+ * mime WhatsApp Business API actually sends; falls through to a
+ * generic ".bin" if the mime is one we haven't catalogued (defensive
+ * — Meta occasionally sends vendor-specific variants).
+ */
+function extForMime(mime: string): string {
+  const m = mime.toLowerCase();
+  if (m === 'image/jpeg') return '.jpg';
+  if (m === 'image/png') return '.png';
+  if (m === 'image/webp') return '.webp';
+  if (m === 'image/gif') return '.gif';
+  if (m === 'video/mp4') return '.mp4';
+  if (m === 'video/3gpp' || m === 'video/3gp') return '.3gp';
+  if (m === 'audio/mpeg') return '.mp3';
+  if (m === 'audio/mp4') return '.m4a';
+  if (m === 'audio/aac') return '.aac';
+  if (m === 'audio/amr') return '.amr';
+  if (m === 'audio/ogg') return '.ogg';
+  if (m === 'application/pdf') return '.pdf';
+  return '.bin';
 }

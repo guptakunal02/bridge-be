@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AutomationsModule } from '../automations/automations.module';
 import { Channel } from '../channels/entities/channel.entity';
+import { StorageModule } from '../common/storage/storage.module';
 import { TeamsModule } from '../teams/teams.module';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { Ticket } from '../tickets/entities/ticket.entity';
@@ -44,6 +45,10 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // without it the AutomationsModule reference is undefined by
     // the time Nest sets up WhatsappInboxModule.
     forwardRef(() => AutomationsModule),
+    // S3StorageService — ingest downloads inbound media bytes from
+    // Meta and stashes them in our S3 so the FE can render + the
+    // agent can save-as.
+    StorageModule,
     // forwardRef because TicketsModule now also imports this module
     // (so TicketsService can reach WhatsappSenderService for the
     // outbound reply path).
