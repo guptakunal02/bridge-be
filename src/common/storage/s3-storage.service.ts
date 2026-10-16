@@ -69,17 +69,35 @@ export class S3StorageService {
     const dd = String(now.getUTCDate()).padStart(2, '0');
     const key = `attachments/${yyyy}/${mm}/${dd}/${randomUUID()}/${safeName}`;
 
+    // ContentDisposition tells browsers whether to inline-render or
+    // force-download the file at the S3 URL. For arbitrary types the
+    // default is "attachment" — html/js masquerading as a user
+    // attachment can't execute if the browser downloads instead of
+    // renders. For known-safe image mimes we flip to "inline" so a
+    // click on the image chip in the inbox opens the preview in a
+    // new tab (the agent's expectation), not shuffle another copy
+    // into Downloads. Images can't carry an XSS payload. PDFs stay
+    // on "attachment" — Chrome DOES preview them inline when the
+    // user clicks the downloaded shelf item, which keeps the "two
+    // clicks to view" step but preserves the safety default for
+    // anything that isn't a native-safe image.
+    const SAFE_INLINE_IMAGE_MIMES = new Set([
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+    ]);
+    const disposition = SAFE_INLINE_IMAGE_MIMES.has(input.contentType)
+      ? `inline; filename="${safeName}"`
+      : `attachment; filename="${safeName}"`;
+
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
         Body: input.body,
         ContentType: input.contentType,
-        // ContentDisposition tells browsers to download rather than
-        // inline-render arbitrary content (matters for html/js
-        // masquerading as user-supplied attachments). Filename in
-        // the header uses the sanitised name so it survives HTTP.
-        ContentDisposition: `attachment; filename="${safeName}"`,
+        ContentDisposition: disposition,
       }),
     );
 
