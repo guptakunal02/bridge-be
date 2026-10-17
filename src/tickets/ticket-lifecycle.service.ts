@@ -43,11 +43,42 @@ const SWEEP_BATCH = 200;
 const SWEEP_ADVISORY_LOCK_KEY = 4726050001;
 
 /**
- * Safety cap on the "drain to me on Online" loop so a broken picker
- * can't starve the process. Real cap is bounded by the agent's total
- * per-team cap sum, which will always be far smaller than this.
+ * Safety cap on EVERY capacity-drain loop (CAME_ONLINE batch,
+ * post-action backfill, periodic sweep). Real cap is bounded by the
+ * agent's total per-team cap sum, which will always be far smaller
+ * than this.
  */
 const ONLINE_DRAIN_MAX = 50;
+
+/**
+ * How often the periodic capacity sweep fires (ms). Backstop for
+ * the event-driven drain (CAME_ONLINE + onCapacityFreed) which can
+ * miss cases where an agent is online + idle + has capacity + BOT
+ * queue has eligible tickets. Every mature support platform runs
+ * something equivalent (Zendesk ~10s, Intercom ~30s, Freshdesk
+ * ~60s). 60s matches our existing timer-sweep interval; shorter
+ * would add DB load without meaningful latency win for agents who
+ * already got filled on their last action.
+ */
+const CAPACITY_SWEEP_MS = 60 * 1000;
+
+/**
+ * Advisory-lock key for the capacity sweep — same singleton pattern
+ * as SWEEP_ADVISORY_LOCK_KEY. Separate key so the two sweeps don't
+ * block each other.
+ */
+const CAPACITY_SWEEP_ADVISORY_LOCK_KEY = 4726050002;
+
+/**
+ * Why a drainOneSlot attempt returned no-move. Logged on every exit
+ * so a stuck queue has forensic evidence instead of mystery.
+ */
+type DrainExitReason =
+  | 'moved' // actually moved a ticket this iteration
+  | 'empty-queue' // BOT queue has nothing eligible for this user
+  | 'not-assignable' // user flipped offline / was deactivated / is BOT
+  | 'cap-hit' // agent is at or above cap in every team with queued tickets
+  | 'exception'; // txn threw — see .warn log for the message
 
 /**
  * Owns the automated lifecycle transitions that aren't triggered
@@ -78,6 +109,7 @@ const ONLINE_DRAIN_MAX = 50;
 export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TicketLifecycleService.name);
   private timerHandle: NodeJS.Timeout | null = null;
+  private capacitySweepHandle: NodeJS.Timeout | null = null;
 
   constructor(
     @InjectRepository(Ticket) private readonly tickets: Repository<Ticket>,
@@ -101,12 +133,94 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         `Initial timer sweep failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
+
+    // Capacity sweep — backstop for the event-driven drain. Catches
+    // the case where an agent is online + idle + has capacity + BOT
+    // queue has eligible tickets (yesterday's "Nausheen" incident
+    // 2026-10-16 10:21–10:26). Separate from the timer sweep so a
+    // slow timer-sweep tick doesn't delay capacity fills (and vice
+    // versa). Both use advisory locks keyed independently.
+    this.capacitySweepHandle = setInterval(() => {
+      this.sweepCapacity().catch((err: unknown) => {
+        this.logger.error(
+          `Capacity sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }, CAPACITY_SWEEP_MS);
   }
 
   onModuleDestroy(): void {
     if (this.timerHandle) {
       clearInterval(this.timerHandle);
       this.timerHandle = null;
+    }
+    if (this.capacitySweepHandle) {
+      clearInterval(this.capacitySweepHandle);
+      this.capacitySweepHandle = null;
+    }
+  }
+
+  /**
+   * Periodic (CAPACITY_SWEEP_MS) safety net for the event-driven
+   * drain. Lists every ONLINE member and runs onCapacityFreed on
+   * each; onCapacityFreed itself loops to cap, so a single sweep
+   * tick fills everyone who's eligible.
+   *
+   * Why it exists: event-driven drain can miss cases where
+   *   * agent is online + idle + has capacity, OR
+   *   * drainOnCameOnline loop exited early (lock, race, exception
+   *     with silent recovery), OR
+   *   * the event emitter dropped a message (Nest EventEmitter2
+   *     is in-memory + fire-and-forget).
+   * All three scenarios resolve within one sweep tick instead of
+   * waiting for the agent's next action.
+   *
+   * Advisory-locked so multi-worker deploys don't double-sweep.
+   * Not transactional — each per-user drain opens its own txn via
+   * onCapacityFreed, so a slow user doesn't block the next.
+   */
+  async sweepCapacity(): Promise<void> {
+    // Singleton gate — only ONE worker runs the sweep per tick. The
+    // lock is session-scoped (released on crash/disconnect); no need
+    // to manually release.
+    const gotLock = await this.dataSource.transaction(async (mgr) => {
+      const row: Array<{ locked: boolean }> = await mgr.query(
+        `SELECT pg_try_advisory_xact_lock($1) AS locked`,
+        [CAPACITY_SWEEP_ADVISORY_LOCK_KEY],
+      );
+      if (!row[0]?.locked) return false;
+      // Hold the lock for the entire inner work by returning from
+      // inside the txn — Postgres releases on txn end.
+      await this.runCapacitySweepPass(mgr);
+      return true;
+    });
+    if (!gotLock) {
+      // Another worker is sweeping — fine, skip this tick.
+      return;
+    }
+  }
+
+  private async runCapacitySweepPass(mgr: EntityManager): Promise<void> {
+    const userRepo = mgr.getRepository(User);
+    const online = await userRepo
+      .createQueryBuilder('u')
+      .where('u.status = :status', { status: UserStatus.ONLINE })
+      .andWhere('u.role = :role', { role: UserRole.MEMBER })
+      .andWhere('u.deactivated_at IS NULL')
+      .select(['u.id'])
+      .getMany();
+    if (online.length === 0) return;
+    let totalDrained = 0;
+    for (const u of online) {
+      // onCapacityFreed opens its own txn, so we leave the sweep's
+      // outer txn (which only holds the advisory lock) alone.
+      const moved = await this.onCapacityFreed(u.id);
+      if (moved) totalDrained++;
+    }
+    if (totalDrained > 0) {
+      this.logger.log(
+        `Capacity sweep: filled ${totalDrained}/${online.length} online member(s)`,
+      );
     }
   }
 
@@ -529,10 +643,51 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
    * moved a ticket, which the drain loop uses to know when to stop.
    */
   async onCapacityFreed(userId: string): Promise<boolean> {
+    // Behavior change (2026-10-17): previously pulled ONE ticket per
+    // capacity-free event. In practice that caused "slow trickle"
+    // under-utilisation — an agent with cap 13 and 3 open tickets
+    // resolved one, got one back, still had 3 — while BOT queue
+    // sat full. Mature support platforms (Zendesk / Intercom /
+    // Freshdesk) fill to cap on each trigger. Now we loop until
+    // nothing more can be drained; drainOnCameOnline doesn't need
+    // its own outer loop any more.
+    let drained = 0;
+    let lastExit: DrainExitReason = 'empty-queue';
+    for (let i = 0; i < ONLINE_DRAIN_MAX; i++) {
+      const result = await this.drainOneSlot(userId);
+      lastExit = result.reason;
+      if (!result.moved) break;
+      drained++;
+    }
+    // Always log — a drained=0 + exit!=empty-queue is the stuck-queue
+    // forensic signal we were missing before.
+    if (drained > 0) {
+      this.logger.log(
+        `Capacity drain user=${userId} drained=${drained} exit=${lastExit}`,
+      );
+    } else if (lastExit !== 'empty-queue') {
+      this.logger.log(
+        `Capacity drain user=${userId} drained=0 exit=${lastExit}`,
+      );
+    }
+    return drained > 0;
+  }
+
+  /**
+   * One pass of the drain — tries drainRipeFollowup first (wake an
+   * owned ripe followup) then pullFromBotQueue (pull from the shared
+   * pool). Returns a structured result so the loop above can log the
+   * exit reason without re-inferring it.
+   */
+  private async drainOneSlot(
+    userId: string,
+  ): Promise<{ moved: boolean; reason: DrainExitReason }> {
     try {
       return await this.dataSource.transaction(async (mgr) => {
-        if (await this.drainRipeFollowup(userId, mgr)) return true;
-        return await this.pullFromBotQueue(userId, mgr);
+        if (await this.drainRipeFollowup(userId, mgr)) {
+          return { moved: true, reason: 'moved' };
+        }
+        return await this.pullFromBotQueueWithReason(userId, mgr);
       });
     } catch (err) {
       this.logger.warn(
@@ -540,7 +695,7 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      return false;
+      return { moved: false, reason: 'exception' };
     }
   }
 
@@ -549,24 +704,15 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
    * every team they belong to. Fired when they come Online — the
    * queue may have been backing up while they were away.
    *
-   * Loops `onCapacityFreed` until nothing more can be drained. Each
-   * call is its own txn so long queues don't hold locks across the
-   * whole fill. The safety cap prevents runaway loops if a picker
-   * bug ever returns true forever.
+   * As of 2026-10-17, onCapacityFreed itself loops to cap, so this
+   * handler is just a thin dispatcher — kept as its own method so
+   * the OnEvent decorator binds cleanly + the log line distinguishes
+   * "drain triggered by Online transition" from "drain triggered by
+   * action backfill" in production logs.
    */
   @OnEvent(PRESENCE_EVENTS.CAME_ONLINE)
   async drainOnCameOnline(payload: PresenceCameOnlineEvent): Promise<void> {
-    let drained = 0;
-    for (let i = 0; i < ONLINE_DRAIN_MAX; i++) {
-      const moved = await this.onCapacityFreed(payload.userId);
-      if (!moved) break;
-      drained++;
-    }
-    if (drained > 0) {
-      this.logger.log(
-        `Drained ${drained} ticket(s) to user=${payload.userId} on Online transition`,
-      );
-    }
+    await this.onCapacityFreed(payload.userId);
   }
 
   /**
@@ -693,6 +839,51 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
       log: 'Auto-woken from followup — timer elapsed and slot freed',
     });
     return true;
+  }
+
+  /**
+   * Thin wrapper over pullFromBotQueue that annotates the no-move
+   * case with WHY. Only drainOneSlot uses this; the old boolean API
+   * stays available for existing callers (and the test suite).
+   */
+  private async pullFromBotQueueWithReason(
+    userId: string,
+    mgr: EntityManager,
+  ): Promise<{ moved: boolean; reason: DrainExitReason }> {
+    const userRepo = mgr.getRepository(User);
+    const user = await userRepo.findOne({ where: { id: userId } });
+    if (!isAssignable(user)) return { moved: false, reason: 'not-assignable' };
+    const moved = await this.pullFromBotQueue(userId, mgr);
+    if (moved) return { moved: true, reason: 'moved' };
+    // No candidate came back. Distinguish "BOT queue empty / nothing
+    // eligible for this user" from "cap was hit on every team with
+    // waiting work" — the latter is actually valid behaviour, the
+    // former is the stuck-queue smell we care about. Cheap probe:
+    // is there ANY BOT ticket in a team this user is a non-paused
+    // member of, regardless of cap? If yes → cap-hit. If no →
+    // empty-queue.
+    const bot = await loadBot(mgr);
+    if (!bot) return { moved: false, reason: 'empty-queue' };
+    const anyEligible = await mgr
+      .getRepository(Ticket)
+      .createQueryBuilder('t')
+      .innerJoin(
+        'team_member',
+        'tm',
+        'tm.team_id = t.team_id AND tm.user_id = :userId AND tm.paused_in_team = false',
+        { userId },
+      )
+      .innerJoin('team', 'team', 'team.id = t.team_id')
+      .where('t.assignee = :botId', { botId: bot.id })
+      .andWhere('t.status = :openStatus', { openStatus: TicketStatus.OPEN })
+      .andWhere('t."deletedAt" IS NULL')
+      .andWhere('team.assignment_paused = false')
+      .limit(1)
+      .getOne();
+    return {
+      moved: false,
+      reason: anyEligible ? 'cap-hit' : 'empty-queue',
+    };
   }
 
   private async pullFromBotQueue(
