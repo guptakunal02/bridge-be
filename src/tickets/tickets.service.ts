@@ -38,6 +38,8 @@ import {
   renderTemplateBody,
   WhatsappTemplatesService,
 } from '../whatsapp-inbox/whatsapp-templates.service';
+import { TemplateVariableResolverService } from '../whatsapp-inbox/template-variable-resolver.service';
+import { renderNamedBody } from '../whatsapp-inbox/template-variables';
 import type { SendTemplateDto } from './dto/send-template.dto';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
@@ -99,6 +101,7 @@ export class TicketsService {
     private readonly sender: EmailSenderService,
     private readonly whatsappSender: WhatsappSenderService,
     private readonly whatsappTemplates: WhatsappTemplatesService,
+    private readonly templateResolver: TemplateVariableResolverService,
     private readonly tagsService: TagsService,
     @Inject(forwardRef(() => AutomationEngine))
     private readonly automations: AutomationEngine,
@@ -1566,12 +1569,6 @@ export class TicketsService {
       );
     }
 
-    // Pad variables to the template's expected count — Meta rejects
-    // the send if the component arity doesn't match. Trimming extras
-    // is defensive: the FE validates but we don't trust it.
-    const variables = (dto.variables ?? []).slice(0, template.variableCount);
-    while (variables.length < template.variableCount) variables.push('');
-
     const inbound = await this.whatsapps.findOne({
       where: { ticket_id: ticket.id, type: MessageDirection.RECEIVED },
       order: { createdAt: 'DESC' },
@@ -1582,14 +1579,55 @@ export class TicketsService {
       );
     }
 
+    // Resolve the positional variables Meta's send API wants. Two
+    // paths:
+    //   * NAMED mapping (Bridge-authored templates): resolve each
+    //     mapped name against the ticket+customer state, swap null
+    //     with the author's fallback, build positional array in
+    //     mapping order. The composer doesn't send variables at
+    //     all in this case.
+    //   * LEGACY (templates synced from Meta BM): no mapping, so
+    //     fall back to the DTO's `variables` array which the
+    //     legacy fill form in the composer still provides.
+    let variables: string[];
+    let rendered: string;
+    if (template.variableMapping && template.variableMapping.length > 0) {
+      const names = template.variableMapping.map((m) => m.name);
+      const resolved = await this.templateResolver.resolveForTicket(
+        ticket.id,
+        names,
+      );
+      variables = template.variableMapping.map((m) => {
+        const v = resolved[m.name];
+        if (v !== null && v !== undefined && v !== '') return String(v);
+        if (m.fallback === null) {
+          // Non-nullable variable came back null → data integrity
+          // issue (shouldn't happen in practice). Surface clearly.
+          throw new BadRequestException(
+            `Could not resolve required variable "${m.name}" on this ticket`,
+          );
+        }
+        return m.fallback;
+      });
+      // Preview mirrors what the customer will see.
+      const replacementMap: Record<string, string> = {};
+      template.variableMapping.forEach(
+        (m, i) => (replacementMap[m.name] = variables[i] ?? ''),
+      );
+      rendered = renderNamedBody(template.body, replacementMap);
+    } else {
+      // Legacy positional path — DTO carries the fill values.
+      variables = (dto.variables ?? []).slice(0, template.variableCount);
+      while (variables.length < template.variableCount) variables.push('');
+      rendered = renderTemplateBody(template.body, variables);
+    }
+
     const { wamid, raw } = await this.whatsappSender.sendTemplate(
       inbound.sender,
       template.name,
       template.language,
       variables,
     );
-
-    const rendered = renderTemplateBody(template.body, variables);
 
     try {
       await this.dataSource.transaction(async (mgr) => {

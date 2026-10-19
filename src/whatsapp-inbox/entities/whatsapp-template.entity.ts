@@ -14,6 +14,7 @@ import {
   WhatsappTemplateStatus,
 } from '../../database/enums';
 import { User } from '../../users/entities/user.entity';
+import type { VariableMappingEntry } from '../template-variables';
 
 /**
  * A WhatsApp message template authored (or synced) against a given
@@ -110,6 +111,16 @@ export class WhatsappTemplate {
    */
   @Column({ type: 'text', nullable: true, name: 'rejection_reason' })
   rejectionReason!: string | null;
+
+  /**
+   * Ordered list of named variables + their fallback strings. Index
+   * i in this array corresponds to Meta's {{i+1}} positional id in
+   * `body`. Null for templates synced from Meta BM (which don't
+   * carry name metadata) — those still work in the composer via the
+   * legacy "fill {{1}} manually" UX.
+   */
+  @Column({ type: 'jsonb', nullable: true, name: 'variable_mapping' })
+  variableMapping!: VariableMappingEntry[] | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy!: string | null;

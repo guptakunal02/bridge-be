@@ -16,6 +16,13 @@ import {
   WhatsappTemplateStatus,
 } from '../database/enums';
 import { WhatsappTemplate } from './entities/whatsapp-template.entity';
+import {
+  convertNamedBodyToPositional,
+  extractVariableReferences,
+  isNullableFor,
+  TEMPLATE_VARIABLES_BY_NAME,
+  type VariableMappingEntry,
+} from './template-variables';
 
 /**
  * Shape of one entry in Meta's GET /{waba_id}/message_templates
@@ -200,8 +207,16 @@ export class WhatsappTemplatesService {
       if (existing) {
         existing.category = category;
         existing.status = status;
-        existing.body = body;
-        existing.variableCount = countVariables(body);
+        // Don't clobber a locally-authored (Bridge-created) template's
+        // named body + mapping. If we already have variable_mapping,
+        // this row was authored here; Meta's sync returns the
+        // positional body which would overwrite the human-readable
+        // one. Only overwrite body + variableCount for rows that
+        // were imported in the first place (variable_mapping is null).
+        if (existing.variableMapping === null) {
+          existing.body = body;
+          existing.variableCount = countVariables(body);
+        }
         existing.metaTemplateId = t.id;
         existing.rejectionReason = t.rejected_reason ?? null;
         await this.templates.save(existing);
@@ -215,6 +230,9 @@ export class WhatsappTemplatesService {
             status,
             body,
             variableCount: countVariables(body),
+            // Imported from Meta — no name metadata, treated as
+            // "legacy" by the composer.
+            variableMapping: null,
             metaTemplateId: t.id,
             rejectionReason: t.rejected_reason ?? null,
             createdBy: null,
@@ -245,6 +263,7 @@ export class WhatsappTemplatesService {
       category: WhatsappTemplateCategory;
       language: string;
       body: string;
+      variableMapping?: Array<{ name: string; fallback?: string | null }>;
     },
   ): Promise<WhatsappTemplate> {
     await this.assertWhatsappChannel(channelId);
@@ -256,6 +275,42 @@ export class WhatsappTemplatesService {
         `A template named "${dto.name}" (${dto.language}) already exists for this channel`,
       );
     }
+
+    // ---- Named-variable validation + conversion to positional ----
+    //
+    // We accept the body as the author wrote it ("Hi {{first_name}},
+    // order #{{order_id}} shipped.") but Meta's API wants positional
+    // placeholders ("Hi {{1}}, order #{{2}} shipped."). The conversion
+    // happens here so Meta sees the shape it expects and the local
+    // row keeps the human-readable version + an ordered mapping.
+    const refs = extractVariableReferences(dto.body);
+    for (const name of refs) {
+      const v = TEMPLATE_VARIABLES_BY_NAME[name];
+      if (!v) {
+        throw new BadRequestException(
+          `Unknown variable "{{${name}}}". Use the picker on {{ to insert a known variable.`,
+        );
+      }
+    }
+
+    const providedByName = new Map(
+      (dto.variableMapping ?? []).map((m) => [m.name, m.fallback ?? null]),
+    );
+    const orderedMapping: VariableMappingEntry[] = refs.map((name) => {
+      const v = TEMPLATE_VARIABLES_BY_NAME[name]!;
+      const nullable = isNullableFor(v, 'WHATSAPP');
+      const providedFallback = providedByName.get(name) ?? null;
+      if (nullable && (!providedFallback || !providedFallback.trim())) {
+        throw new BadRequestException(
+          `Variable {{${name}}} may be null on some WhatsApp tickets — a fallback is required.`,
+        );
+      }
+      return {
+        name,
+        fallback: nullable ? providedFallback!.trim() : null,
+      };
+    });
+    const { positionalBody } = convertNamedBodyToPositional(dto.body);
 
     const wabaId = this.config.get('WHATSAPP_BUSINESS_ACCOUNT_ID', {
       infer: true,
@@ -270,7 +325,7 @@ export class WhatsappTemplatesService {
       name: dto.name,
       language: dto.language,
       category: dto.category,
-      components: [{ type: 'BODY', text: dto.body }],
+      components: [{ type: 'BODY', text: positionalBody }],
     };
 
     let res: Response;
@@ -315,8 +370,14 @@ export class WhatsappTemplatesService {
         language: dto.language,
         category,
         status,
+        // Store the named body + ordered mapping. The composer's
+        // slash picker renders this (so authors see "{{first_name}}"
+        // not "{{1}}"); the sendTemplate flow uses the mapping to
+        // resolve + fill positional params against the real ticket.
         body: dto.body,
-        variableCount: countVariables(dto.body),
+        variableCount: orderedMapping.length,
+        variableMapping:
+          orderedMapping.length > 0 ? orderedMapping : null,
         metaTemplateId: metaResp.id,
         rejectionReason: null,
         createdBy,

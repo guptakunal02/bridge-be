@@ -9,9 +9,11 @@ import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketsModule } from '../tickets/tickets.module';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
+import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
 import { WhatsappTemplate } from './entities/whatsapp-template.entity';
 import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
+import { TemplateVariableResolverService } from './template-variable-resolver.service';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
 import { WhatsappSenderService } from './whatsapp-sender.service';
 import { WhatsappTemplatesController } from './whatsapp-templates.controller';
@@ -43,6 +45,7 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
       Ticket,
       TicketActivityLog,
       User,
+      EmailMessage,
       WhatsappMessage,
       WhatsappTemplate,
     ]),
@@ -70,13 +73,19 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     WhatsappIngestService,
     WhatsappSenderService,
     WhatsappTemplatesService,
+    TemplateVariableResolverService,
     WhatsappSignatureGuard,
   ],
   // WhatsappSenderService is exported so TicketsService can branch
   // outbound reply on channel_type (EMAIL → SMTP, WHATSAPP → Meta
   // Graph) without reaching across module boundaries.
-  // WhatsappTemplatesService is exported so TicketsService can resolve
-  // + render templates during the send-template path.
-  exports: [WhatsappSenderService, WhatsappTemplatesService],
+  // WhatsappTemplatesService + TemplateVariableResolverService are
+  // exported so TicketsService can resolve + render templates during
+  // the send-template path.
+  exports: [
+    WhatsappSenderService,
+    WhatsappTemplatesService,
+    TemplateVariableResolverService,
+  ],
 })
 export class WhatsappInboxModule {}

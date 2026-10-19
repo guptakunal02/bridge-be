@@ -82,6 +82,9 @@ import { TicketsService } from './tickets.service';
   ],
   // Lifecycle service exported so EmailInboxService can wake paused
   // tickets on customer reply inside its ingest transaction.
-  exports: [TicketsService, TicketLifecycleService],
+  // CustomerOrdersService exported so the TemplateVariableResolver
+  // (in WhatsappInboxModule) can look up Shopify order/name data
+  // for named template variables.
+  exports: [TicketsService, TicketLifecycleService, CustomerOrdersService],
 })
 export class TicketsModule {}
