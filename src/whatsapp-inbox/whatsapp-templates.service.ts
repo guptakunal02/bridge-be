@@ -41,7 +41,15 @@ interface MetaTemplate {
     text?: string;
     format?: string;
   }>;
+  // Meta populates one of these on REJECTED rows depending on the
+  // reviewer path (automated vs human). Checking all three keeps us
+  // from showing a blank reason to the author.
   rejected_reason?: string | null;
+  reason?: string | null;
+  quality_score?: {
+    score?: string;
+    reasons?: string[];
+  };
 }
 
 interface MetaListResponse {
@@ -64,6 +72,24 @@ interface MetaErrorEnvelope {
     error_user_msg?: string;
     fbtrace_id?: string;
   };
+}
+
+/**
+ * Pull the human-readable rejection reason out of a Meta template
+ * row. Meta's response schema is inconsistent — automated review
+ * puts the reason in `rejected_reason`, human review sometimes uses
+ * `reason`, and quality-paused rows carry it under `quality_score.
+ * reasons[]`. We try all three so authors don't see a blank reason
+ * pill when Meta did send something.
+ */
+function extractRejectionReason(t: MetaTemplate): string | null {
+  if (t.rejected_reason && t.rejected_reason !== 'NONE') {
+    return t.rejected_reason;
+  }
+  if (t.reason) return t.reason;
+  const qsReasons = t.quality_score?.reasons;
+  if (qsReasons && qsReasons.length > 0) return qsReasons.join('; ');
+  return null;
 }
 
 /**
@@ -218,7 +244,7 @@ export class WhatsappTemplatesService {
           existing.variableCount = countVariables(body);
         }
         existing.metaTemplateId = t.id;
-        existing.rejectionReason = t.rejected_reason ?? null;
+        existing.rejectionReason = extractRejectionReason(t);
         await this.templates.save(existing);
       } else {
         await this.templates.save(
@@ -234,7 +260,7 @@ export class WhatsappTemplatesService {
             // "legacy" by the composer.
             variableMapping: null,
             metaTemplateId: t.id,
-            rejectionReason: t.rejected_reason ?? null,
+            rejectionReason: extractRejectionReason(t),
             createdBy: null,
           }),
         );
@@ -325,7 +351,27 @@ export class WhatsappTemplatesService {
       name: dto.name,
       language: dto.language,
       category: dto.category,
-      components: [{ type: 'BODY', text: positionalBody }],
+      components: [
+        orderedMapping.length > 0
+          ? {
+              type: 'BODY',
+              text: positionalBody,
+              // Meta's reviewer uses `example.body_text` to understand
+              // what each {{n}} will be filled with — without it the
+              // template looks ambiguous ("Hi {{1}}") and the reviewer
+              // tends to reject under TAG_CONTENT_MISMATCH or
+              // INCORRECT_CATEGORY. We feed back the author's own
+              // fallback as the sample so Meta sees the full
+              // intended text filled in. body_text is a 2D array:
+              // one example set, N values matching N positional slots.
+              example: {
+                body_text: [
+                  orderedMapping.map((m) => m.fallback ?? 'sample'),
+                ],
+              },
+            }
+          : { type: 'BODY', text: positionalBody },
+      ],
     };
 
     let res: Response;
