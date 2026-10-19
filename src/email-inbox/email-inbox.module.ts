@@ -9,18 +9,30 @@ import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
 import { TicketsModule } from '../tickets/tickets.module';
 import { UsersModule } from '../users/users.module';
+import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { EmailInboxController } from './email-inbox.controller';
 import { EmailInboxService } from './email-inbox.service';
 import { EmailInboxWorker } from './email-inbox.worker';
+import { EmailTemplatesController } from './email-templates.controller';
+import { EmailTemplatesService } from './email-templates.service';
 import { EmailMessage } from './entities/email-message.entity';
 import { EmailMessageAttachment } from './entities/email-message-attachment.entity';
+import { EmailTemplate } from './entities/email-template.entity';
 import { EmailMessageRepository } from './providers/email-message.repository';
 import { ImapResumeStore } from './providers/imap-resume-store.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmailMessage, EmailMessageAttachment, Channel]),
+    TypeOrmModule.forFeature([
+      EmailMessage,
+      EmailMessageAttachment,
+      EmailTemplate,
+      Channel,
+    ]),
     ChannelsModule,
+    // TemplateVariableResolverService + EmailSenderService (via
+    // ChannelsModule) power the email templates test-send flow.
+    WhatsappInboxModule,
     // AssignmentPickerService for round-robining new tickets to
     // Online agents at ingest time.
     UsersModule,
@@ -41,13 +53,19 @@ import { ImapResumeStore } from './providers/imap-resume-store.service';
     // on every inbound persist.
     AutomationsModule,
   ],
-  controllers: [EmailInboxController],
+  controllers: [EmailInboxController, EmailTemplatesController],
   providers: [
     EmailInboxService,
     EmailMessageRepository,
     EmailInboxWorker,
     ImapResumeStore,
+    EmailTemplatesService,
   ],
-  exports: [EmailInboxService, EmailMessageRepository, EmailInboxWorker],
+  exports: [
+    EmailInboxService,
+    EmailMessageRepository,
+    EmailInboxWorker,
+    EmailTemplatesService,
+  ],
 })
 export class EmailInboxModule {}

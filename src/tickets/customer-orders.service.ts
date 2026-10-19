@@ -247,6 +247,41 @@ export class CustomerOrdersService {
   }
 
   /**
+   * Phone-based cousin of listForTicket — admin paste a phone + we
+   * pull the latest Shopify order on it. Email cousin below.
+   * No pagination, latest order only.
+   */
+  async findLatestOrderByEmail(email: string): Promise<CustomerOrder | null> {
+    const key = email.trim().toLowerCase();
+    if (!key) return null;
+    const rows = await this.opsRead.transactional<OrdersRow>(async (q) => {
+      await q('SET LOCAL statement_timeout = 5000');
+      return q(
+        `SELECT
+            o.id,
+            o.awb,
+            o.normalised_current_status,
+            o.cancelled_at,
+            o.shopify_tags,
+            o.raw_shopify_response,
+            o.ordered_at,
+            o.shopify_order_id,
+            NULL::text AS exchange_new_order_id,
+            NULL::timestamp AS exchange_request_created_at
+         FROM orders o
+         WHERE lower((o.raw_shopify_response->'shippingAddress'->>'email')) = $1
+            OR lower((o.raw_shopify_response->'customer'->>'email')) = $1
+            OR lower((o.raw_shopify_response->>'email')) = $1
+         ORDER BY o.ordered_at DESC NULLS LAST
+         LIMIT 1`,
+        [key],
+      );
+    });
+    if (rows.length === 0) return null;
+    return toCustomerOrder(rows[0]!);
+  }
+
+  /**
    * The customer's email is the sender of the earliest inbound
    * message on the ticket. Anything else (bot chatter, our own
    * replies) doesn't identify the customer.

@@ -156,3 +156,19 @@ export enum WhatsappTemplateStatus {
   PAUSED = 'PAUSED',
   DISABLED = 'DISABLED',
 }
+
+/**
+ * Email templates mirror WhatsApp templates for category but don't
+ * go through third-party review — the author submits and it's
+ * immediately usable. We still track the category so the Outreach UI
+ * can route each template to its "Utility" or "Marketing" tab,
+ * matching the mental model agents built up on the WhatsApp side.
+ *
+ * V1 only exposes UTILITY in the UI; MARKETING is reserved for the
+ * next slice (sender reputation / unsubscribe handling needs ironing
+ * out before promotional email makes sense).
+ */
+export enum EmailTemplateCategory {
+  UTILITY = 'UTILITY',
+  MARKETING = 'MARKETING',
+}

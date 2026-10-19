@@ -137,6 +137,64 @@ export class TemplateVariableResolverService {
   }
 
   /**
+   * Email-first cousin of resolveForPhone — used by the Email
+   * Outreach test-send flow. Looks up the latest Shopify order for
+   * the given email and extracts customer-side vars (first_name,
+   * last_name, phone_number, order_id). email itself echoes back the
+   * admin's input. Ticket-side vars return null — no ticket context
+   * in a direct outreach send.
+   */
+  async resolveForEmail(
+    emailAddr: string,
+    names: string[],
+  ): Promise<Record<string, string | null>> {
+    const need = new Set(names);
+    const out: Record<string, string | null> = {};
+    const normalized = emailAddr.trim().toLowerCase();
+
+    if (need.has('ticket_id')) out.ticket_id = null;
+    if (need.has('inbox')) out.inbox = null;
+    if (need.has('customer_id')) out.customer_id = normalized || null;
+    if (need.has('email')) out.email = normalized || null;
+
+    const needsOrder =
+      need.has('order_id') ||
+      need.has('first_name') ||
+      need.has('last_name') ||
+      need.has('phone_number');
+    if (!needsOrder) return out;
+
+    try {
+      const order = await this.orders.findLatestOrderByEmail(normalized);
+      if (need.has('order_id')) out.order_id = order?.orderName ?? null;
+      if (need.has('first_name') || need.has('last_name')) {
+        const name = order?.invoiceName ?? null;
+        const [first, ...rest] = name ? name.split(' ') : [];
+        if (need.has('first_name')) out.first_name = first ?? null;
+        if (need.has('last_name')) {
+          out.last_name = rest.length > 0 ? rest.join(' ') : null;
+        }
+      }
+      if (need.has('phone_number')) {
+        // CustomerOrder doesn't expose phone today; return null so the
+        // fallback kicks in. Tracked for V2.
+        out.phone_number = null;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Email-based order lookup failed email=${normalized}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      if (need.has('order_id')) out.order_id = null;
+      if (need.has('first_name')) out.first_name = null;
+      if (need.has('last_name')) out.last_name = null;
+      if (need.has('phone_number')) out.phone_number = null;
+    }
+    return out;
+  }
+
+  /**
    * Phone-first resolver used by the test-send flow — no ticket, no
    * channel inbox, just a phone number from the admin. We can still
    * fill the customer variables (first_name, last_name, phone_number,
