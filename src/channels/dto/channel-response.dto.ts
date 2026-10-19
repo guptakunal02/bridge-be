@@ -5,6 +5,11 @@ export interface ChannelResponse {
   id: string;
   type: ChannelType;
   displayName: string;
+  /**
+   * Null when the admin hasn't customized the sender name. Email
+   * sender then falls back to `displayName`.
+   */
+  senderDisplayName: string | null;
   inboxContact: string | null;
   status: ChannelStatus;
   hasCredentials: boolean;
@@ -22,6 +27,7 @@ export function toChannelResponse(channel: Channel): ChannelResponse {
     id: channel.id,
     type: channel.type,
     displayName: channel.displayName,
+    senderDisplayName: channel.senderDisplayName,
     inboxContact: channel.inbox_contact,
     status: channel.status,
     hasCredentials: channel.credentials_encrypted !== null,

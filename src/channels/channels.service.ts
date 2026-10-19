@@ -82,12 +82,22 @@ export class ChannelsService {
     const existing = await this.channels.findOne({ where: { id } });
     if (!existing) throw new NotFoundException('Channel not found');
 
-    if (dto.displayName === undefined && dto.status === undefined) {
+    if (
+      dto.displayName === undefined &&
+      dto.senderDisplayName === undefined &&
+      dto.status === undefined
+    ) {
       return toChannelResponse(existing);
     }
 
     const data: Partial<Channel> = {};
     if (dto.displayName !== undefined) data.displayName = dto.displayName;
+    if (dto.senderDisplayName !== undefined) {
+      // Empty string / blank → null so the sender falls back to
+      // displayName. Non-blank persists verbatim.
+      const trimmed = dto.senderDisplayName.trim();
+      data.senderDisplayName = trimmed.length > 0 ? trimmed : null;
+    }
     if (dto.status !== undefined) data.status = dto.status;
 
     try {

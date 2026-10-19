@@ -203,8 +203,14 @@ export class EmailSenderService {
         accessToken,
       },
     });
-    const from = channel.displayName
-      ? `"${channel.displayName}" <${creds.address}>`
+    // Prefer the explicit sender-display-name over the Bridge-internal
+    // channel label — lets a workspace split "Surma Utility" (internal)
+    // from "Surma" (what customers see). Falls back to displayName if
+    // the admin hasn't set a dedicated sender name, then to the bare
+    // address.
+    const fromName = channel.senderDisplayName ?? channel.displayName;
+    const from = fromName
+      ? `"${fromName}" <${creds.address}>`
       : creds.address;
     return { transport, from };
   }

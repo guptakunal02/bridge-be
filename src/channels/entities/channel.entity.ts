@@ -20,6 +20,18 @@ export class Channel {
   @Column({ type: 'text', unique: true })
   displayName!: string;
 
+  /**
+   * From-display-name shown to customers in their email client's
+   * From: field. Nullable — when null, EmailSenderService falls
+   * back to `displayName`. Lets a workspace keep multiple internal
+   * channel labels ("Surma Utility", "Surma Marketing") but present
+   * a unified sender identity ("Surma") to customers.
+   *
+   * EMAIL channels only consume this; other channel types ignore it.
+   */
+  @Column({ type: 'text', nullable: true, name: 'sender_display_name' })
+  senderDisplayName!: string | null;
+
   @Column({ type: 'text', nullable: true, name: 'inbox_contact' })
   inbox_contact!: string | null;
 
