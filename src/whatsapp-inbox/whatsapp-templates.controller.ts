@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
@@ -64,6 +65,28 @@ export class WhatsappTemplatesController {
       order: { updatedAt: 'DESC' },
     });
     return withCreators.map(toTemplateResponse);
+  }
+
+  /**
+   * Fetch a single template by its short integer `number` (not UUID).
+   * Backs the FE's detail-page route /outreach/whatsapp/templates/:n.
+   * Scoped to the given channel so the URL stays self-describing.
+   */
+  @Get('by-number/:n')
+  async byNumber(
+    @Param('channelId', ParseUUIDPipe) channelId: string,
+    @Param('n') nParam: string,
+  ): Promise<WhatsappTemplateResponse> {
+    const n = Number(nParam);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new NotFoundException('Template not found');
+    }
+    const row = await this.templates.findOne({
+      where: { channelId, number: String(n) },
+      relations: { creator: true },
+    });
+    if (!row) throw new NotFoundException('Template not found');
+    return toTemplateResponse(row);
   }
 
   /**

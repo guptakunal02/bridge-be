@@ -7,6 +7,12 @@ import type { VariableMappingEntry } from '../template-variables';
 
 export interface WhatsappTemplateResponse {
   id: string;
+  /**
+   * Short integer identifier (e.g. 4) used in Outreach URLs + the
+   * composer slash picker. Stringified at the DTO boundary since
+   * bigint doesn't survive JSON safely for very large values.
+   */
+  number: number;
   channelId: string;
   name: string;
   category: WhatsappTemplateCategory;
@@ -33,6 +39,7 @@ export function toTemplateResponse(
 ): WhatsappTemplateResponse {
   return {
     id: t.id,
+    number: Number(t.number),
     channelId: t.channelId,
     name: t.name,
     category: t.category,

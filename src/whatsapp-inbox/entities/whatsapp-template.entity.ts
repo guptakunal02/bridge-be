@@ -43,6 +43,17 @@ export class WhatsappTemplate {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
+  /**
+   * Short integer id — public identifier used in Outreach URLs
+   * (/outreach/whatsapp/templates/4) + the composer slash picker
+   * ("/4" jumps straight to template #4). Backed by a BIGSERIAL
+   * sequence; unique across the table (not per-channel). TypeORM
+   * treats bigint columns as string on the JS side, so we convert
+   * at the DTO boundary.
+   */
+  @Column({ type: 'bigint' })
+  number!: string;
+
   @Column({ type: 'uuid', name: 'channel_id' })
   channelId!: string;
 
