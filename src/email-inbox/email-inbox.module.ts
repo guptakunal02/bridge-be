@@ -7,6 +7,7 @@ import { Channel } from '../channels/entities/channel.entity';
 import { RulesModule } from '../rules/rules.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
+import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketsModule } from '../tickets/tickets.module';
 import { UsersModule } from '../users/users.module';
 import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
@@ -28,6 +29,10 @@ import { ImapResumeStore } from './providers/imap-resume-store.service';
       EmailMessageAttachment,
       EmailTemplate,
       Channel,
+      // EmailTemplatesService.sendOnTicket needs the Ticket repo
+      // to load the ticket + its channel + thread history before
+      // rendering + sending the template.
+      Ticket,
     ]),
     ChannelsModule,
     // TemplateVariableResolverService + EmailSenderService (via
