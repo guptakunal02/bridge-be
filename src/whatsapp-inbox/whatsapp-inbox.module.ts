@@ -10,9 +10,12 @@ import { TicketsModule } from '../tickets/tickets.module';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
+import { WhatsappTemplate } from './entities/whatsapp-template.entity';
 import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
 import { WhatsappSenderService } from './whatsapp-sender.service';
+import { WhatsappTemplatesController } from './whatsapp-templates.controller';
+import { WhatsappTemplatesService } from './whatsapp-templates.service';
 import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
@@ -35,7 +38,14 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Channel, Ticket, TicketActivityLog, User, WhatsappMessage]),
+    TypeOrmModule.forFeature([
+      Channel,
+      Ticket,
+      TicketActivityLog,
+      User,
+      WhatsappMessage,
+      WhatsappTemplate,
+    ]),
     TeamsModule,
     UsersModule,
     // AutomationEngine — ingest emits MESSAGE_RECEIVED /
@@ -54,16 +64,19 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // outbound reply path).
     forwardRef(() => TicketsModule),
   ],
-  controllers: [WhatsappWebhookController],
+  controllers: [WhatsappWebhookController, WhatsappTemplatesController],
   providers: [
     WhatsappWebhookService,
     WhatsappIngestService,
     WhatsappSenderService,
+    WhatsappTemplatesService,
     WhatsappSignatureGuard,
   ],
   // WhatsappSenderService is exported so TicketsService can branch
   // outbound reply on channel_type (EMAIL → SMTP, WHATSAPP → Meta
   // Graph) without reaching across module boundaries.
-  exports: [WhatsappSenderService],
+  // WhatsappTemplatesService is exported so TicketsService can resolve
+  // + render templates during the send-template path.
+  exports: [WhatsappSenderService, WhatsappTemplatesService],
 })
 export class WhatsappInboxModule {}

@@ -30,6 +30,7 @@ import { CreateTicketNoteDto } from './dto/create-ticket-note.dto';
 import { ListCustomerOrdersQuery } from './dto/list-customer-orders.dto';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
 import { ReplyTicketDto } from './dto/reply-ticket.dto';
+import { SendTemplateDto } from './dto/send-template.dto';
 import {
   RelatedTicketSummary,
   TicketDetail,
@@ -180,6 +181,21 @@ export class TicketsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<TicketDetail> {
     return this.tickets.reply(id, dto, user);
+  }
+
+  /**
+   * Send an approved WhatsApp template on this ticket. Used by the
+   * composer when the 24-hour reply window has closed — Meta requires
+   * an approved template to re-engage. Any member can send; variables
+   * fill the `{{n}}` placeholders in template body.
+   */
+  @Post(':id/send-template')
+  sendTemplate(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Body() dto: SendTemplateDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    return this.tickets.sendTemplate(id, dto, user);
   }
 
   /**

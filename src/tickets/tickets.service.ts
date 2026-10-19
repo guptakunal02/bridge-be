@@ -34,6 +34,11 @@ import {
   WhatsappSenderService,
   WHATSAPP_MEDIA_SIZE_CAPS,
 } from '../whatsapp-inbox/whatsapp-sender.service';
+import {
+  renderTemplateBody,
+  WhatsappTemplatesService,
+} from '../whatsapp-inbox/whatsapp-templates.service';
+import type { SendTemplateDto } from './dto/send-template.dto';
 import { buildTicketContext } from '../rules/ticket-context';
 import { TagsService } from '../tags/tags.service';
 import { User } from '../users/entities/user.entity';
@@ -93,6 +98,7 @@ export class TicketsService {
     private readonly lifecycle: TicketLifecycleService,
     private readonly sender: EmailSenderService,
     private readonly whatsappSender: WhatsappSenderService,
+    private readonly whatsappTemplates: WhatsappTemplatesService,
     private readonly tagsService: TagsService,
     @Inject(forwardRef(() => AutomationEngine))
     private readonly automations: AutomationEngine,
@@ -1498,6 +1504,125 @@ export class TicketsService {
       } catch {
         // ignore
       }
+      throw persistErr;
+    }
+
+    try {
+      await this.presence.slideOnActivity(actingUser.id);
+    } catch {
+      // presence slide is telemetry-adjacent; safe to swallow.
+    }
+
+    return this.get(ticket.id);
+  }
+
+  /**
+   * Send an approved WhatsApp template on a ticket. This is the ONLY
+   * path to re-engage a customer whose 24h customer-service window
+   * has closed — Meta rejects free-form content with code 131047
+   * once the window lapses.
+   *
+   * Flow mirrors replyWhatsapp():
+   *   1. Resolve template (must be APPROVED) + recipient wa_id (from
+   *      the last RECEIVED whatsapp_message, same anchor as reply).
+   *   2. Fill {{n}} placeholders with the DTO's variables (pad with
+   *      empty strings on undercount so Meta doesn't 400 us).
+   *   3. Send via Meta Graph.
+   *   4. Persist a SENT whatsapp_message row with the rendered
+   *      (filled) body as content — the thread shows "Hi Mohit, …"
+   *      not "Hi {{1}}, …". Also log AGENT_REPLIED.
+   *
+   * Templates don't require the 24h window to be open — in fact
+   * their main purpose is the opposite — so we don't gate on
+   * window age the way reply does.
+   */
+  async sendTemplate(
+    ticketId: string,
+    dto: SendTemplateDto,
+    actingUser: AuthenticatedUser,
+  ): Promise<TicketDetail> {
+    const ticket = await this.tickets.findOne({ where: { id: ticketId } });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const channel = await this.channels.findOne({
+      where: { id: ticket.channel_id },
+    });
+    if (!channel) throw new NotFoundException('Channel not found');
+    if (channel.type !== ChannelType.WHATSAPP) {
+      throw new BadRequestException(
+        'Templates can only be sent on WhatsApp tickets',
+      );
+    }
+    if (!channel.inbox_contact) {
+      throw new BadRequestException(
+        'WhatsApp channel is missing its phone_number_id — reconnect it in Settings.',
+      );
+    }
+
+    const template = await this.whatsappTemplates.findSendable(dto.templateId);
+    if (template.channelId !== channel.id) {
+      throw new BadRequestException(
+        'Template belongs to a different WhatsApp channel',
+      );
+    }
+
+    // Pad variables to the template's expected count — Meta rejects
+    // the send if the component arity doesn't match. Trimming extras
+    // is defensive: the FE validates but we don't trust it.
+    const variables = (dto.variables ?? []).slice(0, template.variableCount);
+    while (variables.length < template.variableCount) variables.push('');
+
+    const inbound = await this.whatsapps.findOne({
+      where: { ticket_id: ticket.id, type: MessageDirection.RECEIVED },
+      order: { createdAt: 'DESC' },
+    });
+    if (!inbound) {
+      throw new BadRequestException(
+        'This WhatsApp ticket has no inbound message to resolve the customer wa_id',
+      );
+    }
+
+    const { wamid, raw } = await this.whatsappSender.sendTemplate(
+      inbound.sender,
+      template.name,
+      template.language,
+      variables,
+    );
+
+    const rendered = renderTemplateBody(template.body, variables);
+
+    try {
+      await this.dataSource.transaction(async (mgr) => {
+        const waRepo = mgr.getRepository(WhatsappMessage);
+        const logRepo = mgr.getRepository(TicketActivityLog);
+        await waRepo.save(
+          waRepo.create({
+            channelId: ticket.channel_id,
+            ticket_id: ticket.id,
+            type: MessageDirection.SENT,
+            sender: channel.inbox_contact!,
+            content: rendered,
+            external_message_id: wamid,
+            message_type: 'template',
+            raw_payload: raw,
+            media_url: null,
+            media_mime_type: null,
+            media_size_bytes: null,
+          }),
+        );
+        await logRepo.save({
+          ticket_id: ticket.id,
+          event: TicketActivity.AGENT_REPLIED,
+          actor_id: actingUser.id,
+          log: `Sent WhatsApp template "${template.name}" by ${actorLabel(actingUser)}`,
+        });
+      });
+    } catch (persistErr) {
+      const errMsg =
+        persistErr instanceof Error ? persistErr.message : String(persistErr);
+      this.logger.error(
+        `WhatsApp template send ok but DB persist failed. ticket=${ticket.id} wamid=${wamid} error=${errMsg}`,
+      );
       throw persistErr;
     }
 

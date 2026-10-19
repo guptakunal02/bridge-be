@@ -123,3 +123,36 @@ export enum WaitingAction {
   AUTO_RESOLVE = 'AUTO_RESOLVE',
   REOPEN = 'REOPEN',
 }
+
+/**
+ * WhatsApp template categories as defined by Meta's template guidelines.
+ * We only expose UTILITY + MARKETING to the create form — AUTHENTICATION
+ * requires special OTP-flavoured components we don't support in V1.
+ *
+ * UTILITY       — transactional / service nudges (order updates, delivery
+ *                 pings, re-engagement after a service touch). Cheapest
+ *                 pricing tier (~₹0.11/msg in IN) and highest approval rate.
+ * MARKETING     — promotional, discovery, cross-sell. Highest pricing
+ *                 tier (~₹0.78/msg in IN) and strictest content review.
+ * AUTHENTICATION — OTP / login codes. Not exposed in V1 UI.
+ */
+export enum WhatsappTemplateCategory {
+  UTILITY = 'UTILITY',
+  MARKETING = 'MARKETING',
+  AUTHENTICATION = 'AUTHENTICATION',
+}
+
+/**
+ * Mirror of Meta's template-review lifecycle. Only APPROVED rows are
+ * usable in the composer picker — PENDING is still under Meta review,
+ * REJECTED carries a `rejection_reason`, PAUSED means Meta flagged quality
+ * (low delivery rate / high complaint rate) and send is blocked until
+ * the business improves template performance.
+ */
+export enum WhatsappTemplateStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  PAUSED = 'PAUSED',
+  DISABLED = 'DISABLED',
+}

@@ -414,6 +414,124 @@ export class WhatsappSenderService {
     this.logger.log(`WhatsApp ${kind} send ok: wa_id=${digits} wamid=${wamid}`);
     return { wamid, raw: parsed };
   }
+
+  /**
+   * Send an approved template message. Templates are the ONLY path
+   * to re-engage a customer once the 24h customer-service window has
+   * closed — Meta rejects everything else with code 131047.
+   *
+   * Meta's template payload shape:
+   *   type: "template",
+   *   template: {
+   *     name: "<template name>",
+   *     language: { code: "<bcp47>" },
+   *     components: [
+   *       { type: "body", parameters: [{ type: "text", text: "V1" }, ...] }
+   *     ]
+   *   }
+   *
+   * V1 only ships BODY-component templates — no HEADER (image/video),
+   * no BUTTONS. `variables` is the array of {{1}}, {{2}}, … values
+   * in order. Empty array for static templates.
+   */
+  async sendTemplate(
+    waId: string,
+    templateName: string,
+    language: string,
+    variables: string[],
+  ): Promise<WhatsappSendResult> {
+    const digits = waId.replace(/\D/g, '');
+    if (!digits) {
+      throw new BadRequestException('Recipient wa_id missing or invalid');
+    }
+
+    const phoneNumberId = this.config.get('WHATSAPP_PHONE_NUMBER_ID', {
+      infer: true,
+    });
+    const token = this.config.get('WHATSAPP_ACCESS_TOKEN', { infer: true });
+    const version = this.config.get('WHATSAPP_GRAPH_API_VERSION', {
+      infer: true,
+    });
+    const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+
+    const components =
+      variables.length > 0
+        ? [
+            {
+              type: 'body',
+              parameters: variables.map((v) => ({
+                type: 'text',
+                text: v,
+              })),
+            },
+          ]
+        : [];
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: digits,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: language },
+        ...(components.length > 0 ? { components } : {}),
+      },
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (netErr) {
+      this.logger.error(
+        `WhatsApp template send network error for wa_id=${digits}: ${
+          netErr instanceof Error ? netErr.message : String(netErr)
+        }`,
+      );
+      throw netErr;
+    }
+
+    const text = await res.text();
+    let parsed: MetaSendResponse & MetaErrorEnvelope;
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      this.logger.error(
+        `WhatsApp template send: non-JSON response (status=${res.status}): ${text.slice(0, 500)}`,
+      );
+      throw new BadRequestException(
+        'WhatsApp send failed — Meta returned an unexpected response',
+      );
+    }
+    if (!res.ok || parsed.error) {
+      const code = parsed.error?.code;
+      const metaMsg =
+        parsed.error?.error_user_msg ||
+        parsed.error?.message ||
+        'Unknown error';
+      this.logger.warn(
+        `WhatsApp template send rejected status=${res.status} code=${code ?? 'none'} template=${templateName} msg="${metaMsg}"`,
+      );
+      throw new BadRequestException(friendlyError(code, metaMsg));
+    }
+    const wamid = parsed.messages?.[0]?.id;
+    if (!wamid) {
+      throw new BadRequestException(
+        'WhatsApp send failed — Meta did not return a message id',
+      );
+    }
+    this.logger.log(
+      `WhatsApp template send ok: wa_id=${digits} template=${templateName} wamid=${wamid}`,
+    );
+    return { wamid, raw: parsed };
+  }
 }
 
 /**
