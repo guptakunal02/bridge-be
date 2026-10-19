@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
@@ -50,8 +50,10 @@ import { ImapResumeStore } from './providers/imap-resume-store.service';
     // tickets that receive a fresh reply.
     SettingsModule,
     // AutomationEngine — emit ticket.created / message.received
-    // on every inbound persist.
-    AutomationsModule,
+    // on every inbound persist. forwardRef because the send_email_template
+    // handler on the automations side imports EmailTemplatesService
+    // back from this module, closing the cycle.
+    forwardRef(() => AutomationsModule),
   ],
   controllers: [EmailInboxController, EmailTemplatesController],
   providers: [
