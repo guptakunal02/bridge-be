@@ -16,6 +16,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { WhatsappTemplateStatus } from '../database/enums';
 import { CreateWhatsappTemplateDto } from './dto/create-whatsapp-template.dto';
+import { TestSendTemplateDto } from './dto/test-send-template.dto';
 import {
   toTemplateResponse,
   type WhatsappTemplateResponse,
@@ -119,6 +120,29 @@ export class WhatsappTemplatesController {
       relations: { creator: true },
     });
     return toTemplateResponse(withCreator ?? row);
+  }
+
+  /**
+   * Fire a one-off test send of this APPROVED template to a specific
+   * phone number — surfaces no ticket, no DB row, no activity log.
+   * Lets admins verify template content + variable substitution
+   * before using it on real customers.
+   */
+  @Post(':templateId/test')
+  @HttpCode(HttpStatus.OK)
+  async testSend(
+    @Param('channelId', ParseUUIDPipe) channelId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: TestSendTemplateDto,
+  ): Promise<{ wamid: string }> {
+    return this.templatesService.testSend(
+      templateId,
+      channelId,
+      user.id,
+      dto.phoneNumber,
+      dto.variableOverrides ?? {},
+    );
   }
 
   private parseStatus(raw?: string): WhatsappTemplateStatus | undefined {

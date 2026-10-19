@@ -23,6 +23,7 @@ import {
   TEMPLATE_VARIABLES_BY_NAME,
   type VariableMappingEntry,
 } from './template-variables';
+import { WhatsappSenderService } from './whatsapp-sender.service';
 
 /**
  * Shape of one entry in Meta's GET /{waba_id}/message_templates
@@ -132,6 +133,7 @@ export class WhatsappTemplatesService {
     private readonly templates: Repository<WhatsappTemplate>,
     @InjectRepository(Channel)
     private readonly channels: Repository<Channel>,
+    private readonly sender: WhatsappSenderService,
   ) {}
 
   /**
@@ -450,6 +452,81 @@ export class WhatsappTemplatesService {
       );
     }
     return row;
+  }
+
+  /**
+   * Fire a test send of an APPROVED template to an arbitrary phone
+   * number — used by the admin's "Send test" affordance on the
+   * template detail page.
+   *
+   * Important differences from the ticket send-template flow:
+   *   * No ticket resolution — recipient wa_id comes straight from
+   *     the admin's input, normalized to digits.
+   *   * Variable values come entirely from the DTO (overrides first,
+   *     then the template's stored fallback). We don't walk ticket
+   *     + customer-orders state because there IS no ticket.
+   *   * No persistence — the test send doesn't show up in any inbox,
+   *     doesn't log a whatsapp_message row. We just log the attempt
+   *     to the service logger for audit.
+   *
+   * Legacy templates (variable_mapping null) use positional overrides
+   * keyed as "1", "2", … so admins can still test imported templates.
+   */
+  async testSend(
+    templateId: string,
+    channelId: string,
+    actorId: string,
+    phoneNumber: string,
+    overrides: Record<string, string>,
+  ): Promise<{ wamid: string }> {
+    const template = await this.findSendable(templateId);
+    if (template.channelId !== channelId) {
+      throw new BadRequestException(
+        'Template belongs to a different WhatsApp channel',
+      );
+    }
+
+    const digits = phoneNumber.replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+      throw new BadRequestException(
+        'Phone number must have 7–15 digits (E.164-ish). Include country code.',
+      );
+    }
+
+    let variables: string[];
+    if (template.variableMapping && template.variableMapping.length > 0) {
+      // Named mapping — resolve each in order from overrides, then
+      // fallback. Non-nullable vars with no override are an error.
+      variables = template.variableMapping.map((m) => {
+        const o = overrides[m.name];
+        if (o !== undefined && o.trim().length > 0) return o;
+        if (m.fallback !== null) return m.fallback;
+        throw new BadRequestException(
+          `Variable "${m.name}" is non-nullable — provide an override for the test send`,
+        );
+      });
+    } else {
+      // Legacy positional — overrides keyed by "1", "2", …
+      variables = Array.from({ length: template.variableCount }).map((_, i) => {
+        const o = overrides[String(i + 1)];
+        if (o !== undefined && o.trim().length > 0) return o;
+        throw new BadRequestException(
+          `Provide a value for {{${i + 1}}} to test this legacy template`,
+        );
+      });
+    }
+
+    this.logger.log(
+      `Test template send actor=${actorId} template=${template.name} to=${digits} vars=${variables.length}`,
+    );
+
+    const { wamid } = await this.sender.sendTemplate(
+      digits,
+      template.name,
+      template.language,
+      variables,
+    );
+    return { wamid };
   }
 
   private async assertWhatsappChannel(channelId: string): Promise<void> {
