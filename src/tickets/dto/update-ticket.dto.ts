@@ -78,7 +78,7 @@ export class UpdateTicketDto {
   @ArrayUnique()
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  @MaxLength(40, { each: true })
+  @MaxLength(100, { each: true })
   @Matches(/^[a-z0-9-]+$/, {
     each: true,
     message:
