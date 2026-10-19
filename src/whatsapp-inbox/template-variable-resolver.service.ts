@@ -135,4 +135,67 @@ export class TemplateVariableResolverService {
 
     return out;
   }
+
+  /**
+   * Phone-first resolver used by the test-send flow — no ticket, no
+   * channel inbox, just a phone number from the admin. We can still
+   * fill the customer variables (first_name, last_name, phone_number,
+   * email) and order_id by looking up the latest Shopify order
+   * attached to that phone. Ticket-side variables (ticket_id, inbox,
+   * customer_id) are intentionally returned as null because there's
+   * no ticket context — admin's expected to use fallbacks there, or
+   * these variables shouldn't show up in templates meant for direct
+   * sends.
+   */
+  async resolveForPhone(
+    phoneDigits: string,
+    names: string[],
+  ): Promise<Record<string, string | null>> {
+    const need = new Set(names);
+    const out: Record<string, string | null> = {};
+
+    if (need.has('ticket_id')) out.ticket_id = null;
+    if (need.has('inbox')) out.inbox = null;
+    if (need.has('customer_id')) out.customer_id = phoneDigits || null;
+    if (need.has('phone_number')) {
+      out.phone_number = phoneDigits || null;
+    }
+
+    const needsOrder =
+      need.has('order_id') ||
+      need.has('first_name') ||
+      need.has('last_name') ||
+      need.has('email');
+    if (!needsOrder) return out;
+
+    try {
+      const order = await this.orders.findLatestOrderByPhone(phoneDigits);
+      if (need.has('order_id')) out.order_id = order?.orderName ?? null;
+      if (need.has('first_name') || need.has('last_name')) {
+        const name = order?.invoiceName ?? null;
+        const [first, ...rest] = name ? name.split(' ') : [];
+        if (need.has('first_name')) out.first_name = first ?? null;
+        if (need.has('last_name')) {
+          out.last_name = rest.length > 0 ? rest.join(' ') : null;
+        }
+      }
+      if (need.has('email')) {
+        // Shopify stores customer email on raw_shopify_response.customer.email
+        // or shippingAddress.email. CustomerOrder doesn't expose it today;
+        // return null so the fallback kicks in. Tracked for V2.
+        out.email = null;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Phone-based order lookup failed phone=${phoneDigits}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      if (need.has('order_id')) out.order_id = null;
+      if (need.has('first_name')) out.first_name = null;
+      if (need.has('last_name')) out.last_name = null;
+      if (need.has('email')) out.email = null;
+    }
+    return out;
+  }
 }

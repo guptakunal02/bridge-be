@@ -194,6 +194,59 @@ export class CustomerOrdersService {
   }
 
   /**
+   * Find the most recent order for a customer identified only by
+   * phone number — used by the template test-send flow where an
+   * admin pastes a phone number and wants variables (first_name,
+   * last_name, order_id) auto-resolved against real customer data.
+   *
+   * Matching strategy: strip all non-digit characters from both the
+   * input and the stored shipping-address / customer phone, then
+   * suffix-match on the last 10 digits. Covers:
+   *   * "+91 98765 43210" (input) vs "9876543210" (stored, no country code)
+   *   * "919876543210" (input) vs "919876543210" (stored)
+   *   * "9876543210" (input) vs "+91 9876543210" (stored)
+   *
+   * Returns the first `CustomerOrder` or null. No pagination — the
+   * test-send flow only needs the latest for name + order_id. 5s
+   * statement timeout mirrors listForTicket.
+   */
+  async findLatestOrderByPhone(phone: string): Promise<CustomerOrder | null> {
+    const digits = phone.replace(/\D/g, '');
+    const last10 = digits.slice(-10);
+    if (last10.length < 7) return null;
+
+    const rows = await this.opsRead.transactional<OrdersRow>(async (q) => {
+      await q('SET LOCAL statement_timeout = 5000');
+      return q(
+        `SELECT
+            o.id,
+            o.awb,
+            o.normalised_current_status,
+            o.cancelled_at,
+            o.shopify_tags,
+            o.raw_shopify_response,
+            o.ordered_at,
+            o.shopify_order_id,
+            NULL::text AS exchange_new_order_id,
+            NULL::timestamp AS exchange_request_created_at
+         FROM orders o
+         WHERE RIGHT(regexp_replace(
+                 COALESCE(o.raw_shopify_response->'shippingAddress'->>'phone', ''),
+                 '\\D', '', 'g'), 10) = $1
+            OR RIGHT(regexp_replace(
+                 COALESCE(o.raw_shopify_response->'customer'->>'phone', ''),
+                 '\\D', '', 'g'), 10) = $1
+         ORDER BY o.ordered_at DESC NULLS LAST
+         LIMIT 1`,
+        [last10],
+      );
+    });
+
+    if (rows.length === 0) return null;
+    return toCustomerOrder(rows[0]!);
+  }
+
+  /**
    * The customer's email is the sender of the earliest inbound
    * message on the ticket. Anything else (bot chatter, our own
    * replies) doesn't identify the customer.

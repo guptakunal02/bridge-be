@@ -24,6 +24,7 @@ import {
   type VariableMappingEntry,
 } from './template-variables';
 import { WhatsappSenderService } from './whatsapp-sender.service';
+import { TemplateVariableResolverService } from './template-variable-resolver.service';
 
 /**
  * Shape of one entry in Meta's GET /{waba_id}/message_templates
@@ -134,6 +135,7 @@ export class WhatsappTemplatesService {
     @InjectRepository(Channel)
     private readonly channels: Repository<Channel>,
     private readonly sender: WhatsappSenderService,
+    private readonly resolver: TemplateVariableResolverService,
   ) {}
 
   /**
@@ -495,11 +497,32 @@ export class WhatsappTemplatesService {
 
     let variables: string[];
     if (template.variableMapping && template.variableMapping.length > 0) {
-      // Named mapping — resolve each in order from overrides, then
-      // fallback. Non-nullable vars with no override are an error.
+      // Named mapping — resolution order per variable:
+      //   1. Admin's explicit override (non-empty input)
+      //   2. Phone-based auto-resolve from the ops DB (so a real
+      //      customer's first_name / last_name / order_id lands
+      //      automatically when the admin leaves the input blank)
+      //   3. Template fallback (what the author wrote at create time)
+      //   4. Reject if the variable is non-nullable and we're out of
+      //      options
+      // Only invoke the resolver if at least ONE variable actually
+      // needs it — avoids a wasted ops-DB round trip when every
+      // variable has an override.
+      const needingResolve = template.variableMapping
+        .filter((m) => {
+          const o = overrides[m.name];
+          return !(o !== undefined && o.trim().length > 0);
+        })
+        .map((m) => m.name);
+      const resolved =
+        needingResolve.length > 0
+          ? await this.resolver.resolveForPhone(digits, needingResolve)
+          : {};
       variables = template.variableMapping.map((m) => {
         const o = overrides[m.name];
         if (o !== undefined && o.trim().length > 0) return o;
+        const r = resolved[m.name];
+        if (r !== undefined && r !== null && r !== '') return r;
         if (m.fallback !== null) return m.fallback;
         throw new BadRequestException(
           `Variable "${m.name}" is non-nullable — provide an override for the test send`,
