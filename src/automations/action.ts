@@ -15,7 +15,8 @@ export type ActionType =
   | 'set_status'
   | 'set_assignee'
   | 'set_team'
-  | 'send_reply';
+  | 'send_whatsapp_template'
+  | 'send_email_template';
 
 export type Action =
   | { type: 'add_tag'; tagName: string }
@@ -29,19 +30,31 @@ export type Action =
     }
   | { type: 'set_team'; teamId: string }
   | {
-      type: 'send_reply';
+      type: 'send_whatsapp_template';
       /**
-       * Message body sent back to the customer, routed through the
-       * ticket's channel (email → SMTP, whatsapp → Meta Graph).
-       * Supports two tokens expanded at send time:
-       *   {customerName} — a human-ish name derived from the sender
-       *                     (email local-part capitalised, or
-       *                     "there" when no name is available —
-       *                     whatsapp numbers can't yield a name).
-       *   {ticketId}      — the Bridge ticket id as a number.
-       * Everything else is treated as literal text.
+       * UUID of a whatsapp_template row. Handler loads it at exec
+       * time + verifies the ticket is a WhatsApp ticket (otherwise
+       * skips with a warn log — WhatsApp templates are channel-
+       * specific). Variables resolve from the ticket + customer DB
+       * via the shared TemplateVariableResolver; the template's
+       * stored fallbacks fill null slots. Only APPROVED templates
+       * are sendable — PENDING / REJECTED rows reject at exec time
+       * with a log line.
        */
-      body: string;
+      templateId: string;
+    }
+  | {
+      type: 'send_email_template';
+      /**
+       * UUID of an email_template row. Handler asserts the ticket
+       * is an email ticket. Variables resolve from the ticket +
+       * customer DB; template fallbacks fill nulls. Subject + body
+       * render with the resolved values, then fire through
+       * EmailSenderService.sendReply so the SENT message threads
+       * on the ticket's existing conversation (same In-Reply-To
+       * stitching as a human-authored reply).
+       */
+      templateId: string;
     };
 
 /**

@@ -35,7 +35,8 @@ const VALID_ACTION_TYPES: ReadonlySet<Action['type']> = new Set<Action['type']>(
   'set_status',
   'set_assignee',
   'set_team',
-  'send_reply',
+  'send_whatsapp_template',
+  'send_email_template',
 ]);
 
 const V1_SETTABLE_STATUSES: ReadonlySet<TicketStatus> = new Set<TicketStatus>([
@@ -196,11 +197,12 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
         errors.push(`${path}.teamId: must be a non-empty string`);
       }
       break;
-    case 'send_reply':
-      if (typeof obj.body !== 'string' || obj.body.trim().length === 0) {
-        errors.push(`${path}.body: must be a non-empty string`);
-      } else if (obj.body.length > 10_000) {
-        errors.push(`${path}.body: cannot exceed 10000 characters`);
+    case 'send_whatsapp_template':
+    case 'send_email_template':
+      if (typeof obj.templateId !== 'string' || obj.templateId.length === 0) {
+        errors.push(
+          `${path}.templateId: must be a non-empty UUID of a ${type === 'send_whatsapp_template' ? 'WhatsApp' : 'email'} template`,
+        );
       }
       break;
   }
