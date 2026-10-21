@@ -430,6 +430,7 @@ export class EmailInboxService {
     // condition pattern. Computed once per emit so predicates can
     // compare integers rather than parse timestamps.
     const hourIst = computeHourIst(message.createdAt);
+    const dayOfWeekIst = computeDayOfWeekIst(message.createdAt);
     const ticketSnapshot = {
       id: ticket.id,
       channelId: ticket.channel_id,
@@ -450,6 +451,7 @@ export class EmailInboxService {
         subject: req.subject ?? null,
         body: req.content,
         hourIst,
+        dayOfWeekIst,
       },
     });
     if (wasNewTicket) {
@@ -463,6 +465,7 @@ export class EmailInboxService {
           subject: req.subject ?? null,
           body: req.content,
           hourIst,
+          dayOfWeekIst,
         },
       });
     }
@@ -479,6 +482,7 @@ export class EmailInboxService {
           ticketId: ticket.id,
           newStatus: ticket.status,
           hourIst,
+          dayOfWeekIst,
         },
       });
     }
@@ -966,4 +970,11 @@ function computeHourIst(at: Date): number {
   const utcMs = at.getTime();
   const istMs = utcMs + 5.5 * 60 * 60 * 1000;
   return new Date(istMs).getUTCHours();
+}
+
+/** Day-of-week (0=Sun…6=Sat, JS Date.getDay() convention) in IST. */
+function computeDayOfWeekIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCDay();
 }

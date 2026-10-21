@@ -988,7 +988,9 @@ export class TicketsService {
       to: TicketStatus;
     } | null;
     if (transition) {
-      const hourIst = computeHourIst(new Date());
+      const now = new Date();
+      const hourIst = computeHourIst(now);
+      const dayOfWeekIst = computeDayOfWeekIst(now);
       if (transition.to === TicketStatus.RESOLVED) {
         this.automations.emit({
           event: AUTOMATION_EVENT.TICKET_RESOLVED,
@@ -997,6 +999,7 @@ export class TicketsService {
             ticketId: detail.id,
             previousStatus: transition.from,
             hourIst,
+            dayOfWeekIst,
           },
         });
       } else if (transition.from === TicketStatus.RESOLVED) {
@@ -1007,6 +1010,7 @@ export class TicketsService {
             ticketId: detail.id,
             newStatus: transition.to,
             hourIst,
+            dayOfWeekIst,
           },
         });
       }
@@ -2178,5 +2182,17 @@ function computeHourIst(at: Date): number {
   const utcMs = at.getTime();
   const istMs = utcMs + 5.5 * 60 * 60 * 1000;
   return new Date(istMs).getUTCHours();
+}
+
+/**
+ * Day-of-week (0=Sunday … 6=Saturday, matches JS Date.getDay())
+ * in IST. Same +05:30-offset shortcut as computeHourIst — no DST
+ * complications. Set on automation event payloads so predicates
+ * can key off "weekend" / "specific weekday".
+ */
+function computeDayOfWeekIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCDay();
 }
 

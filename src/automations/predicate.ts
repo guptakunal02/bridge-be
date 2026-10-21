@@ -75,12 +75,33 @@ export function evaluatePredicate(
   const actual = resolveField(p.field, ctx);
   const expected = p.value;
 
+  // Field-value side type-coercion. The FE serialises enum-choice
+  // values as strings (its <select> emits string), but some backing
+  // fields (dayOfWeekIst, hourIst) carry numbers in the payload. A
+  // strict `actual === expected` would silently miss "day equals
+  // Monday" because 1 !== "1". We coerce the EXPECTED side to match
+  // the actual's type when the actual is numeric and the expected
+  // is a numeric string; mirror behaviour for arrays (in/not_in).
+  const coerceToNumberIfNumeric = (v: unknown): unknown => {
+    if (typeof v === 'string' && /^-?\d+(?:\.\d+)?$/.test(v)) {
+      const n = Number(v);
+      if (!Number.isNaN(n)) return n;
+    }
+    return v;
+  };
+  const coercedExpected =
+    typeof actual === 'number'
+      ? Array.isArray(expected)
+        ? expected.map(coerceToNumberIfNumeric)
+        : coerceToNumberIfNumeric(expected)
+      : expected;
+
   try {
     switch (p.operator) {
       case 'equals':
-        return actual === expected;
+        return actual === coercedExpected;
       case 'not_equals':
-        return actual !== expected;
+        return actual !== coercedExpected;
 
       case 'contains':
         if (typeof actual === 'string' && typeof expected === 'string') {
@@ -109,12 +130,12 @@ export function evaluatePredicate(
         return false;
 
       case 'in':
-        if (!Array.isArray(expected)) return false;
-        return expected.includes(actual);
+        if (!Array.isArray(coercedExpected)) return false;
+        return coercedExpected.includes(actual);
 
       case 'not_in':
-        if (!Array.isArray(expected)) return false;
-        return !expected.includes(actual);
+        if (!Array.isArray(coercedExpected)) return false;
+        return !coercedExpected.includes(actual);
 
       case 'gt':
         return typeof actual === 'number' && typeof expected === 'number' && actual > expected;

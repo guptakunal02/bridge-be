@@ -50,6 +50,9 @@ export interface TicketCreatedEventPayload {
   /** Hour of the day (0-23) in IST at the moment the ticket was
    *  created. Convenience for OOH-style predicates. */
   hourIst: number;
+  /** Day of week in IST, 0 = Sunday … 6 = Saturday (JS Date.getDay()
+   *  convention). Convenience for weekend / weekday predicates. */
+  dayOfWeekIst: number;
 }
 
 export interface MessageReceivedEventPayload {
@@ -60,6 +63,9 @@ export interface MessageReceivedEventPayload {
   subject: string | null;
   body: string;
   hourIst: number;
+  /** Day of week in IST, 0 = Sunday … 6 = Saturday (JS Date.getDay()
+   *  convention). Convenience for weekend / weekday predicates. */
+  dayOfWeekIst: number;
 }
 
 export interface TagAppliedEventPayload {
@@ -80,6 +86,9 @@ export interface TicketResolvedEventPayload {
   ticketId: string;
   previousStatus: TicketStatus;
   hourIst: number;
+  /** Day of week in IST, 0 = Sunday … 6 = Saturday (JS Date.getDay()
+   *  convention). Convenience for weekend / weekday predicates. */
+  dayOfWeekIst: number;
 }
 
 /**
@@ -92,6 +101,9 @@ export interface TicketReopenedEventPayload {
   ticketId: string;
   newStatus: TicketStatus;
   hourIst: number;
+  /** Day of week in IST, 0 = Sunday … 6 = Saturday (JS Date.getDay()
+   *  convention). Convenience for weekend / weekday predicates. */
+  dayOfWeekIst: number;
 }
 
 export type AutomationEventPayload =

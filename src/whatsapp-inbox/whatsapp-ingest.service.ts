@@ -13,9 +13,9 @@ import {
   TicketStatus,
 } from '../database/enums';
 import { TeamsService } from '../teams/teams.service';
-import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { Ticket } from '../tickets/entities/ticket.entity';
+import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
 import { loadBot } from '../users/presence-helpers';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
@@ -267,6 +267,7 @@ export class WhatsappIngestService {
     // event.subject will simply not match, which is the correct
     // behaviour for a channel without that concept.
     const hourIst = computeHourIst(message.createdAt);
+    const dayOfWeekIst = computeDayOfWeekIst(message.createdAt);
     const ticketSnapshot = {
       id: ticket.id,
       channelId: ticket.channel_id,
@@ -283,10 +284,11 @@ export class WhatsappIngestService {
         ticketId: ticket.id,
         messageId: message.id,
         channelId: channel.id,
-        sender: msg.from!,
+        sender: msg.from,
         subject: null,
         body: message.content ?? '',
         hourIst,
+        dayOfWeekIst,
       },
     });
     if (wasNewTicket) {
@@ -296,10 +298,11 @@ export class WhatsappIngestService {
         payload: {
           ticketId: ticket.id,
           channelId: channel.id,
-          sender: msg.from!,
+          sender: msg.from,
           subject: null,
           body: message.content ?? '',
           hourIst,
+          dayOfWeekIst,
         },
       });
     }
@@ -311,6 +314,7 @@ export class WhatsappIngestService {
           ticketId: ticket.id,
           newStatus: ticket.status,
           hourIst,
+          dayOfWeekIst,
         },
       });
     }
@@ -328,9 +332,7 @@ export class WhatsappIngestService {
    * warn and return null so the row is still persisted — the agent
    * sees an empty bubble instead of the message disappearing.
    */
-  private async resolveInboundMedia(
-    msg: WhatsappInboundMessage,
-  ): Promise<{
+  private async resolveInboundMedia(msg: WhatsappInboundMessage): Promise<{
     url: string;
     mime: string;
     size: number;
@@ -524,6 +526,13 @@ function computeHourIst(at: Date): number {
   const utcMs = at.getTime();
   const istMs = utcMs + 5.5 * 60 * 60 * 1000;
   return new Date(istMs).getUTCHours();
+}
+
+/** Day-of-week (0=Sun…6=Sat, JS Date.getDay() convention) in IST. */
+function computeDayOfWeekIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCDay();
 }
 
 /**
