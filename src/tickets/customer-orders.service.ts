@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { OpsReadService } from '../bot/ops/ops-read.service';
 import { MessageDirection } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
+import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { Ticket } from './entities/ticket.entity';
 
 /**
@@ -57,7 +58,15 @@ export interface CustomerOrder {
 export interface CustomerOrdersPage {
   orders: CustomerOrder[];
   hasMore: boolean;
+  /** Email the orders matched on (null for WhatsApp tickets). */
   customerEmail: string | null;
+  /**
+   * Phone the orders matched on when the ticket had no email —
+   * the raw wa_id string stored on the first inbound WA message.
+   * The FE surfaces whichever of email/phone is non-null in the
+   * "Matching orders for X" header.
+   */
+  customerPhone: string | null;
 }
 
 const DEFAULT_LIMIT = 10;
@@ -71,6 +80,8 @@ export class CustomerOrdersService {
     @InjectRepository(Ticket) private readonly tickets: Repository<Ticket>,
     @InjectRepository(EmailMessage)
     private readonly emails: Repository<EmailMessage>,
+    @InjectRepository(WhatsappMessage)
+    private readonly whatsappMessages: Repository<WhatsappMessage>,
     private readonly opsRead: OpsReadService,
   ) {}
 
@@ -90,7 +101,22 @@ export class CustomerOrdersService {
 
     const email = await this.pickCustomerEmail(ticketId);
     if (!email) {
-      return { orders: [], hasMore: false, customerEmail: null };
+      // No email → try WhatsApp sender phone. Lets the Orders tab
+      // populate on WA tickets, which have no email at all. Last-10-
+      // digit suffix match handles the various country-code shapes
+      // between what Meta stores (919876543210) and what Shopify's
+      // shippingAddress.phone/customer.phone holds (+91 9876543210,
+      // 9876543210, etc.) — same approach as findLatestOrderByPhone.
+      const phone = await this.pickCustomerPhone(ticketId);
+      if (!phone) {
+        return {
+          orders: [],
+          hasMore: false,
+          customerEmail: null,
+          customerPhone: null,
+        };
+      }
+      return this.listByPhone(phone, query);
     }
 
     const limit = clampLimit(query.limit);
@@ -190,6 +216,88 @@ export class CustomerOrdersService {
       orders: trimmed.map(toCustomerOrder),
       hasMore,
       customerEmail: email,
+      customerPhone: null,
+    };
+  }
+
+  /**
+   * Phone-based paginated query. Mirrors listForTicket's email path:
+   * dedup by shopify_order_id (keep the richest snapshot), left-join
+   * the exchanges table, filter by last-10-digit suffix match on
+   * both shipping-address phone and customer phone. Returns the
+   * same CustomerOrdersPage shape so the FE doesn't branch on which
+   * identifier matched.
+   */
+  private async listByPhone(
+    phone: string,
+    query: { limit?: number; offset?: number },
+  ): Promise<CustomerOrdersPage> {
+    const digits = phone.replace(/\D/g, '');
+    const last10 = digits.slice(-10);
+    if (last10.length < 7) {
+      return {
+        orders: [],
+        hasMore: false,
+        customerEmail: null,
+        customerPhone: phone,
+      };
+    }
+    const limit = clampLimit(query.limit);
+    const offset = Math.max(0, query.offset ?? 0);
+    const rows = await this.opsRead.transactional<OrdersRow>(async (q) => {
+      await q('SET LOCAL statement_timeout = 5000');
+      return q(
+        `WITH ranked AS (
+           SELECT
+             o.id,
+             o.awb,
+             o.normalised_current_status,
+             o.cancelled_at,
+             o.shopify_tags,
+             o.raw_shopify_response,
+             o.ordered_at,
+             o.shopify_order_id,
+             e.new_shopify_order_id AS exchange_new_order_id,
+             e.request_created_at   AS exchange_request_created_at,
+             ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(o.shopify_order_id, o.id::text)
+               ORDER BY
+                 (o.raw_shopify_response -> 'fulfillments' -> 0
+                    -> 'trackingInfo' -> 0 ->> 'url' IS NOT NULL) DESC,
+                 (o.awb IS NOT NULL) DESC,
+                 o.ordered_at DESC NULLS LAST
+             ) AS rn
+           FROM orders o
+           LEFT JOIN LATERAL (
+             SELECT new_shopify_order_id, request_created_at
+             FROM exchanges
+             WHERE initial_shopify_order_id = o.shopify_order_id
+             ORDER BY request_created_at DESC NULLS LAST
+             LIMIT 1
+           ) e ON TRUE
+           WHERE
+                  RIGHT(regexp_replace(
+                    COALESCE(o.raw_shopify_response->'shippingAddress'->>'phone', ''),
+                    '\\D', '', 'g'), 10) = $1
+               OR RIGHT(regexp_replace(
+                    COALESCE(o.raw_shopify_response->'customer'->>'phone', ''),
+                    '\\D', '', 'g'), 10) = $1
+         )
+         SELECT *
+           FROM ranked
+          WHERE rn = 1
+          ORDER BY ordered_at DESC NULLS LAST
+          LIMIT $2 OFFSET $3`,
+        [last10, limit + 1, offset],
+      );
+    });
+    const hasMore = rows.length > limit;
+    const trimmed = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      orders: trimmed.map(toCustomerOrder),
+      hasMore,
+      customerEmail: null,
+      customerPhone: phone,
     };
   }
 
@@ -293,6 +401,21 @@ export class CustomerOrdersService {
     });
     const raw = first?.sender?.trim() ?? null;
     return raw ? raw.toLowerCase() : null;
+  }
+
+  /**
+   * First inbound WhatsApp message's sender column holds the raw
+   * wa_id (digits-only phone, often with country code). The ops-side
+   * query strips non-digits and suffix-matches the last 10 digits,
+   * so returning the raw value is correct — no formatting needed.
+   */
+  private async pickCustomerPhone(ticketId: string): Promise<string | null> {
+    const first = await this.whatsappMessages.findOne({
+      where: { ticket_id: ticketId, type: MessageDirection.RECEIVED },
+      order: { createdAt: 'ASC' },
+    });
+    const raw = first?.sender?.trim() ?? null;
+    return raw ? raw : null;
   }
 }
 
