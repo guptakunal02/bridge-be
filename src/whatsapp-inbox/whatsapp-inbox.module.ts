@@ -72,8 +72,10 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // BotRuntimeService — new WhatsApp tickets now start a bot
     // session (same way email tickets do). Enables Flow matching
     // off TICKET_CREATED and seeds sender_phone into the session's
-    // initial variables.
-    BotModule,
+    // initial variables. forwardRef because BotModule now imports
+    // WhatsappInboxModule back (to resolve WhatsappChannelAdapter
+    // behind the CHANNEL_ADAPTER DI token).
+    forwardRef(() => BotModule),
     // AppSettingsService — reads the WhatsApp reopen window used by
     // findOrCreateTicket to decide between in-window reopen vs
     // past-window mint-with-previous_ticket_id.

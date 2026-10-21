@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AutomationEngine } from '../automations/automation-engine.service';
@@ -102,6 +102,7 @@ export class WhatsappIngestService {
     private readonly teams: TeamsService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly automations: AutomationEngine,
+    @Inject(forwardRef(() => BotRuntimeService))
     private readonly runtime: BotRuntimeService,
     private readonly sender: WhatsappSenderService,
     private readonly storage: S3StorageService,
