@@ -19,6 +19,7 @@ export const AUTOMATION_EVENT = {
   TAG_APPLIED: 'tag.applied',
   TICKET_RESOLVED: 'ticket.resolved',
   TICKET_REOPENED: 'ticket.reopened',
+  BOT_HANDOFF: 'bot.handoff',
 } as const;
 
 export type AutomationEventName =
@@ -106,6 +107,27 @@ export interface TicketReopenedEventPayload {
   dayOfWeekIst: number;
 }
 
+/**
+ * Fires when a bot flow executes a Handoff step and releases the
+ * ticket back to the human queue. Common consumer: an OOH rule that
+ * sends an auto-reply template when the handoff lands outside working
+ * hours. `teamId` is the team the handoff targeted (null = "leave on
+ * current team"); `fromTeamId` is the team the ticket was on BEFORE
+ * the handoff — useful if a rule wants to detect cross-team moves.
+ */
+export interface BotHandoffEventPayload {
+  ticketId: string;
+  flowId: string;
+  stepId: string;
+  teamId: string | null;
+  fromTeamId: string;
+  note: string | null;
+  hourIst: number;
+  /** Day of week in IST, 0 = Sunday … 6 = Saturday (JS Date.getDay()
+   *  convention). Convenience for weekend / weekday predicates. */
+  dayOfWeekIst: number;
+}
+
 export type AutomationEventPayload =
   | {
       event: typeof AUTOMATION_EVENT.TICKET_CREATED;
@@ -131,6 +153,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.TICKET_REOPENED;
       ticket: TicketSnapshot;
       payload: TicketReopenedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.BOT_HANDOFF;
+      ticket: TicketSnapshot;
+      payload: BotHandoffEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */

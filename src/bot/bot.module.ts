@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AutomationsModule } from '../automations/automations.module';
 import { RulesModule } from '../rules/rules.module';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
@@ -31,6 +32,9 @@ import { CHANNEL_ADAPTER } from './runtime/channel-adapter.token';
   imports: [
     OpsModule,
     RulesModule,
+    // forwardRef because AutomationsModule imports EmailInboxModule
+    // which (transitively) depends on BotModule for the runtime.
+    forwardRef(() => AutomationsModule),
     TypeOrmModule.forFeature([
       BotFlow,
       BotStep,

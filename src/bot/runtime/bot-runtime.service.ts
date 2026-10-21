@@ -1,6 +1,8 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, DataSource, Repository } from 'typeorm';
+import { AutomationEngine } from '../../automations/automation-engine.service';
+import { AUTOMATION_EVENT } from '../../automations/events';
 import {
   BotSessionStatus,
   BotStepType,
@@ -64,11 +66,15 @@ export class BotRuntimeService {
     private readonly steps: Repository<BotStep>,
     @InjectRepository(BotSession)
     private readonly sessions: Repository<BotSession>,
+    @InjectRepository(Ticket)
+    private readonly tickets: Repository<Ticket>,
     private readonly evaluator: RuleEvaluatorService,
     private readonly functions: BotFunctionsService,
     private readonly configValidator: StepConfigValidator,
     private readonly dataSource: DataSource,
     @Inject(CHANNEL_ADAPTER) private readonly channel: ChannelAdapter,
+    @Inject(forwardRef(() => AutomationEngine))
+    private readonly automations: AutomationEngine,
   ) {}
 
   /* ------------------------------------------------------------------ */
@@ -326,7 +332,7 @@ export class BotRuntimeService {
 
         case BotStepType.HANDOFF: {
           const cfg = step.config as HandoffStepConfig;
-          await this.applyHandoff(session, cfg);
+          await this.applyHandoff(session, step, cfg);
           return;
         }
       }
@@ -379,8 +385,17 @@ export class BotRuntimeService {
 
   private async applyHandoff(
     session: BotSession,
+    step: BotStep,
     cfg: HandoffStepConfig,
   ): Promise<void> {
+    // Snapshot the pre-handoff team so the BOT_HANDOFF event can tell
+    // consumers whether the handoff moved teams. Load outside the txn
+    // so a lookup failure doesn't abort the handoff itself.
+    const before = await this.tickets.findOne({
+      where: { id: session.ticket_id },
+    });
+    const fromTeamId = before?.team_id ?? '';
+
     await this.dataSource.transaction(async (mgr: EntityManager) => {
       const ticketRepo = mgr.getRepository(Ticket);
       const logRepo = mgr.getRepository(TicketActivityLog);
@@ -405,5 +420,66 @@ export class BotRuntimeService {
       session.current_step_id = null;
       await sessionRepo.save(session);
     });
+
+    // Post-commit: emit BOT_HANDOFF so OOH / routing rules can fire.
+    // Re-read the ticket to snapshot its post-handoff state (team may
+    // have changed inside the txn above). All failures from here on
+    // are swallowed — the handoff itself has already succeeded; a bad
+    // emit must not surface as a session failure.
+    try {
+      const after = await this.tickets.findOne({
+        where: { id: session.ticket_id },
+      });
+      if (!after) return;
+      const now = new Date();
+      const hourIst = computeHourIst(now);
+      const dayOfWeekIst = computeDayOfWeekIst(now);
+      this.automations.emit({
+        event: AUTOMATION_EVENT.BOT_HANDOFF,
+        ticket: {
+          id: after.id,
+          channelId: after.channel_id,
+          status: after.status,
+          tags: after.tags ?? [],
+          assigneeId: after.assignee,
+          teamId: after.team_id,
+          subject: after.thread_key ?? null,
+        },
+        payload: {
+          ticketId: after.id,
+          flowId: session.flow_id,
+          stepId: step.id,
+          teamId: cfg.teamId ?? null,
+          fromTeamId,
+          note: cfg.note ?? null,
+          hourIst,
+          dayOfWeekIst,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `BOT_HANDOFF emit failed for ticket=${session.ticket_id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
+}
+
+/**
+ * Hour of the day (0-23) in IST. IST is a fixed +05:30 offset (no
+ * DST), so a direct UTC + offset computation is correct without a tz
+ * library. Convenience for OOH-style predicates.
+ */
+function computeHourIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCHours();
+}
+
+/** Day-of-week (0=Sun…6=Sat, JS Date.getDay() convention) in IST. */
+function computeDayOfWeekIst(at: Date): number {
+  const utcMs = at.getTime();
+  const istMs = utcMs + 5.5 * 60 * 60 * 1000;
+  return new Date(istMs).getUTCDay();
 }
