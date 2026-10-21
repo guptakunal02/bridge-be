@@ -13,6 +13,7 @@ import { Channel } from '../channels/entities/channel.entity';
 import {
   ChannelType,
   EmailTemplateCategory,
+  EmailTemplateKind,
   MessageDirection,
   TicketActivity,
 } from '../database/enums';
@@ -35,6 +36,18 @@ import { EmailTemplate } from './entities/email-template.entity';
  * see something readable instead of the raw markup. Replaces common
  * block tags with newlines first so paragraph breaks survive.
  */
+/**
+ * Build an email-reply subject off an original subject. Collapses
+ * any existing "Re:" / "re:" prefix so repeated replies don't
+ * accumulate "Re: Re: Re: ..." — matches Gmail / Outlook behaviour.
+ */
+function toReplySubject(original: string): string {
+  const trimmed = (original ?? '').trim();
+  if (!trimmed) return 'Re:';
+  const stripped = trimmed.replace(/^(re|fwd|fw)\s*:\s*/i, '').trim();
+  return `Re: ${stripped}`;
+}
+
 function htmlToPlainText(html: string): string {
   return html
     .replace(/<\s*br\s*\/?\s*>/gi, '\n')
@@ -108,7 +121,8 @@ export class EmailTemplatesService {
     dto: {
       name: string;
       category: EmailTemplateCategory;
-      subject: string;
+      kind: EmailTemplateKind;
+      subject?: string | null;
       bodyHtml: string;
       variableMapping?: Array<{ name: string; fallback?: string | null }>;
     },
@@ -123,13 +137,24 @@ export class EmailTemplatesService {
       );
     }
 
-    // Pull every {{name}} from BOTH subject + body — the author can
-    // reference variables in either, and the mapping must cover the
-    // union. First-appearance order treats subject before body because
-    // the author reads top-to-bottom.
+    // Enforce the kind ↔ subject invariant that the DTO can't express:
+    //   OUTREACH requires a non-empty subject (fresh email needs one).
+    //   REPLY must NOT carry a subject (it inherits "Re: <original>"
+    //     from the thread at send time).
+    const trimmedSubject = (dto.subject ?? '').trim();
+    if (dto.kind === EmailTemplateKind.OUTREACH && trimmedSubject.length === 0) {
+      throw new BadRequestException(
+        'Outreach templates require a subject line.',
+      );
+    }
+    const persistedSubject =
+      dto.kind === EmailTemplateKind.OUTREACH ? trimmedSubject : null;
+
+    // Variable references — REPLY templates only scan the body
+    // (subject doesn't exist); OUTREACH scans subject + body.
     const refs = Array.from(
       new Set([
-        ...extractVariableReferences(dto.subject),
+        ...(persistedSubject ? extractVariableReferences(persistedSubject) : []),
         ...extractVariableReferences(dto.bodyHtml),
       ]),
     );
@@ -165,7 +190,8 @@ export class EmailTemplatesService {
         channelId,
         name: dto.name,
         category: dto.category,
-        subject: dto.subject,
+        kind: dto.kind,
+        subject: persistedSubject,
         bodyHtml: dto.bodyHtml,
         bodyText: htmlToPlainText(dto.bodyHtml),
         variableCount: orderedMapping.length,
@@ -249,12 +275,21 @@ export class EmailTemplatesService {
       }
     }
 
-    const subject = renderNamedBody(template.subject, replacementMap);
+    // REPLY templates don't carry a subject (they inherit "Re: ..."
+    // from the thread they reply to at ticket send time). The test
+    // flow has no thread to inherit from, so we fake a lightweight
+    // "Test reply" subject just so SMTP has something to put in the
+    // header. The admin's testing the body, not the subject.
+    const subjectSource =
+      template.kind === EmailTemplateKind.REPLY
+        ? '(test) Re: template preview'
+        : (template.subject ?? '');
+    const subject = renderNamedBody(subjectSource, replacementMap);
     const bodyHtml = renderNamedBody(template.bodyHtml, replacementMap);
     const bodyText = htmlToPlainText(bodyHtml);
 
     this.logger.log(
-      `Test email template actor=${actorId} template=${template.name} to=${to}`,
+      `Test email template actor=${actorId} template=${template.name} kind=${template.kind} to=${to}`,
     );
 
     const result = await this.sender.sendSystem({
@@ -316,35 +351,54 @@ export class EmailTemplatesService {
       );
     }
 
-    // Find the earliest inbound to extract the customer's email and
-    // the latest inbound for thread headers. In most tickets both are
-    // the same row (single-reply thread) but on long back-and-forths
-    // these diverge.
-    const lastInbound = await this.emails.findOne({
+    // Both kinds need to know who to send to. The ticket's thread_key
+    // is the customer's email in the EMAIL channel — but we prefer
+    // the actual sender column from the first inbound as a defence
+    // against mangled thread_keys. Only reach for thread_key if we
+    // literally have no inbound (edge case; tickets usually originate
+    // from inbound).
+    const firstInbound = await this.emails.findOne({
       where: { ticket_id: ticket.id, type: MessageDirection.RECEIVED },
-      order: { createdAt: 'DESC' },
+      order: { createdAt: 'ASC' },
     });
-    if (!lastInbound) {
-      throw new BadRequestException(
-        'This ticket has no inbound email to resolve the customer address or stitch thread headers against',
-      );
-    }
-    const customerEmail = lastInbound.sender?.trim();
+    const customerEmail =
+      firstInbound?.sender?.trim() || ticket.thread_key?.trim();
     if (!customerEmail) {
       throw new BadRequestException(
-        'Last inbound email has no sender address',
+        'This ticket has no customer address to send to',
+      );
+    }
+
+    // Thread anchor only matters for REPLY templates.
+    const lastInbound =
+      template.kind === EmailTemplateKind.REPLY
+        ? await this.emails.findOne({
+            where: { ticket_id: ticket.id, type: MessageDirection.RECEIVED },
+            order: { createdAt: 'DESC' },
+          })
+        : null;
+    if (template.kind === EmailTemplateKind.REPLY && !lastInbound) {
+      // A REPLY template with nothing to reply to — refuse rather
+      // than silently sending as a fresh email.
+      throw new BadRequestException(
+        'REPLY templates need an inbound email on the ticket to anchor against. Use an OUTREACH template to send cold.',
       );
     }
 
     // References chain = every message's external id in chronological
-    // order so Outlook-class MUAs can stitch deep threads.
-    const threadMessages = await this.emails.find({
-      where: { ticket_id: ticket.id },
-      order: { createdAt: 'ASC' },
-    });
-    const references = threadMessages
-      .map((m) => m.external_message_id)
-      .filter((s): s is string => Boolean(s));
+    // order so Outlook-class MUAs can stitch deep threads. Only
+    // computed for REPLY sends.
+    const references =
+      template.kind === EmailTemplateKind.REPLY
+        ? (
+            await this.emails.find({
+              where: { ticket_id: ticket.id },
+              order: { createdAt: 'ASC' },
+            })
+          )
+            .map((m) => m.external_message_id)
+            .filter((s): s is string => Boolean(s))
+        : [];
 
     // Resolve variables + render. Mirrors the testSend path's
     // resolution semantics: override is never present here (automation
@@ -369,19 +423,33 @@ export class EmailTemplatesService {
       }
     }
 
-    const subject = renderNamedBody(template.subject, replacementMap);
+    // Subject source branches on kind:
+    //   REPLY    → "Re: <original first-inbound subject>" (standard
+    //              email reply conventions; dedupes the Re: prefix if
+    //              already present).
+    //   OUTREACH → the template's own subject with variables rendered.
+    const subjectSource =
+      template.kind === EmailTemplateKind.REPLY
+        ? toReplySubject(firstInbound?.subject ?? '')
+        : renderNamedBody(template.subject ?? '', replacementMap);
+    const subject = subjectSource.trim() || '(no subject)';
     const bodyHtml = renderNamedBody(template.bodyHtml, replacementMap);
     const bodyText = htmlToPlainText(bodyHtml);
 
     // SMTP first (outside the txn — can't hold a connection open
-    // during the HTTP call).
+    // during the HTTP call). REPLY sets thread headers; OUTREACH
+    // sends with no In-Reply-To / References so Gmail / Outlook show
+    // it as a fresh conversation in the customer's inbox.
     const { externalMessageId } = await this.sender.sendReply({
       channel,
       to: [customerEmail],
       subject,
       body: bodyText,
       bodyHtml,
-      inReplyTo: lastInbound.external_message_id ?? null,
+      inReplyTo:
+        template.kind === EmailTemplateKind.REPLY
+          ? (lastInbound?.external_message_id ?? null)
+          : null,
       references,
     });
 

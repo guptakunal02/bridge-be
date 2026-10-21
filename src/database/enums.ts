@@ -172,3 +172,33 @@ export enum EmailTemplateCategory {
   UTILITY = 'UTILITY',
   MARKETING = 'MARKETING',
 }
+
+/**
+ * Email templates live in one of two use-case shapes:
+ *
+ * REPLY    — responds to an existing customer thread. Subject is
+ *            auto-derived from the thread it replies to (prefixed
+ *            with "Re:"), so the template author does NOT fill one.
+ *            Sends with In-Reply-To + References so the recipient's
+ *            MUA stitches it into the visual thread. Needs an
+ *            inbound email on the ticket to anchor against — can't
+ *            be fired on a cold ticket.
+ *
+ *            Examples: out-of-hours auto-response, "we received your
+ *            email", "your refund has been processed".
+ *
+ * OUTREACH — fresh standalone email. Template author provides the
+ *            subject. Sends with no thread headers (new conversation
+ *            in the customer's inbox). Can be test-sent to any
+ *            email, or fired by automation on a ticket (where it
+ *            will land as a separate thread in the customer's
+ *            inbox, even though the ticket's thread stays unchanged
+ *            in Bridge).
+ *
+ *            Examples: order confirmation, shipping update,
+ *            re-engagement cold-start.
+ */
+export enum EmailTemplateKind {
+  REPLY = 'REPLY',
+  OUTREACH = 'OUTREACH',
+}

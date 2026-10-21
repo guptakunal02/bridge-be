@@ -9,7 +9,10 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Channel } from '../../channels/entities/channel.entity';
-import { EmailTemplateCategory } from '../../database/enums';
+import {
+  EmailTemplateCategory,
+  EmailTemplateKind,
+} from '../../database/enums';
 import { User } from '../../users/entities/user.entity';
 import type { VariableMappingEntry } from '../../whatsapp-inbox/template-variables';
 
@@ -64,8 +67,27 @@ export class EmailTemplate {
   })
   category!: EmailTemplateCategory;
 
-  @Column({ type: 'text' })
-  subject!: string;
+  /**
+   * REPLY → responds to an existing ticket's inbound; subject
+   * inherited as "Re: <original>" at send time.
+   * OUTREACH → fresh standalone email; template's own subject is
+   * used verbatim.
+   */
+  @Column({
+    type: 'enum',
+    enum: EmailTemplateKind,
+    enumName: 'email_template_kind_enum',
+    default: EmailTemplateKind.OUTREACH,
+  })
+  kind!: EmailTemplateKind;
+
+  /**
+   * Required for OUTREACH, null for REPLY. Service.create enforces
+   * this invariant; the DB column itself is nullable so REPLY rows
+   * can exist without a sentinel subject.
+   */
+  @Column({ type: 'text', nullable: true })
+  subject!: string | null;
 
   @Column({ type: 'text', name: 'body_html' })
   bodyHtml!: string;

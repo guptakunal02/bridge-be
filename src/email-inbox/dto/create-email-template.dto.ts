@@ -10,7 +10,10 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { EmailTemplateCategory } from '../../database/enums';
+import {
+  EmailTemplateCategory,
+  EmailTemplateKind,
+} from '../../database/enums';
 
 export class EmailTemplateVariableMappingDto {
   @IsString()
@@ -46,10 +49,18 @@ export class CreateEmailTemplateDto {
   @IsEnum(EmailTemplateCategory)
   category!: EmailTemplateCategory;
 
+  @IsEnum(EmailTemplateKind)
+  kind!: EmailTemplateKind;
+
+  /**
+   * Required when kind=OUTREACH; must be omitted (or empty) for
+   * kind=REPLY. The service enforces this invariant — class-validator
+   * can't express a cross-field conditional cleanly.
+   */
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(998)
-  subject!: string;
+  subject?: string;
 
   @IsString()
   @MinLength(1)

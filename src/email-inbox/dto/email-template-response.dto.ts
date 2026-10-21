@@ -1,4 +1,7 @@
-import { EmailTemplateCategory } from '../../database/enums';
+import {
+  EmailTemplateCategory,
+  EmailTemplateKind,
+} from '../../database/enums';
 import { EmailTemplate } from '../entities/email-template.entity';
 import type { VariableMappingEntry } from '../../whatsapp-inbox/template-variables';
 
@@ -8,7 +11,9 @@ export interface EmailTemplateResponse {
   channelId: string;
   name: string;
   category: EmailTemplateCategory;
-  subject: string;
+  kind: EmailTemplateKind;
+  /** Null for REPLY templates (subject inherited at send time). */
+  subject: string | null;
   bodyHtml: string;
   bodyText: string | null;
   variableCount: number;
@@ -28,6 +33,7 @@ export function toEmailTemplateResponse(
     channelId: t.channelId,
     name: t.name,
     category: t.category,
+    kind: t.kind,
     subject: t.subject,
     bodyHtml: t.bodyHtml,
     bodyText: t.bodyText,
