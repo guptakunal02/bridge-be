@@ -14,11 +14,11 @@ import type { BotFunction } from './types';
  * Shopify's Fulfillment API; we mirror it from there instead of
  * trying to mint it from raw_clickpost_response).
  *
- * Return shape — the handler ALWAYS returns `trackingLink`, either
- * populated or null. Null means "we couldn't find a tracked order
- * for this customer." The flow uses this: a Branch on `trackingLink
- * is_not_empty` sends the found-link path; else branch asks the
- * customer to type their order id.
+ * Return shape — the handler ALWAYS returns `trackingLink` and
+ * `orderId`, each either populated or null. Both come from the same
+ * row so the `found` outcome guarantees a non-null `orderId` on the
+ * happy path (needed by downstream Message steps that want to echo
+ * the order number back to the customer).
  */
 export const getLatestOrderTrackingLink: BotFunction = {
   key: 'get_latest_order_tracking_link',
@@ -43,6 +43,13 @@ export const getLatestOrderTrackingLink: BotFunction = {
       description:
         'Clickpost tracking URL from the latest order. Null if no order found, or if the latest order has no tracking info yet (e.g. placed but not fulfilled).',
     },
+    {
+      key: 'orderId',
+      label: 'Order id',
+      type: 'string',
+      description:
+        'Shopify order name (e.g. "#239154") from the latest order on this customer. Null if no order found.',
+    },
   ],
   outcomes: [
     {
@@ -61,15 +68,24 @@ export const getLatestOrderTrackingLink: BotFunction = {
   handler: async (inputs, deps) => {
     const phone = inputs.phone;
     if (typeof phone !== 'string' || phone.trim() === '') {
-      return { outcome: 'not_found', outputs: { trackingLink: null } };
+      return {
+        outcome: 'not_found',
+        outputs: { trackingLink: null, orderId: null },
+      };
     }
 
     // Match on shipping-address phone OR customer-object phone, same
     // approach as get_customer_type + findLatestOrderByPhone. Latest
-    // order wins (ordered_at DESC).
-    const row = await deps.opsRead.queryOne<{ tracking_url: string | null }>(
+    // order wins (ordered_at DESC). `order_id` comes from Shopify's
+    // `name` field (the "#239154" the customer sees), not the numeric
+    // legacyResourceId — the former is what customers reference back.
+    const row = await deps.opsRead.queryOne<{
+      tracking_url: string | null;
+      order_id: string | null;
+    }>(
       `SELECT raw_shopify_response
-                #>> '{fulfillments,0,trackingInfo,0,url}' AS tracking_url
+                #>> '{fulfillments,0,trackingInfo,0,url}' AS tracking_url,
+              raw_shopify_response ->> 'name' AS order_id
          FROM orders
          WHERE RIGHT(
                  regexp_replace(
@@ -90,9 +106,10 @@ export const getLatestOrderTrackingLink: BotFunction = {
       [phone],
     );
     const link = row?.tracking_url ?? null;
+    const orderId = row?.order_id ?? null;
     return {
       outcome: link ? 'found' : 'not_found',
-      outputs: { trackingLink: link },
+      outputs: { trackingLink: link, orderId },
     };
   },
 };
