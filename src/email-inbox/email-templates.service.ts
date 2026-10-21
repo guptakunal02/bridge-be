@@ -361,6 +361,83 @@ export class EmailTemplatesService {
   }
 
   /**
+   * Resolve + render a template against a specific ticket WITHOUT
+   * sending. Powers the composer's slash picker — the agent picks a
+   * template, we inject the rendered subject + body into their
+   * composer so they can read / tweak / send via the standard reply
+   * path.
+   *
+   * Resolution semantics mirror sendOnTicket exactly:
+   *   * REPLY templates → subject = "Re: <firstInbound.subject>"
+   *   * OUTREACH templates → template's own subject rendered with
+   *                           variables filled from ticket context
+   *   * Non-nullable variables that resolve to null still raise
+   *     BadRequest so the preview matches what sendOnTicket would
+   *     do — don't want a preview that would fail at send time.
+   */
+  async previewOnTicket(
+    ticketId: string,
+    templateId: string,
+  ): Promise<{ subject: string; bodyHtml: string; bodyText: string }> {
+    const ticket = await this.tickets.findOne({ where: { id: ticketId } });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const channel = await this.channels.findOne({
+      where: { id: ticket.channel_id },
+    });
+    if (!channel) throw new NotFoundException('Channel not found');
+    if (channel.type !== ChannelType.EMAIL) {
+      throw new BadRequestException(
+        'Email templates can only be previewed on email tickets',
+      );
+    }
+
+    const template = await this.findById(templateId);
+    if (template.channelId !== channel.id) {
+      throw new BadRequestException(
+        'Template is bound to a different email inbox',
+      );
+    }
+
+    const firstInbound = await this.emails.findOne({
+      where: { ticket_id: ticket.id, type: MessageDirection.RECEIVED },
+      order: { createdAt: 'ASC' },
+    });
+
+    let replacementMap: Record<string, string> = {};
+    if (template.variableMapping && template.variableMapping.length > 0) {
+      const names = template.variableMapping.map((m) => m.name);
+      const resolved = await this.resolver.resolveForTicket(ticket.id, names);
+      for (const m of template.variableMapping) {
+        const r = resolved[m.name];
+        if (r !== undefined && r !== null && r !== '') {
+          replacementMap[m.name] = r;
+          continue;
+        }
+        if (m.fallback !== null) {
+          replacementMap[m.name] = m.fallback;
+          continue;
+        }
+        throw new BadRequestException(
+          `Variable "${m.name}" is non-nullable and resolved to null on this ticket`,
+        );
+      }
+    }
+
+    const subjectSource =
+      template.kind === EmailTemplateKind.REPLY
+        ? toReplySubject(firstInbound?.subject ?? '')
+        : renderNamedBody(template.subject ?? '', replacementMap);
+    const subject = (subjectSource || '').trim() || '(no subject)';
+    const bodyHtml = normalizeBodyHtml(
+      renderNamedBody(template.bodyHtml, replacementMap),
+    );
+    const bodyText = htmlToPlainText(bodyHtml);
+
+    return { subject, bodyHtml, bodyText };
+  }
+
+  /**
    * Send a template on a specific ticket as if a human agent had
    * fired it from the composer. Mirrors TicketsService.sendTemplate
    * (WhatsApp) but for email, including:

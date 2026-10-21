@@ -82,6 +82,30 @@ export class EmailTemplatesController {
     );
   }
 
+  /**
+   * Resolve + render a template against a specific ticket WITHOUT
+   * sending. Powers the composer's slash picker — the agent picks
+   * a template, we return the rendered subject + body + plain text
+   * so the FE can inject them into the reply composer for inline
+   * editing. ticketId comes as a query param (not body — this is a
+   * GET).
+   */
+  @Get(':templateId/preview')
+  async preview(
+    @Param('channelId', ParseUUIDPipe) channelId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
+    @Query('ticketId') ticketId: string,
+  ): Promise<{ subject: string; bodyHtml: string; bodyText: string }> {
+    if (!ticketId || !/^[1-9]\d{0,18}$/.test(ticketId)) {
+      throw new NotFoundException('Ticket not found');
+    }
+    // Service asserts template.channelId === ticket.channel_id (so
+    // you can't preview a template bound to channel A against a
+    // ticket on channel B). channelId in the URL is just for the
+    // route shape — scoping check is template-vs-ticket inside.
+    return this.templates.previewOnTicket(ticketId, templateId);
+  }
+
   private parseCategory(raw?: string): EmailTemplateCategory | undefined {
     if (!raw) return undefined;
     const upper = raw.toUpperCase();
