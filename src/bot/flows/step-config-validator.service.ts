@@ -156,6 +156,28 @@ export class StepConfigValidator {
       );
     }
     optionalUuid(cfg.nextStepId, 'Function step: config.nextStepId');
+    // onOutcome shape: { [outcomeKey: string]: stepId }
+    if (cfg.onOutcome !== undefined) {
+      if (
+        typeof cfg.onOutcome !== 'object' ||
+        cfg.onOutcome === null ||
+        Array.isArray(cfg.onOutcome)
+      ) {
+        throw new BadRequestException(
+          'Function step: config.onOutcome must be an object mapping outcome keys to step ids',
+        );
+      }
+      for (const [outcomeKey, targetId] of Object.entries(
+        cfg.onOutcome as Record<string, unknown>,
+      )) {
+        if (!/^[a-z_][a-z0-9_]*$/.test(outcomeKey)) {
+          throw new BadRequestException(
+            `Function step: onOutcome key "${outcomeKey}" must be snake_case`,
+          );
+        }
+        optionalUuid(targetId, `Function step: onOutcome.${outcomeKey}`);
+      }
+    }
   }
 
   private validateBranch(cfg: Record<string, unknown>, strict: boolean): void {

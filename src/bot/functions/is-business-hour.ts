@@ -34,6 +34,18 @@ export const isBusinessHour: BotFunction = {
         'True when Surma is currently open; false during OOH or Sunday.',
     },
   ],
+  outcomes: [
+    {
+      key: 'yes',
+      label: 'In business hours',
+      description: 'Mon–Sat 10:00–17:59:59 IST.',
+    },
+    {
+      key: 'no',
+      label: 'Out of business hours',
+      description: 'Sundays, nights, early mornings.',
+    },
+  ],
   handler: async () => {
     const now = new Date();
     const istMs = now.getTime() + 5.5 * 60 * 60 * 1000;
@@ -44,6 +56,10 @@ export const isBusinessHour: BotFunction = {
     const hour = ist.getUTCHours();
     const isOpenDay = dayOfWeek >= 1 && dayOfWeek <= 6; // Mon–Sat
     const isOpenHour = hour >= 10 && hour < 18;
-    return { isBusinessHour: isOpenDay && isOpenHour };
+    const open = isOpenDay && isOpenHour;
+    return {
+      outcome: open ? 'yes' : 'no',
+      outputs: { isBusinessHour: open },
+    };
   },
 };

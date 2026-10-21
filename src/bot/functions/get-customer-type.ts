@@ -35,13 +35,17 @@ export const getCustomerType: BotFunction = {
       enumValues: ['new', 'repeat'],
     },
   ],
+  outcomes: [
+    { key: 'new', label: 'New customer', description: 'First purchase or none.' },
+    { key: 'repeat', label: 'Repeat customer', description: 'More than one order on record.' },
+  ],
   handler: async (inputs, deps) => {
     const phone = inputs.phone;
     if (typeof phone !== 'string' || phone.trim() === '') {
       // The runtime validator normally catches missing required
       // inputs; defensive branch here so a handler crash doesn't
       // tank the entire flow.
-      return { type: 'new' };
+      return { outcome: 'new', outputs: { type: 'new' } };
     }
 
     const row = await deps.opsRead.queryOne<{ count: string }>(
@@ -58,6 +62,7 @@ export const getCustomerType: BotFunction = {
       [phone],
     );
     const count = Number(row?.count ?? 0);
-    return { type: count > 1 ? 'repeat' : 'new' };
+    const type = count > 1 ? 'repeat' : 'new';
+    return { outcome: type, outputs: { type } };
   },
 };

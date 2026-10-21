@@ -263,15 +263,31 @@ export class BotRuntimeService {
             session.variables,
           ) as Record<string, unknown>;
           try {
-            const output = await this.functions.invoke(cfg.functionKey, inputs);
+            const result = await this.functions.invoke(cfg.functionKey, inputs);
+            // Stash the handler's outputs under the admin-chosen
+            // variable name. Downstream Message steps interpolate via
+            // ${outputVariable.key} or ${outputVariable} depending on
+            // output shape; same contract as before.
             session.variables = {
               ...session.variables,
-              [cfg.outputVariable]: output,
+              [cfg.outputVariable]: result.outputs,
             };
-            session.current_step_id = await this.resolveLinearNext(
-              step,
-              cfg.nextStepId,
-            );
+            // Per-outcome routing. If the admin wired a next step for
+            // this specific outcome, go there. Else fall back to
+            // config.nextStepId (legacy / "default" wire). Else end
+            // the session with a warn so pm2 logs show the
+            // misconfiguration.
+            const outcomeNext = cfg.onOutcome?.[result.outcome];
+            if (outcomeNext) {
+              session.current_step_id = outcomeNext;
+            } else if (cfg.nextStepId) {
+              session.current_step_id = cfg.nextStepId;
+            } else {
+              this.logger.warn(
+                `Session ${session.id} function ${cfg.functionKey} returned outcome "${result.outcome}" but no next step is wired for it — ending flow.`,
+              );
+              session.current_step_id = null;
+            }
             await this.sessions.save(session);
           } catch (err) {
             this.logger.error(

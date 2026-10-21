@@ -9,7 +9,11 @@ import {
   toBotFunctionResponse,
 } from './dto/function-response.dto';
 import { FUNCTIONS, findFunction } from './registry';
-import type { BotFunctionDeps, BotFunctionParam } from './types';
+import type {
+  BotFunctionDeps,
+  BotFunctionHandlerResult,
+  BotFunctionParam,
+} from './types';
 
 /**
  * The single entry point through which flow steps invoke registered
@@ -36,7 +40,7 @@ export class BotFunctionsService {
   async invoke(
     key: string,
     inputs: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<BotFunctionHandlerResult> {
     const fn = findFunction(key);
     if (!fn) {
       throw new NotFoundException(`Function "${key}" is not registered`);
@@ -55,7 +59,28 @@ export class BotFunctionsService {
     }
 
     const deps: BotFunctionDeps = { opsRead: this.opsRead };
-    return fn.handler(inputs, deps);
+    const result = await fn.handler(inputs, deps);
+    // Defensive — if the handler returns a legacy raw outputs object
+    // (pre-outcomes shape), reject explicitly instead of letting a
+    // malformed outcome propagate silently to the runtime.
+    if (
+      !result ||
+      typeof result.outcome !== 'string' ||
+      typeof result.outputs !== 'object'
+    ) {
+      throw new BadRequestException(
+        `Function "${key}" handler returned an invalid shape — expected { outcome, outputs }.`,
+      );
+    }
+    // Reject outcome keys the function hasn't declared — catches bugs
+    // where a handler returns a typo'd outcome string that the editor
+    // can't wire to.
+    if (!fn.outcomes.some((o) => o.key === result.outcome)) {
+      throw new BadRequestException(
+        `Function "${key}" handler returned outcome "${result.outcome}" which isn't declared in its outcomes[].`,
+      );
+    }
+    return result;
   }
 }
 

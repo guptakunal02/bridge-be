@@ -28,6 +28,16 @@ export interface FunctionStepConfig {
   functionKey: string;
   inputs?: Record<string, unknown>;
   outputVariable: string;
+  /**
+   * Per-outcome routing. Keys are the function's declared outcome
+   * keys (e.g. 'found', 'not_found'); value is the stepId to advance
+   * to when the handler returns that outcome. Unwired outcome at
+   * runtime → session ends with a warn log. `nextStepId` is kept as
+   * a legacy escape hatch for pre-outcomes rows + as a fallback when
+   * every outcome resolves to the same next step (admin may want to
+   * just wire one default).
+   */
+  onOutcome?: Record<string, string>;
   nextStepId?: string;
 }
 

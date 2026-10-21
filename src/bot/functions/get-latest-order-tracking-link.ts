@@ -44,10 +44,24 @@ export const getLatestOrderTrackingLink: BotFunction = {
         'Clickpost tracking URL from the latest order. Null if no order found, or if the latest order has no tracking info yet (e.g. placed but not fulfilled).',
     },
   ],
+  outcomes: [
+    {
+      key: 'found',
+      label: 'Order found',
+      description:
+        'Latest order located AND it has a tracking URL from Shopify fulfillments. ${trackingLink} is set.',
+    },
+    {
+      key: 'not_found',
+      label: 'No tracking link',
+      description:
+        'Either no order on this phone, or the latest order has no fulfillment yet. ${trackingLink} is null.',
+    },
+  ],
   handler: async (inputs, deps) => {
     const phone = inputs.phone;
     if (typeof phone !== 'string' || phone.trim() === '') {
-      return { trackingLink: null };
+      return { outcome: 'not_found', outputs: { trackingLink: null } };
     }
 
     // Match on shipping-address phone OR customer-object phone, same
@@ -76,6 +90,9 @@ export const getLatestOrderTrackingLink: BotFunction = {
       [phone],
     );
     const link = row?.tracking_url ?? null;
-    return { trackingLink: link };
+    return {
+      outcome: link ? 'found' : 'not_found',
+      outputs: { trackingLink: link },
+    };
   },
 };

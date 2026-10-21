@@ -1,4 +1,8 @@
-import type { BotFunction, BotFunctionParam } from '../types';
+import type {
+  BotFunction,
+  BotFunctionOutcome,
+  BotFunctionParam,
+} from '../types';
 
 /**
  * Public shape sent to the FE builder. Strips the server-side
@@ -11,6 +15,10 @@ export interface BotFunctionResponse {
   description: string;
   inputs: BotFunctionParam[];
   outputs: BotFunctionParam[];
+  /** Terminal states the handler can return. Each becomes a source
+   *  handle on the Function node in the editor; admin wires each to
+   *  the next step they want for that case. */
+  outcomes: BotFunctionOutcome[];
 }
 
 export function toBotFunctionResponse(f: BotFunction): BotFunctionResponse {
@@ -20,5 +28,6 @@ export function toBotFunctionResponse(f: BotFunction): BotFunctionResponse {
     description: f.description,
     inputs: [...f.inputs],
     outputs: [...f.outputs],
+    outcomes: [...f.outcomes],
   };
 }
