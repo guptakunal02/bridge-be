@@ -68,22 +68,25 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
     }
 
     const options = input.message.options ?? [];
+    // Meta caps button titles at 20 chars but list rows at 24. If any
+    // option exceeds the button cap, use list send even when 1-3
+    // options are present — preserving the admin's label fully (24
+    // chars) beats keeping the 1-tap UX while silently chopping
+    // characters ("Return/Exchange" → "Return/Exchan" was the
+    // reported case). Admin trades one extra tap for correctness.
+    const anyLabelOverButtonCap = options.some((o) => o.label.length > 20);
     try {
       if (options.length === 0) {
         await this.sender.sendText(waId, input.message.text);
         return;
       }
-      if (options.length <= 3) {
-        // Meta caps button titles at 20 chars. Truncate rather than
-        // reject so an admin's long label doesn't abort the send; the
-        // match on inbound side normalises to lowercase+trim and will
-        // see the truncated title.
+      if (options.length <= 3 && !anyLabelOverButtonCap) {
         await this.sender.sendInteractiveButtons(
           waId,
           input.message.text,
           options.map((o, i) => ({
             id: `opt-${i}`,
-            title: o.label.slice(0, 20),
+            title: o.label,
           })),
         );
         return;

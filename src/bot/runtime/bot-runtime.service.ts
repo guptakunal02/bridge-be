@@ -205,7 +205,19 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
       ...session.variables,
       __last_answer: match.label,
     };
-    session.current_step_id = match.nextStepId;
+    // Unwired option — the admin matched the reply but never
+    // connected this option's handle on the canvas. Setting
+    // current_step_id = undefined would otherwise silently complete
+    // the session with no outbound (the next tick sees null and
+    // marks COMPLETED). That's the "nothing happened" symptom. Log
+    // loudly so pm2 catches it and the admin knows to wire the
+    // handle, then let the tick finalise.
+    if (!match.nextStepId) {
+      this.logger.warn(
+        `Option "${match.label}" on step=${step.id} ticket=${input.ticketId} has no nextStepId — session ending silently. Admin must wire the handle on the canvas.`,
+      );
+    }
+    session.current_step_id = match.nextStepId ?? null;
     await this.sessions.save(session);
     await this.tick(session, input.channelId);
   }
