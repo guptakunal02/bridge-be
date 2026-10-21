@@ -163,13 +163,30 @@ export class EmailInboxService {
         //      Message-ID appears in this email's References or
         //      In-Reply-To chain — that message's ticket is the
         //      one this reply belongs to.
-        //   2. Fall back to matching thread_key = own Message-ID,
+        //   2. Subject-normalisation fallback: References matching
+        //      misses when a customer composes a fresh email (or
+        //      replies to the shop's original order confirmation
+        //      email) instead of replying inside the Bridge-handled
+        //      thread, because the References chain then points at
+        //      MIDs we never stored. In that case, strip leading
+        //      Re:/Fwd:/Fw: prefixes and look for a prior ticket
+        //      from the same sender on the same channel whose
+        //      message subject normalises to the same string, within
+        //      a 14-day window. Mirrors Gmail's own threading
+        //      heuristic — "Fwd: Order #239154 confirmed" and
+        //      "Re: Order #239154 confirmed" both normalise to
+        //      "order #239154 confirmed" and are treated as the
+        //      same thread.
+        //   3. Fall back to matching thread_key = own Message-ID,
         //      which handles the pre-References fallback case and
         //      IMAP replay idempotency.
         // Every code path afterwards treats a hit as "this email
         // extends an existing thread" and a miss as "brand new
         // thread, mint a ticket".
         let ticket = await this.findTicketFromReferences(mgr, channelId, req);
+        if (!ticket) {
+          ticket = await this.findTicketFromSubject(mgr, channelId, req);
+        }
         if (!ticket) {
           ticket = await ticketRepo.findOne({
             where: { channel_id: channelId, thread_key: threadKey },
@@ -599,6 +616,83 @@ export class EmailInboxService {
   }
 
   /**
+   * Secondary stitching when References/In-Reply-To miss. Strips
+   * leading `Re:` / `Fwd:` / `Fw:` prefixes off the inbound subject
+   * and the stored message subjects, then looks for a prior ticket
+   * on the same channel from the same sender whose normalised
+   * subject matches, within a 14-day window.
+   *
+   * Why this exists: a customer who replies to the shop's original
+   * confirmation email, or composes a fresh email, breaks the
+   * RFC-5322 References chain — the ancestor MIDs the chain points
+   * at were never stored by Bridge. The result is a sibling ticket
+   * with no link back to the real conversation. The subject prefix
+   * mismatch (`Fwd:` on the forward-opened thread, `Re:` on the
+   * customer-composed reply) is the shape this specifically
+   * recovers. This is the same heuristic Gmail itself uses on top
+   * of References.
+   *
+   * Guardrails:
+   *   * Normalised subject must be ≥ 8 chars so single-word generic
+   *     subjects ("hello", "query") don't cause cross-conversation
+   *     collisions.
+   *   * Same channel + same sender email (lowercased) — a different
+   *     sender on the same inbox is unrelated; same sender on a
+   *     different inbox is a different conversation surface.
+   *   * 14-day window — long enough to catch customers who return a
+   *     week later referencing the same thread, short enough that a
+   *     year-old resolved issue doesn't resurrect itself.
+   *
+   * Downstream RESOLVED-reopen handling then applies as it would
+   * for a References match — within-window reopen, past-window
+   * mint-with-previous_ticket_id — so the behavioural contract is
+   * identical to a References hit.
+   */
+  private async findTicketFromSubject(
+    mgr: import('typeorm').EntityManager,
+    channelId: string,
+    req: IngestEmailInbox,
+  ): Promise<Ticket | null> {
+    const normalised = normaliseSubjectForMatching(req.subject);
+    if (!normalised || normalised.length < 8) return null;
+    const senderLower = req.sender?.trim().toLowerCase();
+    if (!senderLower) return null;
+
+    const windowStart = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+    // Pull recent same-sender messages and normalise in JS so the
+    // same regex rules apply on both sides. Capped at 50 — a single
+    // customer rarely has more than that in 14 days on one channel,
+    // and if they do, we only need any one normalised-equal row to
+    // locate the ticket.
+    const rows = await mgr
+      .getRepository(EmailMessage)
+      .createQueryBuilder('m')
+      .select('m.ticket_id', 'ticket_id')
+      .addSelect('m.subject', 'subject')
+      .where('m."channelId" = :channelId', { channelId })
+      .andWhere('LOWER(m.sender) = :sender', { sender: senderLower })
+      .andWhere('m."createdAt" >= :cutoff', { cutoff: windowStart })
+      .andWhere('m.subject IS NOT NULL')
+      .orderBy('m."createdAt"', 'DESC')
+      .limit(50)
+      .getRawMany<{ ticket_id: string; subject: string | null }>();
+    const match = rows.find(
+      (r) => normaliseSubjectForMatching(r.subject) === normalised,
+    );
+    if (!match) return null;
+
+    const ticket = await mgr
+      .getRepository(Ticket)
+      .findOne({ where: { id: match.ticket_id } });
+    if (ticket) {
+      this.logger.log(
+        `subject-match stitch: channel=${channelId} sender=${senderLower} normalised="${normalised}" ticket=${ticket.id} status=${ticket.status} external_message_id=${req.external_message_id}`,
+      );
+    }
+    return ticket;
+  }
+
+  /**
    * Persist an outbound email that was sent from Gmail directly
    * (bypassing Bridge's own reply flow). Idempotent on
    * external_message_id — replies we sent through Bridge already
@@ -980,4 +1074,24 @@ function computeDayOfWeekIst(at: Date): number {
   const utcMs = at.getTime();
   const istMs = utcMs + 5.5 * 60 * 60 * 1000;
   return new Date(istMs).getUTCDay();
+}
+
+/**
+ * Normalise an email subject for threading comparison. Strips
+ * leading reply/forward prefixes (`Re:`, `Fwd:`, `Fw:`,
+ * case-insensitive, repeated chains like `Re: Fwd: Re:`) and
+ * collapses to lowercased trimmed text. Returns null for empty or
+ * all-prefix subjects. Used symmetrically on both the inbound
+ * subject and the stored message subjects so a prefix mismatch
+ * (`Fwd: X` vs `Re: X`) still resolves to the same key.
+ */
+function normaliseSubjectForMatching(
+  subject: string | null | undefined,
+): string | null {
+  if (!subject) return null;
+  const core = subject
+    .replace(/^(\s*(re|fwd|fw)\s*:\s*)+/gi, '')
+    .trim()
+    .toLowerCase();
+  return core.length > 0 ? core : null;
 }
