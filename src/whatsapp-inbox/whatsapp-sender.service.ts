@@ -280,6 +280,134 @@ export class WhatsappSenderService {
   }
 
   /**
+   * Send a text message with a selectable list of up to 10 options
+   * via Meta's `interactive.type=list` payload. The customer gets a
+   * single "Select" button that opens a bottom-sheet menu listing
+   * each row.
+   *
+   * Why list vs buttons: Meta caps reply buttons at 3. For Message
+   * steps with 4-10 options (common on bot menus: "Where is my
+   * order?", "Return/Exchange", "Modify/Cancel", "Share feedback",
+   * …) list is the right primitive. The customer taps a row and the
+   * webhook delivers `interactive.list_reply.title` the same way
+   * `button_reply.title` arrives — ingest already handles both.
+   *
+   * Button label defaults to "Choose" so the admin doesn't need an
+   * extra config field; override via the opener arg if a flow wants
+   * a custom CTA ("Pick an option", etc).
+   */
+  async sendInteractiveList(
+    waId: string,
+    body: string,
+    rows: Array<{ id: string; title: string }>,
+    opener = 'Choose',
+  ): Promise<WhatsappSendResult> {
+    const digits = waId.replace(/\D/g, '');
+    if (!digits) {
+      throw new BadRequestException('Recipient wa_id missing or invalid');
+    }
+    const trimmed = body.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Message body is empty');
+    }
+    if (rows.length < 1 || rows.length > 10) {
+      throw new BadRequestException(
+        `Interactive list: expected 1-10 rows, got ${rows.length}`,
+      );
+    }
+
+    const phoneNumberId = this.config.get('WHATSAPP_PHONE_NUMBER_ID', {
+      infer: true,
+    });
+    const token = this.config.get('WHATSAPP_ACCESS_TOKEN', { infer: true });
+    const version = this.config.get('WHATSAPP_GRAPH_API_VERSION', {
+      infer: true,
+    });
+    const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: digits,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: trimmed },
+        action: {
+          button: opener.slice(0, 20),
+          sections: [
+            {
+              title: 'Options',
+              rows: rows.map((r) => ({
+                id: r.id,
+                title: r.title.slice(0, 24),
+              })),
+            },
+          ],
+        },
+      },
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (netErr) {
+      this.logger.error(
+        `WhatsApp list send network error for wa_id=${digits}: ${
+          netErr instanceof Error ? netErr.message : String(netErr)
+        }`,
+      );
+      throw netErr;
+    }
+
+    const text = await res.text();
+    let parsed: MetaSendResponse & MetaErrorEnvelope;
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      this.logger.error(
+        `WhatsApp list send: non-JSON response (status=${res.status}): ${text.slice(0, 500)}`,
+      );
+      throw new BadRequestException(
+        'WhatsApp send failed — Meta returned an unexpected response',
+      );
+    }
+
+    if (!res.ok || parsed.error) {
+      const code = parsed.error?.code;
+      const metaMsg =
+        parsed.error?.error_user_msg ||
+        parsed.error?.message ||
+        'Unknown error';
+      this.logger.warn(
+        `WhatsApp list send rejected status=${res.status} code=${code ?? 'none'} fbtrace=${parsed.error?.fbtrace_id ?? ''} msg="${metaMsg}"`,
+      );
+      throw new BadRequestException(friendlyError(code, metaMsg));
+    }
+
+    const wamid = parsed.messages?.[0]?.id;
+    if (!wamid) {
+      this.logger.error(
+        `WhatsApp list send: 2xx but no wamid in response: ${text.slice(0, 500)}`,
+      );
+      throw new BadRequestException(
+        'WhatsApp send failed — Meta did not return a message id',
+      );
+    }
+    this.logger.log(
+      `WhatsApp list send ok: wa_id=${digits} wamid=${wamid} rows=${rows.length}`,
+    );
+    return { wamid, raw: parsed };
+  }
+
+  /**
    * Upload media bytes to Meta's /media endpoint and return the
    * media_id. That id is the handle used in the subsequent
    * sendMedia call; Meta keeps the asset for 30 days.

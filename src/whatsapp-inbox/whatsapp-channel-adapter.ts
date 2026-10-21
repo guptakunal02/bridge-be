@@ -88,14 +88,28 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
         );
         return;
       }
-      // >3 options: Meta's cap. Enumerate inline so the message still
-      // reaches the customer. The ingest's option-match uses
-      // trim+lowercase of the TEXT the customer types, so if they
-      // reply "1" or the full label either way the current match
-      // misses — admin needs to restructure. Warn so pm2 logs catch
-      // flows that need splitting.
+      if (options.length <= 10) {
+        // 4-10 options: use Meta's list payload (bottom-sheet menu).
+        // Row titles are capped at 24 chars; truncation is silent for
+        // the same reason as buttons.
+        await this.sender.sendInteractiveList(
+          waId,
+          input.message.text,
+          options.map((o, i) => ({
+            id: `opt-${i}`,
+            title: o.label.slice(0, 24),
+          })),
+        );
+        return;
+      }
+      // >10 options: Meta's hard cap for list rows. Enumerate inline
+      // so the message still reaches the customer. The ingest's
+      // option-match uses trim+lowercase of the TEXT the customer
+      // types, so a reply of "1" or the full label will miss —
+      // admin needs to restructure. Warn so pm2 logs catch flows
+      // that need splitting.
       this.logger.warn(
-        `send: ticket=${input.ticketId} has ${options.length} options; falling back to text enumeration (Meta buttons max 3)`,
+        `send: ticket=${input.ticketId} has ${options.length} options; falling back to text enumeration (Meta list cap is 10)`,
       );
       const enumerated =
         input.message.text +
