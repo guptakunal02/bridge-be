@@ -37,6 +37,58 @@ import { EmailTemplate } from './entities/email-template.entity';
  * block tags with newlines first so paragraph breaks survive.
  */
 /**
+ * Convert a plain-text body (what authors naturally type into the
+ * textarea) into valid HTML that email clients + the preview iframe
+ * will render with paragraph breaks + line breaks intact.
+ *
+ * The problem: HTML collapses whitespace by default. An author who
+ * types
+ *   Hi {{first_name}},
+ *
+ *   Thank you for reaching out.
+ * expects to see two paragraphs. Rendered as HTML, that collapses to
+ * one line because newlines are just whitespace.
+ *
+ * Strategy:
+ *   * If the body contains block-level HTML tags (<p>, <div>, <br>,
+ *     <h1-6>, <table>, <ul>, <ol>), trust the author — they wrote
+ *     HTML on purpose; don't touch it.
+ *   * Otherwise, split on blank lines (\n\n+) → wrap each chunk in
+ *     <p>...</p>, and replace single \n inside each chunk with <br>.
+ *     Preserves the author's visual intent exactly.
+ *
+ * Idempotent: running this on already-normalized HTML is a no-op
+ * because the first branch's regex catches the <p> tags we would
+ * have inserted. Safe to call multiple times in the pipeline.
+ */
+export function normalizeBodyHtml(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+  // Crude HTML-presence check: any block-level opening tag means
+  // the author is working in HTML and we shouldn't touch their
+  // whitespace semantics.
+  if (/<(p|div|br|h[1-6]|table|ul|ol|section|article)\b/i.test(trimmed)) {
+    return input;
+  }
+  // Collapse Windows line endings so the paragraph split works
+  // consistently across OS clipboards.
+  const normalised = trimmed.replace(/\r\n/g, '\n');
+  const paragraphs = normalised.split(/\n{2,}/);
+  return paragraphs
+    .map((p) => {
+      const inner = p
+        .trim()
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .join('<br>');
+      return `<p>${inner}</p>`;
+    })
+    .filter((p) => p.length > 7)
+    .join('\n');
+}
+
+/**
  * Build an email-reply subject off an original subject. Collapses
  * any existing "Re:" / "re:" prefix so repeated replies don't
  * accumulate "Re: Re: Re: ..." — matches Gmail / Outlook behaviour.
@@ -185,6 +237,10 @@ export class EmailTemplatesService {
       };
     });
 
+    // Normalize once at save so the stored row is already proper HTML.
+    // Future renders (preview, send) can use the column verbatim.
+    const normalisedHtml = normalizeBodyHtml(dto.bodyHtml);
+
     return this.templates.save(
       this.templates.create({
         channelId,
@@ -192,8 +248,8 @@ export class EmailTemplatesService {
         category: dto.category,
         kind: dto.kind,
         subject: persistedSubject,
-        bodyHtml: dto.bodyHtml,
-        bodyText: htmlToPlainText(dto.bodyHtml),
+        bodyHtml: normalisedHtml,
+        bodyText: htmlToPlainText(normalisedHtml),
         variableCount: orderedMapping.length,
         variableMapping: orderedMapping.length > 0 ? orderedMapping : null,
         createdBy,
@@ -285,7 +341,9 @@ export class EmailTemplatesService {
         ? '(test) Re: template preview'
         : (template.subject ?? '');
     const subject = renderNamedBody(subjectSource, replacementMap);
-    const bodyHtml = renderNamedBody(template.bodyHtml, replacementMap);
+    const bodyHtml = normalizeBodyHtml(
+      renderNamedBody(template.bodyHtml, replacementMap),
+    );
     const bodyText = htmlToPlainText(bodyHtml);
 
     this.logger.log(
@@ -433,7 +491,9 @@ export class EmailTemplatesService {
         ? toReplySubject(firstInbound?.subject ?? '')
         : renderNamedBody(template.subject ?? '', replacementMap);
     const subject = subjectSource.trim() || '(no subject)';
-    const bodyHtml = renderNamedBody(template.bodyHtml, replacementMap);
+    const bodyHtml = normalizeBodyHtml(
+      renderNamedBody(template.bodyHtml, replacementMap),
+    );
     const bodyText = htmlToPlainText(bodyHtml);
 
     // SMTP first (outside the txn — can't hold a connection open
