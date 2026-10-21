@@ -62,6 +62,15 @@ export class BotSession {
   })
   status!: BotSessionStatus;
 
+  /**
+   * Non-null when the session is sleeping inside a Delay step.
+   * `current_step_id` is already pointed at the step the runtime will
+   * resume into when the wake fires — the delay sweep only needs to
+   * clear `wake_at` and call tick(). Null for every other state.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'wake_at' })
+  wake_at!: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'startedAt' })
   startedAt!: Date;
 

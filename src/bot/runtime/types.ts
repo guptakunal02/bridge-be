@@ -54,6 +54,22 @@ export interface HandoffStepConfig {
 }
 
 /**
+ * A delay step. The runtime stores `wake_at = now + amountSeconds` on
+ * the session, points `current_step_id` at the next step, then
+ * returns. A periodic sweep in BotRuntimeService finds sleeping
+ * sessions whose `wake_at` has passed and resumes them. Terminals are
+ * never set — the delay doesn't finish the flow, it just pauses it.
+ *
+ * `amountSeconds` is the single scalar for admin simplicity; the FE
+ * exposes a (number, unit) pair but persists as seconds so the
+ * runtime never has to interpret units.
+ */
+export interface DelayStepConfig {
+  amountSeconds: number;
+  nextStepId?: string;
+}
+
+/**
  * Every message the runtime asks the ChannelAdapter to send. Options
  * are optional — a message without them is pure text; with them it's
  * text plus a button list the channel adapter renders however its

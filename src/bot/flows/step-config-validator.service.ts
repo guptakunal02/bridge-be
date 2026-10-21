@@ -45,6 +45,9 @@ export class StepConfigValidator {
       case BotStepType.HANDOFF:
         this.validateHandoff(cfg);
         return;
+      case BotStepType.DELAY:
+        this.validateDelay(cfg, strict);
+        return;
     }
   }
 
@@ -233,6 +236,35 @@ export class StepConfigValidator {
         'Handoff step: config.note must be a string when set',
       );
     }
+  }
+
+  /**
+   * Delay step validator. `amountSeconds` is required at runtime
+   * (strict) and bounded to [1, 30 days]. Below 1s would make the
+   * sweep interval moot; above 30 days ties up a session for too long
+   * — a dedicated follow-up flow is the right primitive for anything
+   * longer. Upper bound is a soft guard, not a hard product rule, so
+   * revisit later if a real need emerges.
+   */
+  private validateDelay(cfg: Record<string, unknown>, strict: boolean): void {
+    if (cfg.amountSeconds !== undefined) {
+      if (
+        typeof cfg.amountSeconds !== 'number' ||
+        !Number.isInteger(cfg.amountSeconds) ||
+        cfg.amountSeconds < 1 ||
+        cfg.amountSeconds > 30 * 24 * 60 * 60
+      ) {
+        throw new BadRequestException(
+          'Delay step: config.amountSeconds must be an integer between 1 and 2592000 (30 days)',
+        );
+      }
+    }
+    if (strict && typeof cfg.amountSeconds !== 'number') {
+      throw new BadRequestException(
+        'Delay step: config.amountSeconds is required — set the wait duration.',
+      );
+    }
+    optionalUuid(cfg.nextStepId, 'Delay step: config.nextStepId');
   }
 
   /**

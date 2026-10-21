@@ -1,6 +1,13 @@
-import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, DataSource, Repository } from 'typeorm';
+import { EntityManager, DataSource, LessThanOrEqual, Repository } from 'typeorm';
 import { AutomationEngine } from '../../automations/automation-engine.service';
 import { AUTOMATION_EVENT } from '../../automations/events';
 import {
@@ -23,10 +30,19 @@ import { CHANNEL_ADAPTER } from './channel-adapter.token';
 import { renderText, renderValue } from './template';
 import type {
   BranchStepConfig,
+  DelayStepConfig,
   FunctionStepConfig,
   HandoffStepConfig,
   MessageStepConfig,
 } from './types';
+
+/**
+ * Delay sweep cadence. 10s balances "fire on time" (worst-case wake
+ * lag of ~10s is acceptable for admin-authored waits measured in
+ * minutes/hours) against sweep load on the sessions table. The
+ * partial index on (status, wake_at) keeps each sweep cheap.
+ */
+const DELAY_SWEEP_MS = 10_000;
 
 /**
  * Max non-blocking steps we'll advance in a single tick before
@@ -56,8 +72,9 @@ const MAX_TICKS = 25;
  * calling into it.
  */
 @Injectable()
-export class BotRuntimeService {
+export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotRuntimeService.name);
+  private delaySweepHandle: NodeJS.Timeout | null = null;
 
   constructor(
     @InjectRepository(BotFlow)
@@ -76,6 +93,31 @@ export class BotRuntimeService {
     @Inject(forwardRef(() => AutomationEngine))
     private readonly automations: AutomationEngine,
   ) {}
+
+  onModuleInit(): void {
+    // Fire once at boot so sessions whose wake fired during a restart
+    // don't sit for up to DELAY_SWEEP_MS. Error swallowed — a transient
+    // DB blip at boot must not crash the process.
+    this.sweepDelayedSessions().catch((err: unknown) => {
+      this.logger.error(
+        `Initial delay sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+    this.delaySweepHandle = setInterval(() => {
+      this.sweepDelayedSessions().catch((err: unknown) => {
+        this.logger.error(
+          `Delay sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }, DELAY_SWEEP_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.delaySweepHandle) {
+      clearInterval(this.delaySweepHandle);
+      this.delaySweepHandle = null;
+    }
+  }
 
   /* ------------------------------------------------------------------ */
   /* Public entry points                                                 */
@@ -125,6 +167,11 @@ export class BotRuntimeService {
       where: { ticket_id: input.ticketId, status: BotSessionStatus.ACTIVE },
     });
     if (!session || !session.current_step_id) return;
+    // Sleeping inside a Delay step — the sweep will advance when the
+    // wake fires. A customer message in the meantime shouldn't
+    // bypass the delay by triggering whatever Message step sits after
+    // it; current_step_id points at that next step already.
+    if (session.wake_at) return;
 
     const step = await this.steps.findOne({
       where: { id: session.current_step_id },
@@ -335,6 +382,23 @@ export class BotRuntimeService {
           await this.applyHandoff(session, step, cfg);
           return;
         }
+
+        case BotStepType.DELAY: {
+          const cfg = step.config as DelayStepConfig;
+          // Advance current_step_id to the step we'll resume into so
+          // the sweep doesn't need to re-read the delay step's config
+          // — it just clears wake_at and calls tick() against whatever
+          // current_step_id points at. If nextStepId resolves to null
+          // (end of flow), we still set wake_at so the sweep can tick
+          // and let the null-step branch mark COMPLETED cleanly.
+          session.current_step_id = await this.resolveLinearNext(
+            step,
+            cfg.nextStepId,
+          );
+          session.wake_at = new Date(Date.now() + cfg.amountSeconds * 1000);
+          await this.sessions.save(session);
+          return;
+        }
       }
     }
 
@@ -343,6 +407,52 @@ export class BotRuntimeService {
     );
     session.status = BotSessionStatus.FAILED;
     await this.sessions.save(session);
+  }
+
+  /**
+   * Resume every ACTIVE session whose Delay-step wake has passed.
+   * Finds the sessions in one indexed query (partial index on
+   * `(status, wake_at) WHERE wake_at IS NOT NULL` keeps this cheap),
+   * clears `wake_at`, and ticks each one. Lock-free: between read and
+   * write we check `wake_at` is still non-null and update to null
+   * atomically via save() so a duplicate tick is impossible even if
+   * two sweeps race.
+   */
+  async sweepDelayedSessions(): Promise<void> {
+    const now = new Date();
+    const due = await this.sessions.find({
+      where: {
+        status: BotSessionStatus.ACTIVE,
+        wake_at: LessThanOrEqual(now),
+      },
+    });
+    for (const session of due) {
+      if (!session.wake_at) continue; // raced with another sweep
+      // Fetch channelId before clearing wake_at so a crash after the
+      // save but before tick() can be re-driven by the next sweep.
+      const ticket = await this.tickets.findOne({
+        where: { id: session.ticket_id },
+      });
+      if (!ticket) {
+        this.logger.warn(
+          `Delay sweep: session ${session.id} points at missing ticket ${session.ticket_id}; clearing wake`,
+        );
+        session.wake_at = null;
+        await this.sessions.save(session);
+        continue;
+      }
+      session.wake_at = null;
+      await this.sessions.save(session);
+      try {
+        await this.tick(session, ticket.channel_id);
+      } catch (err) {
+        this.logger.error(
+          `Delay sweep: tick failed for session ${session.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
   }
 
   /**

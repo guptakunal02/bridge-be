@@ -79,6 +79,7 @@ export enum BotStepType {
   FUNCTION = 'function',
   BRANCH = 'branch',
   HANDOFF = 'handoff',
+  DELAY = 'delay',
 }
 
 /**
