@@ -19,6 +19,7 @@ import { TeamsService } from '../teams/teams.service';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
+import { AppSettingsService } from '../settings/app-settings.service';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
 import { loadBot } from '../users/presence-helpers';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
@@ -93,6 +94,7 @@ export class WhatsappIngestService {
     private readonly runtime: BotRuntimeService,
     private readonly sender: WhatsappSenderService,
     private readonly storage: S3StorageService,
+    private readonly appSettings: AppSettingsService,
   ) {}
 
   /**
@@ -456,39 +458,64 @@ export class WhatsappIngestService {
     const existing = await ticketRepo.findOne({
       where: { channel_id: channel.id, thread_key: threadKey },
     });
+    // Non-null only in the past-window continuation path below — the
+    // old RESOLVED ticket is remembered on the newly minted sibling
+    // via previous_ticket_id so the detail view can walk the ancestor
+    // chain (same model as email's continuedFromTicketId).
+    let previousTicketId: string | null = null;
     if (existing) {
       if (existing.status === TicketStatus.RESOLVED) {
-        // Flip back to OPEN. V2 keeps the assignee — a presence-
-        // aware fallback (same model as reopenResolved on the email
-        // path) will land once we need it.
+        const withinWindow = await this.isWithinReopenWindow(
+          existing.resolved_at,
+        );
+        if (withinWindow) {
+          // In-window: flip the same ticket back to OPEN.
+          await ticketRepo.update(
+            { id: existing.id },
+            {
+              status: TicketStatus.OPEN,
+              is_reopened: true,
+              resolved_at: null,
+            },
+          );
+          await logRepo.save({
+            ticket_id: existing.id,
+            event: TicketActivity.REOPENED,
+            actor_id: null,
+            log: 'Auto-reopened — new WhatsApp message from customer',
+          });
+          const refreshed = await ticketRepo.findOneOrFail({
+            where: { id: existing.id },
+          });
+          return {
+            ticket: refreshed,
+            wasNewTicket: false,
+            reopenedFromResolved: true,
+          };
+        }
+        // Past window → fall through to the mint path with a
+        // previous_ticket_id link. The old ticket's thread_key has
+        // to move out of the way so the new ticket can take
+        // `wa:${waId}` and future messages still land on the latest
+        // conversation. We suffix the archived key with the
+        // resolved_at timestamp — guaranteed unique per
+        // resolve-cycle, and distinguishable from a live key by the
+        // ":archived:" segment.
+        const archivedKey = `wa:${waId}:archived:${
+          existing.resolved_at?.getTime() ?? Date.now()
+        }`;
         await ticketRepo.update(
           { id: existing.id },
-          {
-            status: TicketStatus.OPEN,
-            is_reopened: true,
-            resolved_at: null,
-          },
+          { thread_key: archivedKey },
         );
-        await logRepo.save({
-          ticket_id: existing.id,
-          event: TicketActivity.REOPENED,
-          actor_id: null,
-          log: 'Auto-reopened — new WhatsApp message from customer',
-        });
-        const refreshed = await ticketRepo.findOneOrFail({
-          where: { id: existing.id },
-        });
+        previousTicketId = existing.id;
+      } else {
         return {
-          ticket: refreshed,
+          ticket: existing,
           wasNewTicket: false,
-          reopenedFromResolved: true,
+          reopenedFromResolved: false,
         };
       }
-      return {
-        ticket: existing,
-        wasNewTicket: false,
-        reopenedFromResolved: false,
-      };
     }
 
     // Fresh conversation → mint a ticket. Routing rules aren't ported
@@ -526,6 +553,10 @@ export class WhatsappIngestService {
         status: TicketStatus.OPEN,
         thread_key: threadKey,
         tags: [],
+        // Non-null only in the past-window continuation path. The
+        // detail view walks this backwards to render the ancestor
+        // thread with a "New ticket started here" divider.
+        previous_ticket_id: previousTicketId,
       }),
     );
     await logRepo.save({
@@ -560,6 +591,24 @@ export class WhatsappIngestService {
       });
     }
     return { ticket, wasNewTicket: true, reopenedFromResolved: false };
+  }
+
+  /**
+   * Reopen-window check for WhatsApp — mirrors the email helper but
+   * reads the WA-specific configured hours so admins can tune the two
+   * channels independently (WhatsApp conversations tend to span more
+   * calendar time than email ones). windowHours = 0 disables
+   * auto-reopen entirely → every message past resolve mints a sibling.
+   */
+  private async isWithinReopenWindow(
+    resolvedAt: Date | null,
+  ): Promise<boolean> {
+    if (!resolvedAt) return false;
+    const windowHours =
+      await this.appSettings.getWhatsappResolvedReopenWindowHours();
+    if (windowHours <= 0) return false;
+    const ageMs = Date.now() - resolvedAt.getTime();
+    return ageMs <= windowHours * 60 * 60 * 1000;
   }
 }
 

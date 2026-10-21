@@ -19,11 +19,23 @@ export class SettingsController {
 
   @Get('general')
   async getGeneral(): Promise<GeneralSettingsResponse> {
-    const [resolvedReopenWindowHours, requireTagToResolve] = await Promise.all([
-      this.settings.getResolvedReopenWindowHours(),
+    const [
+      emailResolvedReopenWindowHours,
+      whatsappResolvedReopenWindowHours,
+      requireTagToResolve,
+    ] = await Promise.all([
+      this.settings.getEmailResolvedReopenWindowHours(),
+      this.settings.getWhatsappResolvedReopenWindowHours(),
       this.settings.getRequireTagToResolve(),
     ]);
-    return { resolvedReopenWindowHours, requireTagToResolve };
+    return {
+      // Legacy field mirrors the email window so older FEs that still
+      // read this stay sensible until they move to the per-channel keys.
+      resolvedReopenWindowHours: emailResolvedReopenWindowHours,
+      emailResolvedReopenWindowHours,
+      whatsappResolvedReopenWindowHours,
+      requireTagToResolve,
+    };
   }
 
   @Patch('general')
@@ -31,9 +43,29 @@ export class SettingsController {
   async updateGeneral(
     @Body() dto: UpdateGeneralSettingsDto,
   ): Promise<GeneralSettingsResponse> {
+    // Legacy single field: an older FE that only knows the global
+    // window still sends this. Apply to both channel-specific windows
+    // so the admin's intent — one cutoff for everything — holds.
+    // New FE sends the per-channel fields explicitly; those take
+    // precedence if they're also set in the same payload.
     if (dto.resolvedReopenWindowHours !== undefined) {
-      await this.settings.setResolvedReopenWindowHours(
-        dto.resolvedReopenWindowHours,
+      await Promise.all([
+        this.settings.setEmailResolvedReopenWindowHours(
+          dto.resolvedReopenWindowHours,
+        ),
+        this.settings.setWhatsappResolvedReopenWindowHours(
+          dto.resolvedReopenWindowHours,
+        ),
+      ]);
+    }
+    if (dto.emailResolvedReopenWindowHours !== undefined) {
+      await this.settings.setEmailResolvedReopenWindowHours(
+        dto.emailResolvedReopenWindowHours,
+      );
+    }
+    if (dto.whatsappResolvedReopenWindowHours !== undefined) {
+      await this.settings.setWhatsappResolvedReopenWindowHours(
+        dto.whatsappResolvedReopenWindowHours,
       );
     }
     if (dto.requireTagToResolve !== undefined) {

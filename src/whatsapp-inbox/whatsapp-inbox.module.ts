@@ -4,6 +4,7 @@ import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { StorageModule } from '../common/storage/storage.module';
+import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { Ticket } from '../tickets/entities/ticket.entity';
@@ -72,6 +73,10 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // off TICKET_CREATED and seeds sender_phone into the session's
     // initial variables.
     BotModule,
+    // AppSettingsService — reads the WhatsApp reopen window used by
+    // findOrCreateTicket to decide between in-window reopen vs
+    // past-window mint-with-previous_ticket_id.
+    SettingsModule,
   ],
   controllers: [WhatsappWebhookController, WhatsappTemplatesController],
   providers: [

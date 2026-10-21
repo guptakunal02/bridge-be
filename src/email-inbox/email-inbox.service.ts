@@ -814,7 +814,8 @@ export class EmailInboxService {
     resolvedAt: Date | null,
   ): Promise<boolean> {
     if (!resolvedAt) return false;
-    const windowHours = await this.appSettings.getResolvedReopenWindowHours();
+    const windowHours =
+      await this.appSettings.getEmailResolvedReopenWindowHours();
     if (windowHours <= 0) return false;
     const ageMs = Date.now() - resolvedAt.getTime();
     return ageMs <= windowHours * 60 * 60 * 1000;

@@ -5,7 +5,15 @@ import { AppSetting } from './entities/app-setting.entity';
 
 /** Canonical setting keys — using constants keeps typos out. */
 export const SETTING_KEYS = {
+  /**
+   * @deprecated kept so legacy rows still read sensibly. Email and
+   * WhatsApp now have their own windows (below); this constant is
+   * referenced only by the migration that forks the old row.
+   */
   RESOLVED_REOPEN_WINDOW_HOURS: 'resolved_reopen_window_hours',
+  EMAIL_RESOLVED_REOPEN_WINDOW_HOURS: 'email_resolved_reopen_window_hours',
+  WHATSAPP_RESOLVED_REOPEN_WINDOW_HOURS:
+    'whatsapp_resolved_reopen_window_hours',
   REQUIRE_TAG_TO_RESOLVE: 'require_tag_to_resolve',
 } as const;
 
@@ -13,6 +21,8 @@ export const SETTING_KEYS = {
  * install before the migration seed lands, or a manual delete). */
 const DEFAULTS = {
   [SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS]: 2,
+  [SETTING_KEYS.EMAIL_RESOLVED_REOPEN_WINDOW_HOURS]: 2,
+  [SETTING_KEYS.WHATSAPP_RESOLVED_REOPEN_WINDOW_HOURS]: 2,
   [SETTING_KEYS.REQUIRE_TAG_TO_RESOLVE]: false,
 } as const;
 
@@ -29,20 +39,53 @@ export class AppSettingsService {
     private readonly repo: Repository<AppSetting>,
   ) {}
 
-  async getResolvedReopenWindowHours(): Promise<number> {
-    const raw = await this.getRaw(SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS);
-    if (raw === null) return DEFAULTS[SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS];
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= 0
-      ? parsed
-      : DEFAULTS[SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS];
+  /**
+   * Email reopen window, in hours. If the channel-specific key is
+   * missing we fall back to the legacy single-key row (so a fresh
+   * BE deploy against a DB that only has the old key keeps the same
+   * behaviour until the migration runs). Finally falls back to the
+   * hardcoded default.
+   */
+  async getEmailResolvedReopenWindowHours(): Promise<number> {
+    return this.readWindowHours(
+      SETTING_KEYS.EMAIL_RESOLVED_REOPEN_WINDOW_HOURS,
+    );
   }
 
-  async setResolvedReopenWindowHours(hours: number): Promise<void> {
+  async setEmailResolvedReopenWindowHours(hours: number): Promise<void> {
     await this.setRaw(
-      SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS,
+      SETTING_KEYS.EMAIL_RESOLVED_REOPEN_WINDOW_HOURS,
       String(hours),
     );
+  }
+
+  /** WhatsApp reopen window, in hours. Same fallback chain as email. */
+  async getWhatsappResolvedReopenWindowHours(): Promise<number> {
+    return this.readWindowHours(
+      SETTING_KEYS.WHATSAPP_RESOLVED_REOPEN_WINDOW_HOURS,
+    );
+  }
+
+  async setWhatsappResolvedReopenWindowHours(hours: number): Promise<void> {
+    await this.setRaw(
+      SETTING_KEYS.WHATSAPP_RESOLVED_REOPEN_WINDOW_HOURS,
+      String(hours),
+    );
+  }
+
+  private async readWindowHours(key: string): Promise<number> {
+    const raw = await this.getRaw(key);
+    const parsed = raw === null ? NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    // Fallback to the legacy single-key row (handles upgrade on a DB
+    // where only `resolved_reopen_window_hours` is seeded).
+    const legacy = await this.getRaw(
+      SETTING_KEYS.RESOLVED_REOPEN_WINDOW_HOURS,
+    );
+    const legacyParsed =
+      legacy === null ? NaN : Number.parseInt(legacy, 10);
+    if (Number.isFinite(legacyParsed) && legacyParsed >= 0) return legacyParsed;
+    return DEFAULTS[key as keyof typeof DEFAULTS] as number;
   }
 
   /**
