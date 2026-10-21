@@ -96,6 +96,7 @@ export class TicketsService {
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly dataSource: DataSource,
     private readonly presence: PresenceService,
+    @Inject(forwardRef(() => BotRuntimeService))
     private readonly runtime: BotRuntimeService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly sender: EmailSenderService,

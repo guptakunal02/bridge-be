@@ -40,9 +40,11 @@ import { TicketsService } from './tickets.service';
       Team,
     ]),
     UsersModule,
-    // BotRuntimeService — fires TICKET_TAG_ADDED after every
-    // successful tag update.
-    BotModule,
+    // forwardRef because BotModule now imports AutomationsModule
+    // (for BOT_HANDOFF emission from applyHandoff) and AutomationsModule
+    // imports TicketsModule — closing a 3-module cycle that needs a
+    // forwardRef on every leg to resolve.
+    forwardRef(() => BotModule),
     // EmailSenderService — outbound SMTP for agent replies.
     ChannelsModule,
     // TagsService — validates that every tag on a PATCH exists in
