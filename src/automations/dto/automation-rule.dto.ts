@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  Allow,
   IsBoolean,
   IsIn,
   IsOptional,
@@ -53,6 +54,14 @@ export class CreateAutomationRuleDto {
   @IsIn(EVENTS)
   event!: AutomationEventName;
 
+  // @Allow() whitelists the property for class-validator's forbidden-
+  // non-whitelisted check WITHOUT applying any validation (deep
+  // validation runs post-pipe in validateCasesAndActions). Without
+  // @Allow(), a property that has ONLY class-transformer decorators
+  // like @Transform is treated as unknown and rejected with
+  // "property cases should not exist" by Nest's global
+  // ValidationPipe (whitelist:true + forbidNonWhitelisted:true).
+  @Allow()
   @Transform(({ value }) => value)
   cases!: unknown;
 
