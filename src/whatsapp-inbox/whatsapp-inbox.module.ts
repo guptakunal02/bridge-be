@@ -16,6 +16,7 @@ import { WhatsappMessage } from './entities/whatsapp-message.entity';
 import { WhatsappTemplate } from './entities/whatsapp-template.entity';
 import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
 import { TemplateVariableResolverService } from './template-variable-resolver.service';
+import { WhatsappChannelAdapter } from './whatsapp-channel-adapter';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
 import { WhatsappSenderService } from './whatsapp-sender.service';
 import { WhatsappTemplatesController } from './whatsapp-templates.controller';
@@ -86,6 +87,7 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     WhatsappTemplatesService,
     TemplateVariableResolverService,
     WhatsappSignatureGuard,
+    WhatsappChannelAdapter,
   ],
   // WhatsappSenderService is exported so TicketsService can branch
   // outbound reply on channel_type (EMAIL → SMTP, WHATSAPP → Meta
@@ -93,10 +95,13 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
   // WhatsappTemplatesService + TemplateVariableResolverService are
   // exported so TicketsService can resolve + render templates during
   // the send-template path.
+  // WhatsappChannelAdapter is exported so BotModule can bind it to
+  // the CHANNEL_ADAPTER DI token — the bot runtime's outbound door.
   exports: [
     WhatsappSenderService,
     WhatsappTemplatesService,
     TemplateVariableResolverService,
+    WhatsappChannelAdapter,
   ],
 })
 export class WhatsappInboxModule {}

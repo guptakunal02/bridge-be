@@ -164,6 +164,122 @@ export class WhatsappSenderService {
   }
 
   /**
+   * Send a text message with 1-3 reply buttons via Meta's
+   * interactive message payload. Button titles are capped at 20 chars
+   * (Meta's limit); body text at 1024 (Meta's limit). The caller is
+   * responsible for passing valid lengths — this method just POSTs.
+   *
+   * Used by the bot runtime's WhatsApp channel adapter when a
+   * Message step has options[] set. Fewer than 1 or more than 3
+   * buttons is a caller error — the Message step shouldn't produce
+   * zero-button interactive sends (plain sendText covers that), and
+   * >3 is Meta's cap (the adapter falls back to a text enumeration).
+   */
+  async sendInteractiveButtons(
+    waId: string,
+    body: string,
+    buttons: Array<{ id: string; title: string }>,
+  ): Promise<WhatsappSendResult> {
+    const digits = waId.replace(/\D/g, '');
+    if (!digits) {
+      throw new BadRequestException('Recipient wa_id missing or invalid');
+    }
+    const trimmed = body.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Message body is empty');
+    }
+    if (buttons.length < 1 || buttons.length > 3) {
+      throw new BadRequestException(
+        `Interactive buttons: expected 1-3, got ${buttons.length}`,
+      );
+    }
+
+    const phoneNumberId = this.config.get('WHATSAPP_PHONE_NUMBER_ID', {
+      infer: true,
+    });
+    const token = this.config.get('WHATSAPP_ACCESS_TOKEN', { infer: true });
+    const version = this.config.get('WHATSAPP_GRAPH_API_VERSION', {
+      infer: true,
+    });
+    const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: digits,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: trimmed },
+        action: {
+          buttons: buttons.map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title },
+          })),
+        },
+      },
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (netErr) {
+      this.logger.error(
+        `WhatsApp interactive send network error for wa_id=${digits}: ${
+          netErr instanceof Error ? netErr.message : String(netErr)
+        }`,
+      );
+      throw netErr;
+    }
+
+    const text = await res.text();
+    let parsed: MetaSendResponse & MetaErrorEnvelope;
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      this.logger.error(
+        `WhatsApp interactive send: non-JSON response (status=${res.status}): ${text.slice(0, 500)}`,
+      );
+      throw new BadRequestException(
+        'WhatsApp send failed — Meta returned an unexpected response',
+      );
+    }
+
+    if (!res.ok || parsed.error) {
+      const code = parsed.error?.code;
+      const metaMsg =
+        parsed.error?.error_user_msg ||
+        parsed.error?.message ||
+        'Unknown error';
+      this.logger.warn(
+        `WhatsApp interactive send rejected status=${res.status} code=${code ?? 'none'} fbtrace=${parsed.error?.fbtrace_id ?? ''} msg="${metaMsg}"`,
+      );
+      throw new BadRequestException(friendlyError(code, metaMsg));
+    }
+
+    const wamid = parsed.messages?.[0]?.id;
+    if (!wamid) {
+      this.logger.error(
+        `WhatsApp interactive send: 2xx but no wamid in response: ${text.slice(0, 500)}`,
+      );
+      throw new BadRequestException(
+        'WhatsApp send failed — Meta did not return a message id',
+      );
+    }
+    this.logger.log(
+      `WhatsApp interactive send ok: wa_id=${digits} wamid=${wamid} buttons=${buttons.length}`,
+    );
+    return { wamid, raw: parsed };
+  }
+
+  /**
    * Upload media bytes to Meta's /media endpoint and return the
    * media_id. That id is the handle used in the subsequent
    * sendMedia call; Meta keeps the asset for 30 days.

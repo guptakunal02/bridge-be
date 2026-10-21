@@ -67,6 +67,17 @@ interface WhatsappInboundMessage {
     caption?: string;
   };
   audio?: { id?: string; mime_type?: string };
+  // Interactive reply — when the customer taps a reply button or
+  // picks a list row from a message the bot sent. We treat the
+  // title string as the "text" for persistence and for the bot
+  // runtime's option-match (which normalises labels on both sides).
+  // id is the button key we sent ("opt-N"); currently unused by the
+  // matcher but preserved on raw_payload for future direct-key wiring.
+  interactive?: {
+    type?: 'button_reply' | 'list_reply';
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string };
+  };
 }
 interface WhatsappWebhookPayload {
   object?: string;
@@ -249,7 +260,12 @@ export class WhatsappIngestService {
           // we prefer filename when both are present. For media
           // without a filename (image/video/audio with caption or
           // without), use the caption or null.
-          content: msg.text?.body ?? media?.content ?? null,
+          content:
+            msg.text?.body ??
+            msg.interactive?.button_reply?.title ??
+            msg.interactive?.list_reply?.title ??
+            media?.content ??
+            null,
           external_message_id: msg.id!,
           message_type: msg.type ?? 'unknown',
           raw_payload: msg,
