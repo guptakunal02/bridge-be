@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AutomationsModule } from '../automations/automations.module';
+import { BotModule } from '../bot/bot.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { StorageModule } from '../common/storage/storage.module';
 import { TeamsModule } from '../teams/teams.module';
@@ -66,6 +67,11 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // (so TicketsService can reach WhatsappSenderService for the
     // outbound reply path).
     forwardRef(() => TicketsModule),
+    // BotRuntimeService — new WhatsApp tickets now start a bot
+    // session (same way email tickets do). Enables Flow matching
+    // off TICKET_CREATED and seeds sender_phone into the session's
+    // initial variables.
+    BotModule,
   ],
   controllers: [WhatsappWebhookController, WhatsappTemplatesController],
   providers: [

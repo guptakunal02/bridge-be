@@ -3,15 +3,18 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AutomationEngine } from '../automations/automation-engine.service';
 import { AUTOMATION_EVENT } from '../automations/events';
+import { BotRuntimeService } from '../bot/runtime/bot-runtime.service';
 import { Channel } from '../channels/entities/channel.entity';
 import { S3StorageService } from '../common/storage/s3-storage.service';
 import {
+  BotTrigger,
   ChannelStatus,
   ChannelType,
   MessageDirection,
   TicketActivity,
   TicketStatus,
 } from '../database/enums';
+import { buildTicketContext } from '../rules/ticket-context';
 import { TeamsService } from '../teams/teams.service';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { Ticket } from '../tickets/entities/ticket.entity';
@@ -87,6 +90,7 @@ export class WhatsappIngestService {
     private readonly teams: TeamsService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly automations: AutomationEngine,
+    private readonly runtime: BotRuntimeService,
     private readonly sender: WhatsappSenderService,
     private readonly storage: S3StorageService,
   ) {}
@@ -317,6 +321,48 @@ export class WhatsappIngestService {
           dayOfWeekIst,
         },
       });
+    }
+
+    // Bot runtime wiring — parallel to what EmailInboxService does.
+    // On a brand-new WhatsApp ticket we try to start a bot session so
+    // flows triggered on TICKET_CREATED fire; if the customer is
+    // replying to an existing ticket, hand the message to the runtime
+    // in case there's a paused session waiting on this customer's
+    // next input. Errors are swallowed per-call so a bot problem
+    // can't block ingest from committing a real customer message.
+    //
+    // `senderPhone` seeds the session so Function steps keyed by
+    // phone (get_latest_order_tracking_link, get_customer_type) resolve
+    // without the admin having to manually plumb the input.
+    try {
+      if (wasNewTicket) {
+        await this.runtime.startSession({
+          ticketId: ticket.id,
+          channelId: channel.id,
+          trigger: BotTrigger.TICKET_CREATED,
+          initialVariables: buildTicketContext({
+            createdAt: ticket.createdAt,
+            channelType: ChannelType.WHATSAPP,
+            senderEmail: null,
+            senderPhone: msg.from ?? null,
+            subject: null,
+            tags: ticket.tags ?? [],
+            latestCustomerMessageAt: ticket.createdAt,
+          }),
+        });
+      } else {
+        await this.runtime.handleCustomerReply({
+          ticketId: ticket.id,
+          channelId: channel.id,
+          replyText: message.content ?? '',
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `WhatsApp bot runtime error on ticket=${ticket.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 

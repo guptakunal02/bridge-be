@@ -279,6 +279,7 @@ export class EmailInboxService {
               createdAt: now,
               channelType: ChannelType.EMAIL,
               senderEmail: req.sender,
+              senderPhone: null,
               subject: req.subject ?? null,
               tags: [],
               // First message = both the ticket's birth time and the
@@ -514,6 +515,7 @@ export class EmailInboxService {
             createdAt: ticket.createdAt,
             channelType: ChannelType.EMAIL,
             senderEmail: req.sender,
+            senderPhone: null,
             subject: req.subject ?? null,
             tags: ticket.tags ?? [],
             latestCustomerMessageAt: ticket.createdAt,
@@ -863,6 +865,7 @@ export class EmailInboxService {
       createdAt: ticket.createdAt,
       channelType: ticket.channel_type,
       senderEmail: firstInbound?.sender ?? null,
+      senderPhone: null,
       subject: firstInbound?.subject ?? null,
       tags: ticket.tags ?? [],
       latestCustomerMessageAt: new Date(),

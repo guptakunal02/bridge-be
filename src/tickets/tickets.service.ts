@@ -949,7 +949,14 @@ export class TicketsService {
             ...buildTicketContext({
               createdAt: new Date(detail.createdAt),
               channelType: detail.channelType,
-              senderEmail: firstMsg?.sender ?? null,
+              senderEmail:
+                detail.channelType === ChannelType.EMAIL
+                  ? (firstMsg?.sender ?? null)
+                  : null,
+              senderPhone:
+                detail.channelType === ChannelType.WHATSAPP
+                  ? (firstMsg?.sender ?? null)
+                  : null,
               subject: firstMsg?.subject ?? null,
               tags: detail.tags,
               // Latest received message on the ticket, if any; else

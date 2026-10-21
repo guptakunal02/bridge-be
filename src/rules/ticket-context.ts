@@ -16,6 +16,13 @@ export interface IngestFacts {
   createdAt: Date;
   channelType: ChannelType;
   senderEmail: string | null;
+  /**
+   * Customer's phone number for WhatsApp tickets (wa_id — digits
+   * only, no leading +). Null for email tickets where phone isn't
+   * known at ingest time. Downstream bot flows + rules key off this
+   * for order lookups and other phone-based functions.
+   */
+  senderPhone: string | null;
   subject: string | null;
   tags: string[];
   latestCustomerMessageAt: Date;
@@ -26,6 +33,10 @@ export interface IngestFacts {
  * snapshot. IST is baked in via Intl (not tz-libraries) so we don't
  * take a dep just for the offset — the value shape (hour 0-23, dow
  * 0-6) matches what the FE picker sends.
+ *
+ * The returned map doubles as the bot runtime's initial session
+ * variables — anything added here becomes available as `${name}` in
+ * Message steps and as an input for Function steps.
  */
 export function buildTicketContext(facts: IngestFacts): TicketContext {
   const createdIst = getIstParts(facts.createdAt);
@@ -36,6 +47,7 @@ export function buildTicketContext(facts: IngestFacts): TicketContext {
     'latest_customer_message.hour_ist': latestIst.hour,
     channel_type: facts.channelType,
     sender_email: facts.senderEmail ?? '',
+    sender_phone: facts.senderPhone ?? '',
     subject: facts.subject ?? '',
     tags: facts.tags,
   };
