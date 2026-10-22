@@ -14,12 +14,13 @@ import {
   TicketActivity,
   TicketStatus,
 } from '../database/enums';
+import { RoutingService } from '../rules/routing.service';
 import { buildTicketContext } from '../rules/ticket-context';
+import { AppSettingsService } from '../settings/app-settings.service';
 import { TeamsService } from '../teams/teams.service';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
 import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketLifecycleService } from '../tickets/ticket-lifecycle.service';
-import { AppSettingsService } from '../settings/app-settings.service';
 import { AssignmentPickerService } from '../users/assignment-picker.service';
 import { loadBot } from '../users/presence-helpers';
 import { WhatsappMessage } from './entities/whatsapp-message.entity';
@@ -100,6 +101,7 @@ export class WhatsappIngestService {
     private readonly dataSource: DataSource,
     private readonly picker: AssignmentPickerService,
     private readonly teams: TeamsService,
+    private readonly router: RoutingService,
     private readonly lifecycle: TicketLifecycleService,
     private readonly automations: AutomationEngine,
     @Inject(forwardRef(() => BotRuntimeService))
@@ -535,37 +537,80 @@ export class WhatsappIngestService {
       }
     }
 
-    // Fresh conversation → mint a ticket. Routing rules aren't ported
-    // to WhatsApp in V2, so we always use the default team and park
-    // on BOT; the picker fires post-commit to drain to a live agent.
+    // Fresh conversation → mint a ticket. Routing rules now evaluate
+    // on WhatsApp too (mirrors the email ingest path), so admin-
+    // authored OOH / team-attribute rules apply end-to-end. If no
+    // rule matches, the ticket falls through to the default team.
+    const now = new Date();
+    const routed = await this.router.routeFacts(
+      {
+        createdAt: now,
+        channelType: ChannelType.WHATSAPP,
+        senderEmail: null,
+        senderPhone: waId,
+        subject: null,
+        tags: [],
+        // First message = both the ticket's birth time and the
+        // latest customer message time.
+        latestCustomerMessageAt: now,
+      },
+      mgr,
+    );
     const defaultTeam = await this.teams.getDefault();
+    let targetTeamId = routed?.teamId ?? defaultTeam.id;
+
     const bot = await loadBot(mgr);
     if (!bot) {
       throw new Error('BOT user not seeded — cannot mint WhatsApp ticket');
     }
 
     let pickedAssigneeId: string = bot.id;
+    // Picker fallback: if the routed team has nobody eligible (no
+    // Online members AND BOT paused for that team), fall back to the
+    // default team which is guaranteed to have BOT available. Mirrors
+    // email ingest's fallback — no silent message loss on a mis-
+    // configured team's assignment settings.
     try {
       pickedAssigneeId = await this.picker.pickNextAssigneeForTeam(
-        defaultTeam.id,
+        targetTeamId,
         mgr,
       );
-    } catch (err) {
-      // Picker throws if no human is eligible AND BOT is paused. V2
-      // can't recover from that mid-webhook — log and stay on BOT so
-      // the message isn't lost; admin fixes the team setup.
-      this.logger.warn(
-        `Picker threw on new WhatsApp ticket for ${waId}: ${
-          err instanceof Error ? err.message : String(err)
-        } — parking on BOT`,
-      );
+    } catch (pickErr) {
+      if (targetTeamId === defaultTeam.id) {
+        this.logger.warn(
+          `Picker threw on new WhatsApp ticket for ${waId} on default team: ${
+            pickErr instanceof Error ? pickErr.message : String(pickErr)
+          } — parking on BOT`,
+        );
+      } else {
+        this.logger.warn(
+          `routing picked team=${targetTeamId} has no eligible assignee (${
+            (pickErr as Error).message
+          }); falling back to default team=${defaultTeam.id}`,
+        );
+        targetTeamId = defaultTeam.id;
+        try {
+          pickedAssigneeId = await this.picker.pickNextAssigneeForTeam(
+            targetTeamId,
+            mgr,
+          );
+        } catch (fallbackErr) {
+          this.logger.warn(
+            `Picker threw on fallback to default team: ${
+              fallbackErr instanceof Error
+                ? fallbackErr.message
+                : String(fallbackErr)
+            } — parking on BOT`,
+          );
+        }
+      }
     }
 
     const ticket = await ticketRepo.save(
       ticketRepo.create({
         channel_id: channel.id,
         channel_type: ChannelType.WHATSAPP,
-        team_id: defaultTeam.id,
+        team_id: targetTeamId,
         assignee: bot.id,
         status: TicketStatus.OPEN,
         thread_key: threadKey,
@@ -580,7 +625,9 @@ export class WhatsappIngestService {
       ticket_id: ticket.id,
       event: TicketActivity.CREATED,
       actor_id: null,
-      log: `Ticket opened from WhatsApp (${waId})`,
+      log: routed
+        ? `Ticket opened from WhatsApp (${waId}) — routed by rule "${routed.matchedRule.name}"`
+        : `Ticket opened from WhatsApp (${waId})`,
     });
     if (pickedAssigneeId === bot.id) {
       await logRepo.save({

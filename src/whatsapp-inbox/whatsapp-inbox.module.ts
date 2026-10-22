@@ -4,6 +4,7 @@ import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { StorageModule } from '../common/storage/storage.module';
+import { RulesModule } from '../rules/rules.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
@@ -80,6 +81,10 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // findOrCreateTicket to decide between in-window reopen vs
     // past-window mint-with-previous_ticket_id.
     SettingsModule,
+    // RoutingService — WA ingest now evaluates routing rules at
+    // mint time (same as email ingest) so admin-authored OOH /
+    // team-attribute rules apply to WhatsApp too, not just email.
+    RulesModule,
   ],
   controllers: [WhatsappWebhookController, WhatsappTemplatesController],
   providers: [
