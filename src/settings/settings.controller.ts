@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../database/enums';
 import { AppSettingsService } from './app-settings.service';
@@ -72,5 +72,29 @@ export class SettingsController {
       await this.settings.setRequireTagToResolve(dto.requireTagToResolve);
     }
     return this.getGeneral();
+  }
+
+  /**
+   * Webhook secret display — ADMIN only. Returns the current token
+   * (hex string). Reading auto-mints the row on first access so a
+   * fresh install doesn't require an explicit seed step.
+   */
+  @Get('webhook-secret')
+  @Roles(UserRole.ADMIN)
+  async getWebhookSecret(): Promise<{ secret: string }> {
+    const secret = await this.settings.getWebhookSecret();
+    return { secret };
+  }
+
+  /**
+   * Rotate the webhook secret. ADMIN only. Returns the new value.
+   * The old value stops working immediately — rotation is a hard
+   * cut, coordinate with the sender before calling.
+   */
+  @Post('webhook-secret/rotate')
+  @Roles(UserRole.ADMIN)
+  async rotateWebhookSecret(): Promise<{ secret: string }> {
+    const secret = await this.settings.rotateWebhookSecret();
+    return { secret };
   }
 }

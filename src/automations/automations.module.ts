@@ -4,6 +4,8 @@ import { EmailInboxModule } from '../email-inbox/email-inbox.module';
 import { Team } from '../teams/entities/team.entity';
 import { TicketsModule } from '../tickets/tickets.module';
 import { User } from '../users/entities/user.entity';
+import { WhatsappTemplate } from '../whatsapp-inbox/entities/whatsapp-template.entity';
+import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { ActionDispatcher } from './action-dispatcher.service';
 import { AddTagHandler } from './action-handlers/add-tag.handler';
 import { RemoveTagHandler } from './action-handlers/remove-tag.handler';
@@ -29,9 +31,14 @@ import { RuleEvaluator } from './rule-evaluator.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AutomationRule, User, Team]),
+    TypeOrmModule.forFeature([AutomationRule, User, Team, WhatsappTemplate]),
     forwardRef(() => TicketsModule),
     forwardRef(() => EmailInboxModule),
+    // forwardRef because WhatsappInboxModule imports BotModule which
+    // imports AutomationsModule — classic triangle. The handler
+    // consumes WhatsappSenderService exported by WhatsappInboxModule
+    // for the webhook-driven ticketless template send.
+    forwardRef(() => WhatsappInboxModule),
   ],
   controllers: [AutomationsController],
   providers: [

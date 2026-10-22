@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomBytes } from 'crypto';
 import { Repository } from 'typeorm';
 import { AppSetting } from './entities/app-setting.entity';
 
@@ -15,6 +16,13 @@ export const SETTING_KEYS = {
   WHATSAPP_RESOLVED_REOPEN_WINDOW_HOURS:
     'whatsapp_resolved_reopen_window_hours',
   REQUIRE_TAG_TO_RESOLVE: 'require_tag_to_resolve',
+  /**
+   * Secret token external services pass via `X-Bridge-Secret` when
+   * posting to /webhooks/custom-events. Auto-generated on first read
+   * (hex-encoded 32 random bytes); admin can rotate via
+   * POST /settings/webhook-secret/rotate.
+   */
+  WEBHOOK_SECRET: 'webhook_secret',
 } as const;
 
 /** Fallback values used when the row is absent (e.g. brand-new
@@ -110,6 +118,35 @@ export class AppSettingsService {
       SETTING_KEYS.REQUIRE_TAG_TO_RESOLVE,
       v ? 'true' : 'false',
     );
+  }
+
+  /**
+   * Returns the webhook secret, auto-generating + persisting one on
+   * first read if the row doesn't exist yet. Call sites get a
+   * usable value immediately — the admin UI doesn't need an explicit
+   * "generate" step.
+   *
+   * Hex-encoded 32 bytes = 64 chars; sufficient entropy for an
+   * unbounded-lifetime shared secret.
+   */
+  async getWebhookSecret(): Promise<string> {
+    const raw = await this.getRaw(SETTING_KEYS.WEBHOOK_SECRET);
+    if (raw && raw.length > 0) return raw;
+    const fresh = randomBytes(32).toString('hex');
+    await this.setRaw(SETTING_KEYS.WEBHOOK_SECRET, fresh);
+    return fresh;
+  }
+
+  /**
+   * Mint a new webhook secret and overwrite the stored one. Any
+   * external POST with the old secret immediately starts getting 401.
+   * Caller is responsible for coordinating the rollout with the
+   * sender — this is a hard cut.
+   */
+  async rotateWebhookSecret(): Promise<string> {
+    const fresh = randomBytes(32).toString('hex');
+    await this.setRaw(SETTING_KEYS.WEBHOOK_SECRET, fresh);
+    return fresh;
   }
 
   private async getRaw(key: string): Promise<string | null> {

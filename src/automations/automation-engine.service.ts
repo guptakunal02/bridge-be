@@ -62,6 +62,11 @@ export class AutomationEngine {
     await this.safeEvaluate(payload);
   }
 
+  @OnEvent(qualify(AUTOMATION_EVENT.WEBHOOK_CUSTOM))
+  async onWebhookCustom(payload: AutomationEventPayload): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
   private async safeEvaluate(payload: AutomationEventPayload): Promise<void> {
     try {
       await this.evaluator.evaluate(payload);
