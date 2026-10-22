@@ -200,6 +200,14 @@ export class RuleValidatorService {
       const value = this.pickEnum(conds);
       return value === UNSATISFIABLE ? UNSAT : { ok: true, value };
     }
+    if (attr.type === 'channel') {
+      // Channel-type attributes carry a UUID string; the operator set
+      // is eq/neq only, which is semantically identical to enum. Reuse
+      // pickEnum verbatim — anchor on the eq value, bail if any neq
+      // conflicts with the anchor.
+      const value = this.pickEnum(conds);
+      return value === UNSATISFIABLE ? UNSAT : { ok: true, value };
+    }
     if (attr.type === 'string') {
       const value = this.pickString(conds);
       return value === UNSATISFIABLE ? UNSAT : { ok: true, value };
