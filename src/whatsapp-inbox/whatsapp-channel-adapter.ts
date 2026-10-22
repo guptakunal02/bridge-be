@@ -99,13 +99,25 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
     // characters ("Return/Exchange" → "Return/Exchan" was the
     // reported case). Admin trades one extra tap for correctness.
     const anyLabelOverButtonCap = options.some((o) => o.label.length > 20);
+    // The content persisted on the SENT whatsapp_message row drives
+    // Bridge's own UI rendering. The customer sees interactive
+    // buttons / list rows in WhatsApp itself; agents reviewing the
+    // thread need to see what was offered, so append the options as
+    // a numbered list under the body. Matches the LimeChat-style
+    // "1. New Order / 2. Existing Order" display.
+    const displayContent =
+      options.length === 0
+        ? input.message.text
+        : `${input.message.text}\n\n${options
+            .map((o, i) => `${i + 1}. ${o.label}`)
+            .join('\n')}`;
     try {
       if (options.length === 0) {
         const result = await this.sender.sendText(waId, input.message.text);
         await this.persistSent({
           ticket,
           businessWaId,
-          content: input.message.text,
+          content: displayContent,
           messageType: 'text',
           result,
         });
@@ -123,7 +135,7 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
         await this.persistSent({
           ticket,
           businessWaId,
-          content: input.message.text,
+          content: displayContent,
           messageType: 'interactive',
           result,
         });
@@ -144,7 +156,7 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
         await this.persistSent({
           ticket,
           businessWaId,
-          content: input.message.text,
+          content: displayContent,
           messageType: 'interactive',
           result,
         });
