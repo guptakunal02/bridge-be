@@ -7,6 +7,12 @@ export interface AutomationRuleResponse {
   description: string | null;
   enabled: boolean;
   event: AutomationEventName;
+  /**
+   * ChannelType strings the rule is scoped to. Empty = fires on no
+   * channel (strict opt-in; the editor surfaces this as "No channel
+   * selected — rule won't fire"). FE renders a checkbox group.
+   */
+  channelTypes: string[];
   cases: unknown[];
   else_actions: unknown[];
   createdAt: string;
@@ -28,6 +34,7 @@ export function toAutomationRuleResponse(
     description: rule.description,
     enabled: rule.enabled,
     event: rule.event as AutomationEventName,
+    channelTypes: Array.isArray(rule.channel_types) ? rule.channel_types : [],
     cases: Array.isArray(rule.cases) ? rule.cases : [],
     else_actions: Array.isArray(rule.else_actions) ? rule.else_actions : [],
     createdAt: rule.createdAt.toISOString(),

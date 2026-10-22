@@ -45,6 +45,21 @@ export class AutomationRule {
   event!: string;
 
   /**
+   * ChannelType strings this rule is scoped to. Empty = fires on
+   * NO channel (strict opt-in — the admin picked this over a
+   * permissive "empty = all channels" default). Non-empty = fires
+   * only when `ticket.channelType` is in this list. Enforced in
+   * RuleEvaluator before per-case predicate evaluation.
+   */
+  @Column({
+    type: 'text',
+    array: true,
+    default: () => `'{}'::text[]`,
+    name: 'channel_types',
+  })
+  channel_types!: string[];
+
+  /**
    * Ordered list of `{ conditions: Predicate[], actions: Action[] }`.
    * All cases are evaluated independently; a case runs its actions
    * when every condition is TRUE (AND semantics within a case).

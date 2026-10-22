@@ -1,6 +1,8 @@
 import { Transform } from 'class-transformer';
 import {
   Allow,
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsIn,
   IsOptional,
@@ -8,9 +10,11 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { ChannelType } from '../../database/enums';
 import { AUTOMATION_EVENT, type AutomationEventName } from '../events';
 
 const EVENTS = Object.values(AUTOMATION_EVENT) as AutomationEventName[];
+const CHANNEL_TYPES = Object.values(ChannelType) as string[];
 
 /**
  * CRUD payload for an automation rule.
@@ -54,6 +58,17 @@ export class CreateAutomationRuleDto {
   @IsIn(EVENTS)
   event!: AutomationEventName;
 
+  /**
+   * Channels this rule is scoped to. Empty = fires on NO channel
+   * (strict opt-in). Each entry must be a valid ChannelType.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @IsIn(CHANNEL_TYPES, { each: true })
+  @ArrayUnique()
+  channelTypes?: string[];
+
   // @Allow() whitelists the property for class-validator's forbidden-
   // non-whitelisted check WITHOUT applying any validation (deep
   // validation runs post-pipe in validateCasesAndActions). Without
@@ -90,6 +105,13 @@ export class UpdateAutomationRuleDto {
   @IsString()
   @IsIn(EVENTS)
   event?: AutomationEventName;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @IsIn(CHANNEL_TYPES, { each: true })
+  @ArrayUnique()
+  channelTypes?: string[];
 
   @IsOptional()
   @Transform(({ value }) => value)
