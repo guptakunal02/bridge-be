@@ -11,7 +11,18 @@ import { ChannelType } from '../database/enums';
  * condition builder dropdowns.
  */
 
-export type AttributeType = 'integer' | 'enum' | 'string' | 'string_array';
+export type AttributeType =
+  | 'integer'
+  | 'enum'
+  | 'string'
+  | 'string_array'
+  /**
+   * Dynamic channel picker — enumValues are omitted because the set is
+   * every row in the `channel` table (resolved by the FE via GET /channels
+   * at render time). Values stored on the condition are channel.id UUIDs;
+   * the evaluator does a plain string eq/neq against ticket.channelId.
+   */
+  | 'channel';
 
 export type Operator =
   | 'eq'
@@ -91,6 +102,14 @@ export const ATTRIBUTES: readonly AttributeDefinition[] = [
     description: 'Which channel produced the ticket.',
     type: 'enum',
     enumValues: Object.values(ChannelType),
+    operators: ENUM_OPS,
+  },
+  {
+    key: 'channel_id',
+    label: 'Inbox',
+    description:
+      'The specific inbox / channel row the ticket came in on (e.g. hello@surma.in vs a WhatsApp number). Lets a rule target one particular connected mailbox even when multiple of the same channel type exist.',
+    type: 'channel',
     operators: ENUM_OPS,
   },
   {

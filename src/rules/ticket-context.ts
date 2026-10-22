@@ -14,6 +14,15 @@ import type { TicketContext } from './rule-evaluator.service';
  */
 export interface IngestFacts {
   createdAt: Date;
+  /**
+   * Which specific channel row this ticket is on — the UUID string
+   * from `channel.id`. Powers the "Inbox" condition in routing rules
+   * so admins can target one connected mailbox vs another even when
+   * multiple of the same channel type exist. Optional on legacy call
+   * sites — not setting it means the Inbox condition can never
+   * match the ticket (safe default: rule falls through).
+   */
+  channelId?: string;
   channelType: ChannelType;
   senderEmail: string | null;
   /**
@@ -45,6 +54,7 @@ export function buildTicketContext(facts: IngestFacts): TicketContext {
     'created_at.hour_ist': createdIst.hour,
     'created_at.dow': createdIst.dow,
     'latest_customer_message.hour_ist': latestIst.hour,
+    channel_id: facts.channelId ?? '',
     channel_type: facts.channelType,
     sender_email: facts.senderEmail ?? '',
     sender_phone: facts.senderPhone ?? '',

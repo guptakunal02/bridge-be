@@ -300,6 +300,7 @@ export class EmailInboxService {
           const routed = await this.router.routeFacts(
             {
               createdAt: now,
+              channelId,
               channelType: ChannelType.EMAIL,
               senderEmail: req.sender,
               senderPhone: null,
@@ -964,6 +965,7 @@ export class EmailInboxService {
     });
     const facts: import('../rules/ticket-context').IngestFacts = {
       createdAt: ticket.createdAt,
+      channelId: ticket.channel_id,
       channelType: ticket.channel_type,
       senderEmail: firstInbound?.sender ?? null,
       senderPhone: null,

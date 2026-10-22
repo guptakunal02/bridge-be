@@ -545,6 +545,7 @@ export class WhatsappIngestService {
     const routed = await this.router.routeFacts(
       {
         createdAt: now,
+        channelId: channel.id,
         channelType: ChannelType.WHATSAPP,
         senderEmail: null,
         senderPhone: waId,
