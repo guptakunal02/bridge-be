@@ -249,10 +249,13 @@ describe('EmailInboxService.reopenResolved', () => {
       is_reopened: true,
       resolved_at: null,
     });
-    // Both activity rows fire: REOPENED + ASSIGNED_TO_BOT.
+    // Both activity rows fire: REOPENED + SENT_BACK_TO_QUEUE. Email
+    // tickets never engage bot runtime, so the re-queue to BOT is
+    // a data-layer sentinel only — the activity timeline reads as
+    // SENT_BACK_TO_QUEUE to match the user-facing semantic.
     expect(ctx.savedLogs.map((l) => l.event)).toEqual([
       TicketActivity.REOPENED,
-      TicketActivity.ASSIGNED_TO_BOT,
+      TicketActivity.SENT_BACK_TO_QUEUE,
     ]);
   });
 
@@ -278,7 +281,7 @@ describe('EmailInboxService.reopenResolved', () => {
       is_reopened: true,
       resolved_at: null,
     });
-    // Single activity row (REOPENED). No ASSIGNED_TO_BOT.
+    // Single activity row (REOPENED). No SENT_BACK_TO_QUEUE.
     expect(ctx.savedLogs.map((l) => l.event)).toEqual([
       TicketActivity.REOPENED,
     ]);
@@ -297,10 +300,12 @@ describe('EmailInboxService.reopenResolved', () => {
     ).reopenResolved('t1', ctx.mgr);
 
     expect(result).toBe(true);
-    // No assignee change, no ASSIGNED_TO_BOT fallback log.
+    // No assignee change, no SENT_BACK_TO_QUEUE fallback log.
     expect(ctx.ticketUpdates[0]).not.toHaveProperty('assignee');
     expect(
-      ctx.savedLogs.some((l) => l.event === TicketActivity.ASSIGNED_TO_BOT),
+      ctx.savedLogs.some(
+        (l) => l.event === TicketActivity.SENT_BACK_TO_QUEUE,
+      ),
     ).toBe(false);
   });
 
@@ -321,7 +326,7 @@ describe('EmailInboxService.reopenResolved', () => {
 
     // UPDATE still happens (status flip) but WITHOUT assignee=BOT.
     expect(ctx.ticketUpdates[0]).not.toHaveProperty('assignee');
-    // Only REOPENED log fires (no ASSIGNED_TO_BOT).
+    // Only REOPENED log fires (no SENT_BACK_TO_QUEUE).
     expect(ctx.savedLogs.map((l) => l.event)).toEqual([
       TicketActivity.REOPENED,
     ]);

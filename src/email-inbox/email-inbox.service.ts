@@ -390,17 +390,19 @@ export class EmailInboxService {
               : `Ticket opened from ${req.sender}`,
           });
 
-          // When the picker found no live agents, log the true BOT
-          // parking event now. When it did find someone, the drain
-          // will log its own ASSIGNED_TO_AGENT entry on whichever
-          // ticket ends up moving (possibly older than this one),
-          // so we don't double-log here.
+          // When the picker found no live agents, log the queue-park
+          // now. For email tickets the sentinel is still BOT (the
+          // drain pool wants a non-null assignee to iterate over) but
+          // the activity log reads as "Parked in queue" — bot runtime
+          // never fires for email, so "ASSIGNED_TO_BOT" phrasing is
+          // misleading. The drain will log ASSIGNED_TO_AGENT when
+          // someone comes online.
           if (pickedAssigneeId === bot.id) {
             await logRepo.save({
               ticket_id: ticket.id,
-              event: TicketActivity.ASSIGNED_TO_BOT,
+              event: TicketActivity.SENT_BACK_TO_QUEUE,
               actor_id: null,
-              log: 'Parked on the bot — no live members were Online',
+              log: 'Parked in queue — no live members were Online',
             });
           }
         }
@@ -896,9 +898,14 @@ export class EmailInboxService {
         log: 'Auto-reopened — customer replied within the reopen window',
       });
       if (fallbackBotId) {
+        // Queue sentinel stays BOT at the data layer (the drain loop
+        // needs a non-null assignee), but we log it as a re-queue —
+        // email tickets never engage bot runtime, and the previous
+        // ASSIGNED_TO_BOT label made the activity timeline read as
+        // if the bot took over.
         await logRepo.save({
           ticket_id: ticketId,
-          event: TicketActivity.ASSIGNED_TO_BOT,
+          event: TicketActivity.SENT_BACK_TO_QUEUE,
           actor_id: null,
           log: `Re-queued on reopen — original assignee not ONLINE (${fallbackFromStatus})`,
         });
