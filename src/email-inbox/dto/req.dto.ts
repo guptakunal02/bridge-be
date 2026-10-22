@@ -1,5 +1,6 @@
 import {
   ArrayNotEmpty,
+  IsBoolean,
   IsEmail,
   IsInt,
   IsNotEmpty,
@@ -116,4 +117,24 @@ export class IngestEmailInbox {
   @ValidateNested({ each: true })
   @Type(() => IngestEmailAttachment)
   attachments?: IngestEmailAttachment[];
+
+  /**
+   * True when this message is machine-generated — a vacation
+   * responder, a mailing-list digest, a bounce / DSN, or anything
+   * else that shouldn't trigger our automation engine. Detection
+   * surfaces at ingest time by inspecting RFC 3834 (`Auto-Submitted`),
+   * RFC 2076 (`Precedence: bulk|list|junk|auto_reply`), the DSN
+   * content type (`multipart/report; report-type=delivery-status`),
+   * common no-reply / mailer-daemon local-parts, and Outlook's
+   * `X-Auto-Response-Suppress`.
+   *
+   * Set TRUE → the message is still persisted on the ticket (so
+   * admins see the bounce / autoresponse in the thread) but
+   * MESSAGE_RECEIVED / TICKET_CREATED automation events are NOT
+   * emitted. This is the primary brake on auto-reply loops
+   * (ticket #1768, 2026-10-22).
+   */
+  @IsOptional()
+  @IsBoolean()
+  isAutoSubmitted?: boolean;
 }

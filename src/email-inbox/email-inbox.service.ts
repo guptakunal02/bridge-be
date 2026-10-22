@@ -451,9 +451,16 @@ export class EmailInboxService {
     // Fire automation events post-commit, pre-bot. Fire-and-forget;
     // the engine queues via EventEmitter2 so slow / failing rules
     // never block the ingest's return path.
-    // Hour-of-day in IST — convenience for the common "OOH"
-    // condition pattern. Computed once per emit so predicates can
-    // compare integers rather than parse timestamps.
+    //
+    // Auto-reply loop brake (ticket #1768, 2026-10-22): skip the
+    // automation emits entirely when the inbound was flagged as
+    // auto-submitted at parse time (DSN bounce, vacation responder,
+    // Precedence: bulk, mailer-daemon / noreply sender, …). The
+    // message is still persisted and visible on the ticket so admins
+    // see the bounce in the thread; it just doesn't re-trigger our
+    // own OOH / auto-reply rules. Without this gate, OOH → bounce →
+    // OOH → bounce ran forever (noreply@email.openai.com → mailer-
+    // daemon@googlemail.com → noreply@email.openai.com → …).
     const hourIst = computeHourIst(message.createdAt);
     const dayOfWeekIst = computeDayOfWeekIst(message.createdAt);
     const ticketSnapshot = {
@@ -466,26 +473,17 @@ export class EmailInboxService {
       teamId: ticket.team_id,
       subject: ticket.thread_key ?? null,
     };
-    this.automations.emit({
-      event: AUTOMATION_EVENT.MESSAGE_RECEIVED,
-      ticket: ticketSnapshot,
-      payload: {
-        ticketId: ticket.id,
-        messageId: message.id,
-        channelId: channelId,
-        sender: req.sender,
-        subject: req.subject ?? null,
-        body: req.content,
-        hourIst,
-        dayOfWeekIst,
-      },
-    });
-    if (wasNewTicket) {
+    if (req.isAutoSubmitted) {
+      this.logger.log(
+        `auto-submitted inbound: skipping automation emits for ticket=${ticket.id} external_message_id=${req.external_message_id} sender=${req.sender}`,
+      );
+    } else {
       this.automations.emit({
-        event: AUTOMATION_EVENT.TICKET_CREATED,
+        event: AUTOMATION_EVENT.MESSAGE_RECEIVED,
         ticket: ticketSnapshot,
         payload: {
           ticketId: ticket.id,
+          messageId: message.id,
           channelId: channelId,
           sender: req.sender,
           subject: req.subject ?? null,
@@ -494,23 +492,38 @@ export class EmailInboxService {
           dayOfWeekIst,
         },
       });
-    }
-    if (reopenedFromResolved) {
-      // Ingest-driven reopen: a customer replied to a RESOLVED
-      // ticket within the configured reopen window. The post-txn
-      // ticket row shows status=OPEN; we tell rules "the ticket
-      // went from RESOLVED to OPEN" so automations can re-tag /
-      // re-route /etc.
-      this.automations.emit({
-        event: AUTOMATION_EVENT.TICKET_REOPENED,
-        ticket: ticketSnapshot,
-        payload: {
-          ticketId: ticket.id,
-          newStatus: ticket.status,
-          hourIst,
-          dayOfWeekIst,
-        },
-      });
+      if (wasNewTicket) {
+        this.automations.emit({
+          event: AUTOMATION_EVENT.TICKET_CREATED,
+          ticket: ticketSnapshot,
+          payload: {
+            ticketId: ticket.id,
+            channelId: channelId,
+            sender: req.sender,
+            subject: req.subject ?? null,
+            body: req.content,
+            hourIst,
+            dayOfWeekIst,
+          },
+        });
+      }
+      if (reopenedFromResolved) {
+        // Ingest-driven reopen: a customer replied to a RESOLVED
+        // ticket within the configured reopen window. The post-txn
+        // ticket row shows status=OPEN; we tell rules "the ticket
+        // went from RESOLVED to OPEN" so automations can re-tag /
+        // re-route /etc.
+        this.automations.emit({
+          event: AUTOMATION_EVENT.TICKET_REOPENED,
+          ticket: ticketSnapshot,
+          payload: {
+            ticketId: ticket.id,
+            newStatus: ticket.status,
+            hourIst,
+            dayOfWeekIst,
+          },
+        });
+      }
     }
 
     // Email ingest intentionally does NOT engage the bot runtime.

@@ -419,7 +419,88 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
     inReplyTo,
     references: references.length > 0 ? references : undefined,
     attachments: attachments.length > 0 ? attachments : undefined,
+    isAutoSubmitted: detectAutoSubmitted(parsed, sender, fromAddress),
   };
+}
+
+/**
+ * True when the inbound looks machine-generated. Signals, OR'd:
+ *   - `Auto-Submitted` header present and not literally `no` (RFC 3834)
+ *   - `Precedence: bulk|list|junk|auto_reply` (RFC 2076 convention)
+ *   - `X-Auto-Response-Suppress` set (Outlook)
+ *   - `Content-Type: multipart/report; report-type=delivery-status`
+ *     (DSN — bounce from a receiving MTA)
+ *   - Sender local-part matches `mailer-daemon`, `postmaster`,
+ *     `noreply`, `no-reply`, `donotreply`, `do-not-reply`
+ *
+ * The gate uses the loosest-plausible interpretation on purpose:
+ * false positives (we fail to auto-reply once to a legitimately
+ * no-reply-named human) cost nothing; false negatives (we auto-reply
+ * to a bounce) are what spawned ticket #1768's infinite loop.
+ */
+function detectAutoSubmitted(
+  parsed: ParsedMail,
+  sender: string | null,
+  fromAddress: string | null,
+): boolean {
+  const headers = parsed.headers;
+  const headerString = (key: string): string | null => {
+    if (!headers || typeof headers.get !== 'function') return null;
+    const raw = headers.get(key);
+    if (!raw) return null;
+    if (typeof raw === 'string') return raw.toLowerCase();
+    if (Array.isArray(raw)) {
+      return raw
+        .map((v) => (typeof v === 'string' ? v : ''))
+        .join(' ')
+        .toLowerCase();
+    }
+    return null;
+  };
+
+  const autoSubmitted = headerString('auto-submitted');
+  if (autoSubmitted && autoSubmitted.trim() !== 'no') return true;
+
+  const precedence = headerString('precedence');
+  if (precedence) {
+    const trimmed = precedence.trim();
+    if (
+      trimmed === 'bulk' ||
+      trimmed === 'list' ||
+      trimmed === 'junk' ||
+      trimmed === 'auto_reply'
+    ) {
+      return true;
+    }
+  }
+
+  if (headerString('x-auto-response-suppress')) return true;
+
+  const contentType = headerString('content-type');
+  if (
+    contentType &&
+    contentType.includes('multipart/report') &&
+    contentType.includes('delivery-status')
+  ) {
+    return true;
+  }
+
+  const addr = (sender ?? fromAddress ?? '').toLowerCase();
+  const localPart = addr.split('@')[0] ?? '';
+  const NO_REPLY_LOCALS = new Set([
+    'mailer-daemon',
+    'mailerdaemon',
+    'postmaster',
+    'noreply',
+    'no-reply',
+    'donotreply',
+    'do-not-reply',
+    'bounces',
+    'bounce',
+  ]);
+  if (NO_REPLY_LOCALS.has(localPart)) return true;
+
+  return false;
 }
 
 function normaliseReferences(raw: string | string[] | undefined): string[] {

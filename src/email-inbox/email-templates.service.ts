@@ -17,8 +17,8 @@ import {
   MessageDirection,
   TicketActivity,
 } from '../database/enums';
-import { Ticket } from '../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entity';
+import { Ticket } from '../tickets/entities/ticket.entity';
 import { TemplateVariableResolverService } from '../whatsapp-inbox/template-variable-resolver.service';
 import {
   extractVariableReferences,
@@ -101,10 +101,7 @@ export function normalizeBodyHtml(input: string): string {
 }
 
 function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
@@ -213,7 +210,10 @@ export class EmailTemplatesService {
     //   REPLY must NOT carry a subject (it inherits "Re: <original>"
     //     from the thread at send time).
     const trimmedSubject = (dto.subject ?? '').trim();
-    if (dto.kind === EmailTemplateKind.OUTREACH && trimmedSubject.length === 0) {
+    if (
+      dto.kind === EmailTemplateKind.OUTREACH &&
+      trimmedSubject.length === 0
+    ) {
       throw new BadRequestException(
         'Outreach templates require a subject line.',
       );
@@ -225,7 +225,9 @@ export class EmailTemplatesService {
     // (subject doesn't exist); OUTREACH scans subject + body.
     const refs = Array.from(
       new Set([
-        ...(persistedSubject ? extractVariableReferences(persistedSubject) : []),
+        ...(persistedSubject
+          ? extractVariableReferences(persistedSubject)
+          : []),
         ...extractVariableReferences(dto.bodyHtml),
       ]),
     );
@@ -317,7 +319,7 @@ export class EmailTemplatesService {
 
     // Resolve the variable → value map once; use it for both subject
     // and body renders so a value only lands once per send.
-    let replacementMap: Record<string, string> = {};
+    const replacementMap: Record<string, string> = {};
     if (template.variableMapping && template.variableMapping.length > 0) {
       const needingResolve = template.variableMapping
         .filter((m) => {
@@ -423,7 +425,7 @@ export class EmailTemplatesService {
       order: { createdAt: 'ASC' },
     });
 
-    let replacementMap: Record<string, string> = {};
+    const replacementMap: Record<string, string> = {};
     if (template.variableMapping && template.variableMapping.length > 0) {
       const names = template.variableMapping.map((m) => m.name);
       const resolved = await this.resolver.resolveForTicket(ticket.id, names);
@@ -523,6 +525,32 @@ export class EmailTemplatesService {
       );
     }
 
+    // Loop brake #2 (ticket #1768): never auto-reply TO a known
+    // non-interactive address. The ingest-side detector catches the
+    // common cases (bounce classification suppresses MESSAGE_RECEIVED
+    // so the engine never fires), but defense-in-depth: even if a
+    // noreply@ address slipped through as a "real" message, the
+    // template send refuses to deliver to it. Automation-driven
+    // sends only — human agents can still reply manually via the
+    // ticket composer if they decide the recipient is reachable.
+    const recipientLocal = customerEmail.split('@')[0]?.toLowerCase() ?? '';
+    const NO_REPLY_LOCALS = new Set([
+      'mailer-daemon',
+      'mailerdaemon',
+      'postmaster',
+      'noreply',
+      'no-reply',
+      'donotreply',
+      'do-not-reply',
+      'bounces',
+      'bounce',
+    ]);
+    if (NO_REPLY_LOCALS.has(recipientLocal)) {
+      throw new BadRequestException(
+        `Refusing to auto-send template to non-interactive recipient (${customerEmail}).`,
+      );
+    }
+
     // Thread anchor only matters for REPLY templates.
     const lastInbound =
       template.kind === EmailTemplateKind.REPLY
@@ -557,7 +585,7 @@ export class EmailTemplatesService {
     // Resolve variables + render. Mirrors the testSend path's
     // resolution semantics: override is never present here (automation
     // doesn't carry one), so every variable goes resolver → fallback.
-    let replacementMap: Record<string, string> = {};
+    const replacementMap: Record<string, string> = {};
     if (template.variableMapping && template.variableMapping.length > 0) {
       const names = template.variableMapping.map((m) => m.name);
       const resolved = await this.resolver.resolveForTicket(ticket.id, names);
@@ -607,6 +635,11 @@ export class EmailTemplatesService {
           ? (lastInbound?.external_message_id ?? null)
           : null,
       references,
+      // sendOnTicket is only called by the automation engine's
+      // send_email_template action; every call is machine-triggered.
+      // Stamping Auto-Submitted: auto-replied here tells downstream
+      // auto-responders to drop us instead of bouncing / responding.
+      autoSubmitted: true,
     });
 
     try {

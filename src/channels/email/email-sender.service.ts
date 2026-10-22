@@ -55,6 +55,16 @@ export interface OutboundEmailReply {
    * attachments part on the message.
    */
   attachments?: OutboundEmailAttachment[];
+  /**
+   * True when this send is an automated reply (e.g. OOH template
+   * fired by the automation engine). Adds the `Auto-Submitted:
+   * auto-replied` header per RFC 3834 so downstream auto-responders
+   * on the recipient side skip us instead of bouncing back. One
+   * half of the ticket #1768 loop-brake (the other half is the
+   * ingest-side detector that stops us from auto-replying TO
+   * someone else's auto-reply).
+   */
+  autoSubmitted?: boolean;
 }
 
 export interface OutboundEmailResult {
@@ -115,6 +125,12 @@ export class EmailSenderService {
         input.references && input.references.length > 0
           ? input.references
           : undefined,
+      // RFC 3834 — mark automation sends so other MTAs' auto-responders
+      // don't auto-reply to us and spawn the loop ticket #1768 fell
+      // into. Omitted on human-authored replies (regular agent email).
+      headers: input.autoSubmitted
+        ? { 'Auto-Submitted': 'auto-replied' }
+        : undefined,
       // Fetch each object into memory and hand nodemailer a Buffer.
       // Sequential to keep the peak memory footprint bounded (10
       // attachments × 25 MB cap = ≤ 250 MB worst case); parallelising
