@@ -2271,6 +2271,7 @@ function applyMessageSearch(
 function buildTicketSnapshot(detail: TicketDetail): {
   id: string;
   channelId: string;
+  channelType: ChannelType;
   status: TicketStatus;
   tags: string[];
   assigneeId: string | null;
@@ -2280,6 +2281,7 @@ function buildTicketSnapshot(detail: TicketDetail): {
   return {
     id: detail.id,
     channelId: detail.channelId,
+    channelType: detail.channelType,
     status: detail.status,
     tags: detail.tags,
     assigneeId: detail.assignee?.id ?? null,

@@ -459,6 +459,7 @@ export class EmailInboxService {
     const ticketSnapshot = {
       id: ticket.id,
       channelId: ticket.channel_id,
+      channelType: ticket.channel_type,
       status: ticket.status,
       tags: ticket.tags ?? [],
       assigneeId: ticket.assignee,

@@ -78,6 +78,9 @@ export class WebhooksController {
       ticket: {
         id: '',
         channelId: body.channelId,
+        // Webhooks are source-agnostic — rules on `webhook.custom`
+        // should key on event.name, not ticket.channelType.
+        channelType: null,
         status: TicketStatus.OPEN,
         tags: [],
         assigneeId: null,

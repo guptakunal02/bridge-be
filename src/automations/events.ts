@@ -1,4 +1,4 @@
-import { TicketStatus } from '../database/enums';
+import { ChannelType, TicketStatus } from '../database/enums';
 
 /**
  * V1 automation events. String literals (not an enum) so the DB
@@ -35,6 +35,12 @@ export type AutomationEventName =
 export interface TicketSnapshot {
   id: string;
   channelId: string;
+  /**
+   * Channel this ticket arrived on. Lets rules scope by medium —
+   * e.g. OOH auto-reply only on EMAIL, template re-engagement only
+   * on WHATSAPP. `null` only on the webhook sentinel (no ticket).
+   */
+  channelType: ChannelType | null;
   status: TicketStatus;
   tags: string[];
   assigneeId: string | null;

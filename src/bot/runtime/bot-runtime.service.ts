@@ -569,6 +569,7 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
         ticket: {
           id: after.id,
           channelId: after.channel_id,
+          channelType: after.channel_type,
           status: after.status,
           tags: after.tags ?? [],
           assigneeId: after.assignee,
@@ -681,6 +682,7 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
         ticket: {
           id: after.id,
           channelId: after.channel_id,
+          channelType: after.channel_type,
           status: after.status,
           tags: after.tags ?? [],
           assigneeId: after.assignee,
