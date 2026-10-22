@@ -62,9 +62,9 @@ function makeQB(opts: QBOpts = {}): Record<string, AnyFn> {
     'whereInIds',
   ];
   for (const m of chain) qb[m] = jest.fn(() => qb);
-  qb.execute = jest.fn(async () => opts.execute ?? { affected: 1 });
-  qb.getOne = jest.fn(async () => opts.getOne ?? null);
-  qb.getMany = jest.fn(async () => opts.getMany ?? []);
+  qb.execute = jest.fn(() => Promise.resolve(opts.execute ?? { affected: 1 }));
+  qb.getOne = jest.fn(() => Promise.resolve(opts.getOne ?? null));
+  qb.getMany = jest.fn(() => Promise.resolve(opts.getMany ?? []));
   return qb;
 }
 
@@ -82,8 +82,8 @@ function makeRepo(): RepoMock {
     findOne: jest.fn(),
     findOneOrFail: jest.fn(),
     find: jest.fn(),
-    update: jest.fn(async () => ({ affected: 1 })),
-    save: jest.fn(async (x: unknown) => x),
+    update: jest.fn(() => Promise.resolve({ affected: 1 })),
+    save: jest.fn((x: unknown) => Promise.resolve(x)),
     createQueryBuilder: jest.fn(() => makeQB()),
   };
 }
@@ -117,14 +117,15 @@ function buildService(wire?: {
 
   // Intercept .set() on any QB so tests see what was written.
   const wrap = (repo: RepoMock) => {
-    const originalCQB = repo.createQueryBuilder.getMockImplementation() ?? (() => makeQB());
+    const originalCQB =
+      repo.createQueryBuilder.getMockImplementation() ?? (() => makeQB());
     repo.createQueryBuilder = jest.fn((...args: unknown[]) => {
       const qb = originalCQB(...args) as Record<string, AnyFn>;
       const originalSet = qb.set as jest.Mock;
       qb.set = jest.fn((...setArgs: unknown[]) => {
         const patch = setArgs[0] as Record<string, unknown>;
         ticketUpdates.push(patch);
-        return (originalSet as jest.Mock)(patch);
+        return originalSet(patch) as unknown;
       }) as AnyFn;
       return qb;
     });
@@ -132,10 +133,11 @@ function buildService(wire?: {
   wrap(ticketRepo);
 
   // logRepo.save flattens arrays into savedLogs for assertions.
-  logRepo.save = jest.fn(async (x: unknown) => {
-    if (Array.isArray(x)) savedLogs.push(...(x as Partial<TicketActivityLog>[]));
+  logRepo.save = jest.fn((x: unknown) => {
+    if (Array.isArray(x))
+      savedLogs.push(...(x as Partial<TicketActivityLog>[]));
     else savedLogs.push(x as Partial<TicketActivityLog>);
-    return x;
+    return Promise.resolve(x);
   });
 
   // The mgr passed into private methods — its getRepository routes
@@ -229,7 +231,7 @@ describe('EmailInboxService.reopenResolved', () => {
     ctx.ticketRepo.findOne.mockResolvedValue({
       id: 't1',
       assignee: USER_OFFLINE_ID,
-    } as unknown as Ticket);
+    });
     ctx.userRepo.findOne
       .mockResolvedValueOnce(member(USER_OFFLINE_ID, UserStatus.OFFLINE))
       .mockResolvedValueOnce(botUser()); // loadBot
@@ -259,7 +261,7 @@ describe('EmailInboxService.reopenResolved', () => {
     ctx.ticketRepo.findOne.mockResolvedValue({
       id: 't1',
       assignee: USER_ONLINE_ID,
-    } as unknown as Ticket);
+    });
     ctx.userRepo.findOne.mockResolvedValue(
       member(USER_ONLINE_ID, UserStatus.ONLINE),
     );
@@ -287,7 +289,7 @@ describe('EmailInboxService.reopenResolved', () => {
     ctx.ticketRepo.findOne.mockResolvedValue({
       id: 't1',
       assignee: BOT_ID,
-    } as unknown as Ticket);
+    });
     ctx.userRepo.findOne.mockResolvedValue(botUser());
 
     const result = await (
@@ -307,7 +309,7 @@ describe('EmailInboxService.reopenResolved', () => {
     ctx.ticketRepo.findOne.mockResolvedValue({
       id: 't1',
       assignee: USER_OFFLINE_ID,
-    } as unknown as Ticket);
+    });
     ctx.userRepo.findOne
       .mockResolvedValueOnce(member(USER_OFFLINE_ID, UserStatus.OFFLINE))
       .mockResolvedValueOnce(null); // BOT missing
@@ -330,7 +332,7 @@ describe('EmailInboxService.reopenResolved', () => {
     ctx.ticketRepo.findOne.mockResolvedValue({
       id: 't1',
       assignee: USER_ONLINE_ID,
-    } as unknown as Ticket);
+    });
     ctx.userRepo.findOne.mockResolvedValue(
       member(USER_ONLINE_ID, UserStatus.ONLINE),
     );
@@ -343,7 +345,7 @@ describe('EmailInboxService.reopenResolved', () => {
       qb.set = jest.fn((...args: unknown[]) => {
         const patch = args[0] as Record<string, unknown>;
         ctx.ticketUpdates.push(patch);
-        return (originalSet as jest.Mock)(patch);
+        return originalSet(patch) as unknown;
       }) as AnyFn;
       return qb;
     });
@@ -373,12 +375,14 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
     });
   }
 
-  function stubRouting(routed: {
-    teamId: string;
-    matchedRule?: { name: string };
-  } | null) {
+  function stubRouting(
+    routed: {
+      teamId: string;
+      matchedRule?: { name: string };
+    } | null,
+  ) {
     return {
-      routeFacts: jest.fn(async () => routed),
+      routeFacts: jest.fn(() => Promise.resolve(routed)),
     };
   }
 
@@ -394,10 +398,9 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
       tags: [],
     } as unknown as Ticket;
 
-    await (ctx.service as unknown as EmailInboxPrivate).rerouteOnCustomerMessage(
-      ctx.mgr,
-      ticket,
-    );
+    await (
+      ctx.service as unknown as EmailInboxPrivate
+    ).rerouteOnCustomerMessage(ctx.mgr, ticket);
 
     // No team-change log, no UPDATE patch.
     expect(ctx.savedLogs).toHaveLength(0);
@@ -410,10 +413,12 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
     });
     wireFirstInbound(ctx);
     // Team lookups for the activity log.
-    ctx.teamRepo.findOne.mockImplementation(async (q: { where: { id?: string } }) => {
-      if (q.where.id === 'team-a') return { id: 'team-a', name: 'General' };
-      if (q.where.id === 'team-b') return { id: 'team-b', name: 'OOH' };
-      return null;
+    ctx.teamRepo.findOne.mockImplementation((q: { where: { id?: string } }) => {
+      if (q.where.id === 'team-a')
+        return Promise.resolve({ id: 'team-a', name: 'General' });
+      if (q.where.id === 'team-b')
+        return Promise.resolve({ id: 'team-b', name: 'OOH' });
+      return Promise.resolve(null);
     });
     // Current assignee is a human (not BOT) and IS still in the new team.
     ctx.userRepo.findOne.mockResolvedValue(
@@ -433,10 +438,9 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
       tags: [],
     } as unknown as Ticket;
 
-    await (ctx.service as unknown as EmailInboxPrivate).rerouteOnCustomerMessage(
-      ctx.mgr,
-      ticket,
-    );
+    await (
+      ctx.service as unknown as EmailInboxPrivate
+    ).rerouteOnCustomerMessage(ctx.mgr, ticket);
 
     // Reroute log fired with the matched rule name.
     const rerouteLog = ctx.savedLogs.find(
@@ -461,10 +465,9 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
       router: stubRouting({ teamId: 'team-b', matchedRule: { name: 'OOH' } }),
     });
     wireFirstInbound(ctx);
-    ctx.teamRepo.findOne.mockImplementation(async () => ({
-      id: 'team-b',
-      name: 'OOH',
-    }));
+    ctx.teamRepo.findOne.mockImplementation(() =>
+      Promise.resolve({ id: 'team-b', name: 'OOH' }),
+    );
     // First userRepo call: load current assignee (not BOT).
     // Second userRepo call: loadBot for the swap.
     ctx.userRepo.findOne
@@ -482,10 +485,9 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
       tags: [],
     } as unknown as Ticket;
 
-    await (ctx.service as unknown as EmailInboxPrivate).rerouteOnCustomerMessage(
-      ctx.mgr,
-      ticket,
-    );
+    await (
+      ctx.service as unknown as EmailInboxPrivate
+    ).rerouteOnCustomerMessage(ctx.mgr, ticket);
 
     // ticketRepo.update was called with team_id change + assignee=BOT.
     expect(ctx.ticketRepo.update).toHaveBeenCalledWith(
@@ -502,10 +504,9 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
       router: stubRouting({ teamId: 'team-b', matchedRule: { name: 'OOH' } }),
     });
     wireFirstInbound(ctx);
-    ctx.teamRepo.findOne.mockImplementation(async () => ({
-      id: 'team-b',
-      name: 'OOH',
-    }));
+    ctx.teamRepo.findOne.mockImplementation(() =>
+      Promise.resolve({ id: 'team-b', name: 'OOH' }),
+    );
     ctx.userRepo.findOne.mockResolvedValue(botUser());
 
     const ticket = {
@@ -517,10 +518,9 @@ describe('EmailInboxService.rerouteOnCustomerMessage', () => {
       tags: [],
     } as unknown as Ticket;
 
-    await (ctx.service as unknown as EmailInboxPrivate).rerouteOnCustomerMessage(
-      ctx.mgr,
-      ticket,
-    );
+    await (
+      ctx.service as unknown as EmailInboxPrivate
+    ).rerouteOnCustomerMessage(ctx.mgr, ticket);
 
     expect(ctx.ticketRepo.update).toHaveBeenCalledWith(
       { id: 't1' },
