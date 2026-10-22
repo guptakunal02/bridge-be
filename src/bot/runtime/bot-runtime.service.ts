@@ -15,6 +15,7 @@ import {
   BotStepType,
   BotTrigger,
   TicketActivity,
+  TicketStatus,
 } from '../../database/enums';
 import { RuleEvaluatorService } from '../../rules/rule-evaluator.service';
 import type { ConditionTree } from '../../rules/rule-evaluator.service';
@@ -34,6 +35,7 @@ import type {
   FunctionStepConfig,
   HandoffStepConfig,
   MessageStepConfig,
+  ResolveStepConfig,
 } from './types';
 
 /**
@@ -411,6 +413,12 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
           await this.sessions.save(session);
           return;
         }
+
+        case BotStepType.RESOLVE: {
+          const cfg = step.config as ResolveStepConfig;
+          await this.applyResolve(session, cfg);
+          return;
+        }
       }
     }
 
@@ -581,6 +589,114 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       this.logger.warn(
         `BOT_HANDOFF emit failed for ticket=${session.ticket_id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Mark the ticket RESOLVED and end the session. Mirrors applyHandoff
+   * in shape (txn for the mutations, post-commit event emit, errors
+   * from the emit swallowed). Idempotent on the already-RESOLVED
+   * case — if the ticket is somehow already closed, we still end the
+   * session cleanly but skip the mutations and emit nothing.
+   *
+   * Tag application: if cfg.tag is set and not already on the ticket,
+   * it's added as part of the same txn so an admin's "require tag to
+   * resolve" setting doesn't block the resolve. If no tag is
+   * configured AND the ticket has none, we still resolve — the
+   * require-tag setting applies to agent-driven resolves, not bot
+   * flows (the admin opted into bot-driven close by placing the
+   * step).
+   */
+  private async applyResolve(
+    session: BotSession,
+    cfg: ResolveStepConfig,
+  ): Promise<void> {
+    const before = await this.tickets.findOne({
+      where: { id: session.ticket_id },
+    });
+    if (!before) {
+      // Ticket deleted mid-flow — nothing to resolve. Mark the
+      // session completed and move on.
+      session.status = BotSessionStatus.COMPLETED;
+      session.current_step_id = null;
+      await this.sessions.save(session);
+      return;
+    }
+    const previousStatus = before.status;
+    const alreadyResolved = previousStatus === TicketStatus.RESOLVED;
+
+    await this.dataSource.transaction(async (mgr: EntityManager) => {
+      const ticketRepo = mgr.getRepository(Ticket);
+      const logRepo = mgr.getRepository(TicketActivityLog);
+      const sessionRepo = mgr.getRepository(BotSession);
+
+      if (!alreadyResolved) {
+        const nextTags = Array.from(
+          new Set([
+            ...(before.tags ?? []),
+            ...(cfg.tag ? [cfg.tag] : []),
+          ]),
+        );
+        await ticketRepo.update(
+          { id: session.ticket_id },
+          {
+            status: TicketStatus.RESOLVED,
+            resolved_at: new Date(),
+            tags: nextTags,
+          },
+        );
+        await logRepo.save({
+          ticket_id: session.ticket_id,
+          event: TicketActivity.MARKED_RESOLVED,
+          actor_id: null,
+          log: cfg.note
+            ? `Resolved by bot: ${cfg.note}`
+            : 'Resolved by bot',
+        });
+      }
+
+      session.status = BotSessionStatus.COMPLETED;
+      session.current_step_id = null;
+      await sessionRepo.save(session);
+    });
+
+    if (alreadyResolved) return;
+
+    // Post-commit: emit TICKET_RESOLVED so rules dependent on close
+    // (NPS send, archive flow, etc.) fire the same way an
+    // agent-driven resolve would. Swallow emit errors — the resolve
+    // itself has committed; a bad emit must not surface as a session
+    // failure.
+    try {
+      const after = await this.tickets.findOne({
+        where: { id: session.ticket_id },
+      });
+      if (!after) return;
+      const now = new Date();
+      this.automations.emit({
+        event: AUTOMATION_EVENT.TICKET_RESOLVED,
+        ticket: {
+          id: after.id,
+          channelId: after.channel_id,
+          status: after.status,
+          tags: after.tags ?? [],
+          assigneeId: after.assignee,
+          teamId: after.team_id,
+          subject: after.thread_key ?? null,
+        },
+        payload: {
+          ticketId: after.id,
+          previousStatus,
+          hourIst: computeHourIst(now),
+          dayOfWeekIst: computeDayOfWeekIst(now),
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `TICKET_RESOLVED emit failed for ticket=${session.ticket_id}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

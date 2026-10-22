@@ -70,6 +70,26 @@ export interface DelayStepConfig {
 }
 
 /**
+ * Terminal step that marks the ticket RESOLVED. Mirrors Handoff in
+ * shape but with a close-out intent instead of a hand-to-queue one.
+ *
+ * `tag` (optional) is applied to the ticket BEFORE the resolve so
+ * admins can tag flow-closed tickets (e.g. "bot-resolved",
+ * "tracking-shared") for reporting + to satisfy the "require tag to
+ * resolve" workspace setting without forcing the admin to add a
+ * separate TagStep type. Idempotent — if the tag is already on the
+ * ticket, we don't duplicate.
+ *
+ * `note` (optional) lands in the ticket activity log alongside the
+ * MARKED_RESOLVED event so the trail shows WHY the bot resolved
+ * ("Customer confirmed tracking shared", "Return initiated", etc.).
+ */
+export interface ResolveStepConfig {
+  tag?: string;
+  note?: string;
+}
+
+/**
  * Every message the runtime asks the ChannelAdapter to send. Options
  * are optional — a message without them is pure text; with them it's
  * text plus a button list the channel adapter renders however its

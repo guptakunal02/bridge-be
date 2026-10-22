@@ -48,6 +48,9 @@ export class StepConfigValidator {
       case BotStepType.DELAY:
         this.validateDelay(cfg, strict);
         return;
+      case BotStepType.RESOLVE:
+        this.validateResolve(cfg);
+        return;
     }
   }
 
@@ -234,6 +237,25 @@ export class StepConfigValidator {
     if (cfg.note !== undefined && typeof cfg.note !== 'string') {
       throw new BadRequestException(
         'Handoff step: config.note must be a string when set',
+      );
+    }
+  }
+
+  /**
+   * Resolve step validator. Both fields optional — a bare Resolve
+   * step (no tag, no note) is a valid "close the ticket, nothing
+   * more to say" terminator. Strict mode doesn't add requirements
+   * (there's nothing you MUST configure).
+   */
+  private validateResolve(cfg: Record<string, unknown>): void {
+    if (cfg.tag !== undefined && typeof cfg.tag !== 'string') {
+      throw new BadRequestException(
+        'Resolve step: config.tag must be a string when set',
+      );
+    }
+    if (cfg.note !== undefined && typeof cfg.note !== 'string') {
+      throw new BadRequestException(
+        'Resolve step: config.note must be a string when set',
       );
     }
   }

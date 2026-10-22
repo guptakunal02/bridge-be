@@ -80,6 +80,7 @@ export enum BotStepType {
   BRANCH = 'branch',
   HANDOFF = 'handoff',
   DELAY = 'delay',
+  RESOLVE = 'resolve',
 }
 
 /**
