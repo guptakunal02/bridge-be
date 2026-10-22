@@ -331,6 +331,13 @@ export class TicketsService {
     in_followup: number;
     waiting: number;
     resolved: number;
+    /**
+     * Subset of `open` where a bot_session is currently ACTIVE on the
+     * ticket. Backs the dedicated "Bot" inbox tab; the FE renders
+     * Open as `open - bot` and Bot as `bot` so the same ticket never
+     * appears under both tabs.
+     */
+    bot: number;
   }> {
     const qb = this.tickets
       .createQueryBuilder('t')
@@ -366,12 +373,49 @@ export class TicketsService {
     const in_followup = by.get(TicketStatus.IN_FOLLOWUP) ?? 0;
     const waiting = by.get(TicketStatus.WAITING) ?? 0;
     const resolved = by.get(TicketStatus.RESOLVED) ?? 0;
+
+    // Bot count — same scope / channel / assignee / search filters as
+    // the status counts above, but joined with bot_session to pick
+    // out OPEN tickets with an ACTIVE session. Rebuilding the
+    // predicates on a fresh query builder keeps the logic in sync
+    // without threading a shared base — if we expand the predicate
+    // list later, keep both in step.
+    const botQb = this.tickets
+      .createQueryBuilder('t')
+      .innerJoin(
+        'bot_session',
+        'bs',
+        'bs.ticket_id = t.id AND bs.status = :botActive',
+        { botActive: 'active' },
+      )
+      .where('t.status = :openStatus', { openStatus: TicketStatus.OPEN });
+    if (query.channelIds && query.channelIds.length > 0) {
+      botQb.andWhere('t.channel_id IN (:...channelIds)', {
+        channelIds: query.channelIds,
+      });
+    } else if (query.channelId) {
+      botQb.andWhere('t.channel_id = :channelId', {
+        channelId: query.channelId,
+      });
+    }
+    if (query.assigneeIds && query.assigneeIds.length > 0) {
+      botQb.andWhere('t.assignee IN (:...assigneeIds)', {
+        assigneeIds: query.assigneeIds,
+      });
+    }
+    applyMessageSearch(botQb, query.q);
+    await this.applyScope(botQb, query.scope ?? 'all', actingUser, {
+      widenForSearch: Boolean(query.q?.trim()),
+    });
+    const bot = await botQb.getCount();
+
     return {
       all: open + in_followup + waiting + resolved,
       open,
       in_followup,
       waiting,
       resolved,
+      bot,
     };
   }
 
