@@ -3,8 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { ChannelAdapter } from '../bot/runtime/channel-adapter';
 import type { OutboundMessage } from '../bot/runtime/types';
-import { ChannelType } from '../database/enums';
+import { Channel } from '../channels/entities/channel.entity';
+import { ChannelType, MessageDirection } from '../database/enums';
 import { Ticket } from '../tickets/entities/ticket.entity';
+import { WhatsappMessage } from './entities/whatsapp-message.entity';
+import type { WhatsappSendResult } from './whatsapp-sender.service';
 import { WhatsappSenderService } from './whatsapp-sender.service';
 
 /**
@@ -14,9 +17,16 @@ import { WhatsappSenderService } from './whatsapp-sender.service';
  *
  *   zero options  → sendText
  *   1-3 options   → sendInteractiveButtons (Meta reply-button UI)
- *   4+ options    → fallback to sendText with a numbered enumeration
- *                   because Meta's button cap is 3; admin should
+ *   4-10 options  → sendInteractiveList (bottom-sheet menu)
+ *   11+ options   → fallback to sendText with a numbered enumeration
+ *                   because Meta's list cap is 10; admin should
  *                   restructure the step but we don't lose the send
+ *
+ * After every successful Meta Graph send, a SENT whatsapp_message
+ * row is persisted so Bridge's ticket UI shows the bot's outbound
+ * alongside the customer's inbound. Prior to this the agent view
+ * saw only one side of the conversation, which looked like the
+ * bot wasn't responding.
  *
  * Email tickets flow through this adapter today too (bot flows can
  * fire on email trigger). For now we skip-and-log on non-WHATSAPP
@@ -36,6 +46,10 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
   constructor(
     @InjectRepository(Ticket)
     private readonly tickets: Repository<Ticket>,
+    @InjectRepository(Channel)
+    private readonly channels: Repository<Channel>,
+    @InjectRepository(WhatsappMessage)
+    private readonly messages: Repository<WhatsappMessage>,
     private readonly sender: WhatsappSenderService,
   ) {}
 
@@ -67,6 +81,16 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
       return;
     }
 
+    // Load channel once so the persisted SENT row has the business
+    // wa_id in `sender` (mirrors agent-reply persistence). Missing
+    // channel is theoretically impossible (ticket.channel_id is a
+    // FK) but defend defensively — fallback to empty string so the
+    // NOT NULL column still gets written.
+    const channel = await this.channels.findOne({
+      where: { id: ticket.channel_id },
+    });
+    const businessWaId = channel?.inbox_contact ?? '';
+
     const options = input.message.options ?? [];
     // Meta caps button titles at 20 chars but list rows at 24. If any
     // option exceeds the button cap, use list send even when 1-3
@@ -77,11 +101,18 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
     const anyLabelOverButtonCap = options.some((o) => o.label.length > 20);
     try {
       if (options.length === 0) {
-        await this.sender.sendText(waId, input.message.text);
+        const result = await this.sender.sendText(waId, input.message.text);
+        await this.persistSent({
+          ticket,
+          businessWaId,
+          content: input.message.text,
+          messageType: 'text',
+          result,
+        });
         return;
       }
       if (options.length <= 3 && !anyLabelOverButtonCap) {
-        await this.sender.sendInteractiveButtons(
+        const result = await this.sender.sendInteractiveButtons(
           waId,
           input.message.text,
           options.map((o, i) => ({
@@ -89,13 +120,20 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
             title: o.label,
           })),
         );
+        await this.persistSent({
+          ticket,
+          businessWaId,
+          content: input.message.text,
+          messageType: 'interactive',
+          result,
+        });
         return;
       }
       if (options.length <= 10) {
         // 4-10 options: use Meta's list payload (bottom-sheet menu).
         // Row titles are capped at 24 chars; truncation is silent for
         // the same reason as buttons.
-        await this.sender.sendInteractiveList(
+        const result = await this.sender.sendInteractiveList(
           waId,
           input.message.text,
           options.map((o, i) => ({
@@ -103,6 +141,13 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
             title: o.label.slice(0, 24),
           })),
         );
+        await this.persistSent({
+          ticket,
+          businessWaId,
+          content: input.message.text,
+          messageType: 'interactive',
+          result,
+        });
         return;
       }
       // >10 options: Meta's hard cap for list rows. Enumerate inline
@@ -118,10 +163,55 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
         input.message.text +
         '\n\n' +
         options.map((o, i) => `${i + 1}. ${o.label}`).join('\n');
-      await this.sender.sendText(waId, enumerated);
+      const result = await this.sender.sendText(waId, enumerated);
+      await this.persistSent({
+        ticket,
+        businessWaId,
+        content: enumerated,
+        messageType: 'text',
+        result,
+      });
     } catch (err) {
       this.logger.warn(
         `send failed for ticket=${input.ticketId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Record the outbound as a SENT whatsapp_message so the ticket UI
+   * surfaces it. Deliberately swallows DB errors to warn — the Meta
+   * Graph send has already succeeded (customer has the message) and
+   * failing the whole adapter would mark the bot session FAILED,
+   * which is overkill. The side effect: a divergence where the
+   * customer saw a message Bridge's UI doesn't show. Pm2 log is the
+   * forensic trail if that ever matters.
+   */
+  private async persistSent(input: {
+    ticket: Ticket;
+    businessWaId: string;
+    content: string;
+    messageType: 'text' | 'interactive';
+    result: WhatsappSendResult;
+  }): Promise<void> {
+    try {
+      await this.messages.save(
+        this.messages.create({
+          channelId: input.ticket.channel_id,
+          ticket_id: input.ticket.id,
+          type: MessageDirection.SENT,
+          sender: input.businessWaId,
+          content: input.content,
+          external_message_id: input.result.wamid,
+          message_type: input.messageType,
+          raw_payload: input.result.raw ?? null,
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `persistSent failed for ticket=${input.ticket.id} wamid=${input.result.wamid}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
