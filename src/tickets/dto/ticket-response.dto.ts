@@ -100,6 +100,16 @@ export interface TicketListItem {
    * zero. Backs the badge on the navigation rail.
    */
   unreadCount: number;
+  /**
+   * True when a bot_session row for this ticket is currently
+   * BotSessionStatus.ACTIVE — i.e. the bot is actively driving the
+   * conversation. The FE uses this to distinguish `assignee = BOT`
+   * tickets that are actually being handled by the bot (show
+   * "Groot") from ones parked in the FIFO queue waiting on a human
+   * (show "In queue"). Both have `assignee.role === 'BOT'` on the
+   * row — only the session state tells them apart.
+   */
+  botSessionActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -235,6 +245,7 @@ export function toTicketListItem(
   latest: LatestMessageSource | null,
   unreadCount: number = 0,
   customerEmail: string | null = null,
+  botSessionActive: boolean = false,
 ): TicketListItem {
   // Channel-aware presentation: WhatsApp senders are raw wa_ids
   // (digits only) in the DB — format for display so the inbox row's
@@ -270,6 +281,7 @@ export function toTicketListItem(
     waitingAction: ticket.waiting_action,
     previousTicketId: ticket.previous_ticket_id ?? null,
     unreadCount,
+    botSessionActive,
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
   };
@@ -288,6 +300,7 @@ export function toTicketDetail(
   messages: EmailMessage[],
   activity: TicketActivityLog[],
   notes: TicketNote[],
+  botSessionActive: boolean = false,
 ): TicketDetail {
   const latest = messages.length
     ? (messages[messages.length - 1] ?? null)
@@ -315,7 +328,7 @@ export function toTicketDetail(
   );
   const customerEmail = firstInbound?.sender ?? null;
   return {
-    ...toTicketListItem(ticket, latest, 0, customerEmail),
+    ...toTicketListItem(ticket, latest, 0, customerEmail, botSessionActive),
     messages: mappedMessages,
     activity: activity.map(toActivity),
     notes: notes.map(toNote),

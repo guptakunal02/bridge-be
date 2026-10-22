@@ -232,18 +232,24 @@ export class TicketsService {
       .filter((t) => t.assignee === actingUser.id)
       .map((t) => t.id);
     const ticketIds = rows.map((t) => t.id);
-    const [latestByTicket, unreadByTicket, customerEmailByTicket] =
-      await Promise.all([
-        this.fetchLatestMessages(ticketIds),
-        this.unreadCountsFor(myTicketIds, actingUser.id),
-        this.fetchFirstInboundSenders(ticketIds),
-      ]);
+    const [
+      latestByTicket,
+      unreadByTicket,
+      customerEmailByTicket,
+      activeBotSessionTicketIds,
+    ] = await Promise.all([
+      this.fetchLatestMessages(ticketIds),
+      this.unreadCountsFor(myTicketIds, actingUser.id),
+      this.fetchFirstInboundSenders(ticketIds),
+      this.fetchActiveBotSessionTicketIds(ticketIds),
+    ]);
     return rows.map((t) =>
       toTicketListItem(
         t,
         latestByTicket.get(t.id) ?? null,
         unreadByTicket.get(t.id) ?? 0,
         customerEmailByTicket.get(t.id) ?? null,
+        activeBotSessionTicketIds.has(t.id),
       ),
     );
   }
@@ -574,7 +580,15 @@ export class TicketsService {
       }),
     ]);
 
-    return toTicketDetail(ticket, messages, activity, notes);
+    const activeBotSessionTicketIds =
+      await this.fetchActiveBotSessionTicketIds([ticket.id]);
+    return toTicketDetail(
+      ticket,
+      messages,
+      activity,
+      notes,
+      activeBotSessionTicketIds.has(ticket.id),
+    );
   }
 
   /**
@@ -1862,6 +1876,29 @@ export class TicketsService {
     for (const r of rows) {
       if (r.sender) out.set(String(r.ticket_id), r.sender);
     }
+    return out;
+  }
+
+  /**
+   * Return the subset of ticket IDs that have an ACTIVE bot_session.
+   * One row per ticket at most (bot_session.ticket_id is UNIQUE in
+   * the schema), so a bare WHERE … IN query is enough. Uses the
+   * tickets repo for the raw query — we don't need a dedicated
+   * bot_session repo injection just for this read.
+   */
+  private async fetchActiveBotSessionTicketIds(
+    ticketIds: string[],
+  ): Promise<Set<string>> {
+    if (ticketIds.length === 0) return new Set();
+    const rows: Array<{ ticket_id: string }> = await this.tickets.query(
+      `SELECT ticket_id
+         FROM public.bot_session
+        WHERE ticket_id = ANY($1::bigint[])
+          AND status = 'active'`,
+      [ticketIds],
+    );
+    const out = new Set<string>();
+    for (const r of rows) out.add(String(r.ticket_id));
     return out;
   }
 }
