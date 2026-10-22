@@ -132,8 +132,14 @@ export class EmailInboxService {
       return null;
     }
     if (channelInbox && !receiverLower.includes(channelInbox)) {
+      // receiverLower is the union of TO + CC + Delivered-To (built
+      // at parse time). If our inbox isn't in that union, this
+      // genuinely wasn't addressed to us — likely a stray BCC trail,
+      // misrouted alias, or forgotten mailing list. Log the full
+      // union so the next debug session doesn't have to guess which
+      // header surface was wrong.
       this.logger.log(
-        `not-addressed-to-us drop: channel=${channelId} inbox=${channelInbox} to=${receiverLower.join(',')} sender=${req.sender} external_message_id=${req.external_message_id}`,
+        `not-addressed-to-us drop: channel=${channelId} inbox=${channelInbox} recipients=${receiverLower.join(',')} sender=${req.sender} external_message_id=${req.external_message_id}`,
       );
       return null;
     }

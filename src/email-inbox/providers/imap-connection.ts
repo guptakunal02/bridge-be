@@ -357,7 +357,28 @@ function toIngestDto(parsed: ParsedMail): IngestEmailInbox | null {
   // instead of the customer.
   const fromAddress = firstAddress(parsed.from);
   const sender = firstAddress(parsed.replyTo) ?? fromAddress;
-  const receiver = allAddresses(parsed.to);
+  // Receiver list used by the "not-addressed-to-us" gate. Union of
+  // THREE sources so BCC / CC / forwarded / alias deliveries all
+  // register our inbox as a recipient:
+  //   * parsed.to  — the direct TO recipients
+  //   * parsed.cc  — the CC recipients (customers who CC our inbox
+  //                  on a mail primarily aimed elsewhere)
+  //   * Delivered-To — stamped by the receiving MTA (Gmail/Postfix)
+  //                    on every message delivered to this mailbox
+  //                    REGARDLESS of what the sender wrote in TO.
+  //                    This is what catches BCC: the BCC header is
+  //                    stripped before delivery, so the only trace
+  //                    of "I was BCC'd on this" is Delivered-To.
+  // Delivered-To is unspoofable from the sender side — the receiving
+  // server stamps it after accepting the message, so trusting it
+  // doesn't open any gates we wouldn't want open.
+  const receiver = Array.from(
+    new Set([
+      ...allAddresses(parsed.to),
+      ...allAddresses(parsed.cc),
+      ...deliveredToAddresses(parsed.headers),
+    ]),
+  );
   const externalMessageId = parsed.messageId?.trim();
 
   if (!sender || receiver.length === 0 || !externalMessageId) return null;
@@ -424,6 +445,42 @@ function allAddresses(header: ParsedMail['to']): string[] {
     .flatMap((h) => h.value ?? [])
     .map((v) => v.address?.trim().toLowerCase())
     .filter((a): a is string => Boolean(a));
+}
+
+/**
+ * Pull every address out of the `Delivered-To` header(s). mailparser
+ * exposes raw headers via a Map (lowercased keys); the value for
+ * delivered-to can be a single string, an array of strings (one per
+ * header line — common on forwarded mail that was Delivered-To
+ * through several hops), or a parsed address object if mailparser
+ * decided to recognise it. Handle all three defensively; return
+ * trimmed, lowercased, deduped addresses.
+ */
+function deliveredToAddresses(headers: ParsedMail['headers']): string[] {
+  if (!headers || typeof headers.get !== 'function') return [];
+  const raw = headers.get('delivered-to');
+  if (!raw) return [];
+  const strings: string[] = [];
+  if (typeof raw === 'string') {
+    strings.push(raw);
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === 'string') strings.push(item);
+    }
+  } else if (typeof raw === 'object' && 'value' in raw) {
+    const parsed = raw as AddressObject;
+    for (const v of parsed.value ?? []) {
+      if (v.address) strings.push(v.address);
+    }
+  }
+  // Each string may be a plain address OR "Name <addr@host>" — pull
+  // the bracketed address if present, else the whole thing.
+  return strings
+    .map((s) => {
+      const m = s.match(/<([^>]+)>/);
+      return (m?.[1] ?? s).trim().toLowerCase();
+    })
+    .filter((s) => s.length > 0);
 }
 
 function sleep(ms: number): Promise<void> {
