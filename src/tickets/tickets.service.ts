@@ -375,11 +375,11 @@ export class TicketsService {
     const resolved = by.get(TicketStatus.RESOLVED) ?? 0;
 
     // Bot count — same scope / channel / assignee / search filters as
-    // the status counts above, but joined with bot_session to pick
-    // out OPEN tickets with an ACTIVE session. Rebuilding the
-    // predicates on a fresh query builder keeps the logic in sync
-    // without threading a shared base — if we expand the predicate
-    // list later, keep both in step.
+    // the status counts above, but joined with bot_session + the user
+    // table to pick out OPEN tickets where the bot is actively
+    // driving. "Actively driving" = active session AND assignee is
+    // the BOT user; a human reassignment flips the ticket off the
+    // Bot tab even if the session row happens to still be ACTIVE.
     const botQb = this.tickets
       .createQueryBuilder('t')
       .innerJoin(
@@ -388,6 +388,9 @@ export class TicketsService {
         'bs.ticket_id = t.id AND bs.status = :botActive',
         { botActive: 'active' },
       )
+      .innerJoin('user', 'u', 'u.id = t.assignee AND u.role = :botRole', {
+        botRole: 'BOT',
+      })
       .where('t.status = :openStatus', { openStatus: TicketStatus.OPEN });
     if (query.channelIds && query.channelIds.length > 0) {
       botQb.andWhere('t.channel_id IN (:...channelIds)', {
@@ -1934,11 +1937,19 @@ export class TicketsService {
     ticketIds: string[],
   ): Promise<Set<string>> {
     if (ticketIds.length === 0) return new Set();
+    // "Bot is driving" requires BOTH an active session AND the ticket
+    // assigned to the BOT user — admin-driven reassignment to a human
+    // flips it off the Bot tab immediately even if the session row
+    // happens to still be ACTIVE. Join on ticket + user.role so we
+    // don't need to look up the BOT user's id out-of-band.
     const rows: Array<{ ticket_id: string }> = await this.tickets.query(
-      `SELECT ticket_id
-         FROM public.bot_session
-        WHERE ticket_id = ANY($1::bigint[])
-          AND status = 'active'`,
+      `SELECT bs.ticket_id
+         FROM public.bot_session bs
+         JOIN public.ticket t ON t.id = bs.ticket_id
+         JOIN public."user" u ON u.id = t.assignee
+        WHERE bs.ticket_id = ANY($1::bigint[])
+          AND bs.status = 'active'
+          AND u.role = 'BOT'`,
       [ticketIds],
     );
     const out = new Set<string>();
