@@ -26,6 +26,7 @@ import {
   TicketStatus,
   UserRole,
 } from '../database/enums';
+import { normalizeBodyHtml } from '../email-inbox/email-templates.service';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
@@ -1219,6 +1220,21 @@ export class TicketsService {
       );
     }
 
+    // Derive the HTML body from the plain text when the FE didn't
+    // send one. normalizeBodyHtml wraps paragraphs in <p>, converts
+    // single newlines to <br>, and does an inline Markdown-ish pass
+    // (`**bold**` → <strong>). An agent pasting content with `**`
+    // markers (e.g. from ChatGPT) now sends an email whose recipient
+    // sees actual bold, not literal asterisks. If the FE already
+    // sent HTML, trust it — normalize is idempotent on existing
+    // block-level HTML (see its guard).
+    const resolvedBodyHtml =
+      dto.bodyHtml && dto.bodyHtml.trim().length > 0
+        ? dto.bodyHtml
+        : dto.body
+          ? normalizeBodyHtml(dto.body)
+          : null;
+
     // 1. SMTP send (outside the txn). The sender re-derives each
     //    attachment's URL server-side from `storageKey`, so a
     //    malicious storageUrl on the DTO can't influence the SMTP
@@ -1231,7 +1247,7 @@ export class TicketsService {
       bcc,
       subject,
       body: dto.body,
-      bodyHtml: dto.bodyHtml ?? null,
+      bodyHtml: resolvedBodyHtml,
       inReplyTo: lastInbound.external_message_id,
       references,
       attachments: (dto.attachments ?? []).map((a) => ({
@@ -1258,7 +1274,7 @@ export class TicketsService {
             type: MessageDirection.SENT,
             subject,
             content: dto.body,
-            content_html: dto.bodyHtml ?? null,
+            content_html: resolvedBodyHtml,
             sender: channel.inbox_contact,
             // Store every visible recipient on the timeline row. BCC
             // stays out on purpose (invisible by definition).

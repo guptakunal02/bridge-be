@@ -82,10 +82,29 @@ export function normalizeBodyHtml(input: string): string {
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
         .join('<br>');
-      return `<p>${inner}</p>`;
+      // Inline Markdown pass — bold only, applied AFTER paragraph +
+      // <br> wrapping so the regex doesn't have to understand
+      // newlines. `**text**` → `<strong>text</strong>`; the capture
+      // group is HTML-escaped as a precaution against someone
+      // slipping a tag between the asterisks. Non-greedy match
+      // avoids collapsing distant pairs across unrelated text.
+      // Italics (`*…*`, `_…_`) deliberately skipped — too many
+      // false positives on prices, product names, URL paths.
+      const withBold = inner.replace(
+        /\*\*([\s\S]+?)\*\*/g,
+        (_, body: string) => `<strong>${escapeHtml(body)}</strong>`,
+      );
+      return `<p>${withBold}</p>`;
     })
     .filter((p) => p.length > 7)
     .join('\n');
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /**
