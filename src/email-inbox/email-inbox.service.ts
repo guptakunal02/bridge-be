@@ -512,58 +512,19 @@ export class EmailInboxService {
       });
     }
 
-    // Post-commit sequence — order matters:
-    //
-    //   1. Try to start a bot session first. If a flow matches the
-    //      TICKET_CREATED trigger and its trigger_conditions accept
-    //      the context, the bot takes ownership of the conversation
-    //      and the ticket must STAY on BOT while it drives. A
-    //      subsequent HANDOFF step will set team_id; the next
-    //      capacity-free event drains it to a human then.
-    //
-    //   2. If no flow matched (null returned), the ticket has no
-    //      bot driver — fall through to the FIFO drain so the
-    //      round-robin-chosen agent gets it.
-    //
-    // Reply on an existing ticket: hand to the runtime unconditionally.
-    // If a paused session was parked on a question, it'll advance;
-    // otherwise it's a no-op.
-    let botTookOver = false;
-    try {
-      if (wasNewTicket) {
-        const session = await this.runtime.startSession({
-          ticketId: ticket.id,
-          channelId,
-          trigger: BotTrigger.TICKET_CREATED,
-          initialVariables: buildTicketContext({
-            createdAt: ticket.createdAt,
-            channelType: ChannelType.EMAIL,
-            senderEmail: req.sender,
-            senderPhone: null,
-            subject: req.subject ?? null,
-            tags: ticket.tags ?? [],
-            latestCustomerMessageAt: ticket.createdAt,
-          }),
-        });
-        botTookOver = session !== null;
-      } else {
-        await this.runtime.handleCustomerReply({
-          ticketId: ticket.id,
-          channelId,
-          replyText: req.content,
-        });
-      }
-    } catch {
-      // Runtime errors already logged inside the service. Swallow
-      // so the HTTP call still returns 2xx — the message is safely
-      // persisted regardless. Fall through to the drain below so
-      // a bot failure doesn't strand the ticket on BOT forever.
-    }
-
-    // Only drain when the bot didn't take over. This preserves FIFO
-    // for the human queue while keeping the bot's ticket parked on
-    // BOT until its handoff step runs.
-    if (wasNewTicket && !botTookOver && pickedAssigneeId) {
+    // Email ingest intentionally does NOT engage the bot runtime.
+    // bot_flow has no channel-type filter yet, so an admin's
+    // WhatsApp-targeted TICKET_CREATED flow would silently match
+    // EMAIL ingests too — spawning a bot session the WhatsApp
+    // channel adapter immediately skip-logged (channel_type EMAIL
+    // is not WHATSAPP), leaving tickets parked under the Bot tab
+    // with no outbound. All email tickets drain straight to the
+    // FIFO human queue. handleCustomerReply is skipped too — a
+    // ticket with no active bot session would've no-op'd anyway.
+    // When an email-scoped bot flow is actually needed, add a
+    // channel_scope column on bot_flow + a filter in
+    // BotRuntimeService.pickFlow, then re-engage behind that gate.
+    if (wasNewTicket && pickedAssigneeId) {
       await this.lifecycle.onCapacityFreed(pickedAssigneeId);
     }
 
