@@ -187,11 +187,14 @@ export class EnvVars {
    * admin's behalf. Not involved in verifying INBOUND webhooks (RP
    * doesn't sign inbound POSTs as of 2026-10-23, per their docs).
    * Optional so a dev-mode Bridge without RP wired up still boots.
+   *
+   * Name mirrors RP's header spelling (`x-rp-token`) so an admin
+   * grepping the .env for RP concepts hits the right line.
    */
   @IsOptional()
   @IsString()
   @MinLength(16)
-  RETURN_PRIME_ACCESS_TOKEN?: string;
+  RETURN_PRIME_XRP_TOKEN?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

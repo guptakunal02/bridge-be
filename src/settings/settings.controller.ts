@@ -89,7 +89,7 @@ export class SettingsController {
     const lastEventAt = shopifyDomain
       ? await this.shopify.lastEventAt(shopifyDomain)
       : null;
-    const rpToken = this.config.get('RETURN_PRIME_ACCESS_TOKEN', {
+    const rpToken = this.config.get('RETURN_PRIME_XRP_TOKEN', {
       infer: true,
     });
     const rpLastEventAt = await this.returnPrime.lastEventAt();
