@@ -180,6 +180,18 @@ export class EnvVars {
   @IsString()
   @MinLength(5)
   SHOPIFY_SHOP_DOMAIN?: string;
+
+  /**
+   * Return Prime store access token. Used as the `x-rp-token` header
+   * when Bridge calls Return Prime's register-webhook API on the
+   * admin's behalf. Not involved in verifying INBOUND webhooks (RP
+   * doesn't sign inbound POSTs as of 2026-10-23, per their docs).
+   * Optional so a dev-mode Bridge without RP wired up still boots.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  RETURN_PRIME_ACCESS_TOKEN?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ReturnPrimeWebhooksModule } from '../return-prime-webhooks/return-prime-webhooks.module';
 import { ShopifyWebhooksModule } from '../shopify-webhooks/shopify-webhooks.module';
 import { AppSettingsService } from './app-settings.service';
 import { AppSetting } from './entities/app-setting.entity';
@@ -8,10 +9,10 @@ import { SettingsController } from './settings.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([AppSetting]),
-    // Pulled in so the Integrations endpoint can call
-    // ShopifyWebhooksService.lastEventAt. forwardRef in case a future
-    // ShopifyWebhooksModule change imports back into SettingsModule.
+    // forwardRef in case a platform module ever imports back into
+    // SettingsModule down the line — belt + braces.
     forwardRef(() => ShopifyWebhooksModule),
+    forwardRef(() => ReturnPrimeWebhooksModule),
   ],
   controllers: [SettingsController],
   providers: [AppSettingsService],

@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { EnvVars } from '../config/env.validation';
 import { UserRole } from '../database/enums';
+import { ReturnPrimeWebhooksService } from '../return-prime-webhooks/return-prime-webhooks.service';
 import { ShopifyWebhooksService } from '../shopify-webhooks/shopify-webhooks.service';
 import { AppSettingsService } from './app-settings.service';
 import {
@@ -26,13 +27,22 @@ export interface IntegrationsResponse {
     /** Last webhook received_at for this shop, null when none seen. */
     lastEventAt: string | null;
   };
+  returnPrime: {
+    /** True when the access token env var is set. */
+    configured: boolean;
+    /** ISO timestamp of the most recent RP webhook, null when none seen. */
+    lastEventAt: string | null;
+  };
 }
+
+export type IntegrationPlatform = 'shopify' | 'returnprime';
 
 export interface IntegrationEventRow {
   id: string;
-  platform: 'shopify';
+  platform: IntegrationPlatform;
   topic: string;
-  shopDomain: string;
+  /** Shopify ships `shop_domain` per event; RP doesn't. Null for RP. */
+  shopDomain: string | null;
   receivedAt: string;
   payload: Record<string, unknown>;
 }
@@ -55,6 +65,7 @@ export class SettingsController {
     private readonly settings: AppSettingsService,
     private readonly config: ConfigService<EnvVars, true>,
     private readonly shopify: ShopifyWebhooksService,
+    private readonly returnPrime: ReturnPrimeWebhooksService,
   ) {}
 
   /**
@@ -78,11 +89,19 @@ export class SettingsController {
     const lastEventAt = shopifyDomain
       ? await this.shopify.lastEventAt(shopifyDomain)
       : null;
+    const rpToken = this.config.get('RETURN_PRIME_ACCESS_TOKEN', {
+      infer: true,
+    });
+    const rpLastEventAt = await this.returnPrime.lastEventAt();
     return {
       shopify: {
         configured,
         shopDomain: shopifyDomain ?? null,
         lastEventAt: lastEventAt ? lastEventAt.toISOString() : null,
+      },
+      returnPrime: {
+        configured: Boolean(rpToken),
+        lastEventAt: rpLastEventAt ? rpLastEventAt.toISOString() : null,
       },
     };
   }
@@ -102,32 +121,52 @@ export class SettingsController {
     @Query('limit') limitRaw?: string,
   ): Promise<IntegrationEventsResponse> {
     const limit = Math.min(100, Math.max(1, Number(limitRaw) || 50));
-    // Cursor is an ISO timestamp — we fetch (limit + 1) and use the
-    // last row's received_at as the nextBefore cursor so the FE can
-    // keep paginating without knowing the backing table's schema.
     const beforeDate = before ? new Date(before) : null;
-    if (platform && platform !== 'shopify') {
-      return { events: [], nextBefore: null };
-    }
-    const rows = await this.shopify.listRecent({
-      before: beforeDate && !Number.isNaN(beforeDate.getTime()) ? beforeDate : null,
-      limit: limit + 1,
-    });
-    const page = rows.slice(0, limit);
+    const safeBefore =
+      beforeDate && !Number.isNaN(beforeDate.getTime()) ? beforeDate : null;
+
+    // Collect from every platform that matches the filter (or all if
+    // the filter is unset). Each platform page-fetches limit + 1 so
+    // we can tell whether its individual stream has more; after
+    // merge-sorting we trim to the global limit.
+    const wantShopify = !platform || platform === 'shopify';
+    const wantReturnPrime = !platform || platform === 'returnprime';
+    const [shopifyRows, rpRows] = await Promise.all([
+      wantShopify
+        ? this.shopify.listRecent({ before: safeBefore, limit: limit + 1 })
+        : Promise.resolve([]),
+      wantReturnPrime
+        ? this.returnPrime.listRecent({ before: safeBefore, limit: limit + 1 })
+        : Promise.resolve([]),
+    ]);
+    const merged: IntegrationEventRow[] = [
+      ...shopifyRows.map(
+        (r): IntegrationEventRow => ({
+          id: r.id,
+          platform: 'shopify',
+          topic: r.topic,
+          shopDomain: r.shop_domain,
+          receivedAt: r.received_at.toISOString(),
+          payload: r.payload ?? {},
+        }),
+      ),
+      ...rpRows.map(
+        (r): IntegrationEventRow => ({
+          id: r.id,
+          platform: 'returnprime',
+          topic: r.topic,
+          shopDomain: null,
+          receivedAt: r.received_at.toISOString(),
+          payload: r.payload ?? {},
+        }),
+      ),
+    ];
+    merged.sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+    const page = merged.slice(0, limit);
     const last = page[page.length - 1];
     const nextBefore =
-      rows.length > limit && last ? last.received_at.toISOString() : null;
-    return {
-      events: page.map((r) => ({
-        id: r.id,
-        platform: 'shopify' as const,
-        topic: r.topic,
-        shopDomain: r.shop_domain,
-        receivedAt: r.received_at.toISOString(),
-        payload: r.payload ?? {},
-      })),
-      nextBefore,
-    };
+      merged.length > limit && last ? last.receivedAt : null;
+    return { events: page, nextBefore };
   }
 
   @Get('general')
