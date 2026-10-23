@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { EnvVars } from '../config/env.validation';
 import { UserRole } from '../database/enums';
+import { ClickpostWebhooksService } from '../clickpost-webhooks/clickpost-webhooks.service';
 import { ReturnPrimeWebhooksService } from '../return-prime-webhooks/return-prime-webhooks.service';
 import { ShopifyWebhooksService } from '../shopify-webhooks/shopify-webhooks.service';
 import { AppSettingsService } from './app-settings.service';
@@ -33,15 +34,21 @@ export interface IntegrationsResponse {
     /** ISO timestamp of the most recent RP webhook, null when none seen. */
     lastEventAt: string | null;
   };
+  clickpost: {
+    /** True when the webhook API key env var is set. */
+    configured: boolean;
+    /** ISO timestamp of the most recent Clickpost webhook, null when none seen. */
+    lastEventAt: string | null;
+  };
 }
 
-export type IntegrationPlatform = 'shopify' | 'returnprime';
+export type IntegrationPlatform = 'shopify' | 'returnprime' | 'clickpost';
 
 export interface IntegrationEventRow {
   id: string;
   platform: IntegrationPlatform;
   topic: string;
-  /** Shopify ships `shop_domain` per event; RP doesn't. Null for RP. */
+  /** Shopify ships `shop_domain` per event; others don't. Null elsewhere. */
   shopDomain: string | null;
   receivedAt: string;
   payload: Record<string, unknown>;
@@ -66,6 +73,7 @@ export class SettingsController {
     private readonly config: ConfigService<EnvVars, true>,
     private readonly shopify: ShopifyWebhooksService,
     private readonly returnPrime: ReturnPrimeWebhooksService,
+    private readonly clickpost: ClickpostWebhooksService,
   ) {}
 
   /**
@@ -93,6 +101,10 @@ export class SettingsController {
       infer: true,
     });
     const rpLastEventAt = await this.returnPrime.lastEventAt();
+    const clickpostKey = this.config.get('CLICKPOST_WEBHOOK_API_KEY', {
+      infer: true,
+    });
+    const clickpostLastEventAt = await this.clickpost.lastEventAt();
     return {
       shopify: {
         configured,
@@ -102,6 +114,12 @@ export class SettingsController {
       returnPrime: {
         configured: Boolean(rpToken),
         lastEventAt: rpLastEventAt ? rpLastEventAt.toISOString() : null,
+      },
+      clickpost: {
+        configured: Boolean(clickpostKey),
+        lastEventAt: clickpostLastEventAt
+          ? clickpostLastEventAt.toISOString()
+          : null,
       },
     };
   }
@@ -131,12 +149,16 @@ export class SettingsController {
     // merge-sorting we trim to the global limit.
     const wantShopify = !platform || platform === 'shopify';
     const wantReturnPrime = !platform || platform === 'returnprime';
-    const [shopifyRows, rpRows] = await Promise.all([
+    const wantClickpost = !platform || platform === 'clickpost';
+    const [shopifyRows, rpRows, clickpostRows] = await Promise.all([
       wantShopify
         ? this.shopify.listRecent({ before: safeBefore, limit: limit + 1 })
         : Promise.resolve([]),
       wantReturnPrime
         ? this.returnPrime.listRecent({ before: safeBefore, limit: limit + 1 })
+        : Promise.resolve([]),
+      wantClickpost
+        ? this.clickpost.listRecent({ before: safeBefore, limit: limit + 1 })
         : Promise.resolve([]),
     ]);
     const merged: IntegrationEventRow[] = [
@@ -155,6 +177,20 @@ export class SettingsController {
           id: r.id,
           platform: 'returnprime',
           topic: r.topic,
+          shopDomain: null,
+          receivedAt: r.received_at.toISOString(),
+          payload: r.payload ?? {},
+        }),
+      ),
+      ...clickpostRows.map(
+        (r): IntegrationEventRow => ({
+          id: r.id,
+          // Clickpost events use `status` as the topic surface since
+          // there's no explicit "topic" string in their payload — the
+          // status field (OFD / Delivered / etc.) is the natural
+          // event-type analogue.
+          platform: 'clickpost',
+          topic: r.status,
           shopDomain: null,
           receivedAt: r.received_at.toISOString(),
           payload: r.payload ?? {},

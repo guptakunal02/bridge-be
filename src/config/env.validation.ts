@@ -195,6 +195,23 @@ export class EnvVars {
   @IsString()
   @MinLength(16)
   RETURN_PRIME_XRP_TOKEN?: string;
+
+  /**
+   * Clickpost webhook authentication key. We generate 32+ chars of
+   * random entropy and the admin pastes it into Clickpost's dashboard
+   * (Settings → Notifications → Webhooks → auth type: X-Api-Key).
+   * Clickpost then stamps every inbound webhook with the configured
+   * `X-Api-Key` header; our guard compares (constant-time) against
+   * this env value and rejects mismatches as 403.
+   *
+   * Optional so a dev-mode Bridge without Clickpost configured boots
+   * cleanly; the webhook endpoint responds 503 "not configured" until
+   * both this and the admin-side dashboard setup are done.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  CLICKPOST_WEBHOOK_API_KEY?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {
