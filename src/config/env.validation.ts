@@ -2,6 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
+  IsOptional,
   IsString,
   IsUrl,
   Max,
@@ -154,6 +155,31 @@ export class EnvVars {
   @IsString()
   @MinLength(32)
   WHATSAPP_WEBHOOK_VERIFY_TOKEN!: string;
+
+  /**
+   * Shopify API secret used to HMAC-sign every webhook. Admin finds
+   * this in Shopify Admin → Settings → Notifications → Webhooks →
+   * "Signing secret". Stored ONLY here (never in DB) — rotating
+   * requires a redeploy. Optional so a dev-mode Bridge without
+   * Shopify configured still boots; the Shopify webhook controller
+   * returns 503 when the secret is missing, which is distinguishable
+   * from a signature mismatch (403).
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  SHOPIFY_WEBHOOK_SECRET?: string;
+
+  /**
+   * The connected Shopify store's domain (e.g. `surma.myshopify.com`).
+   * Every webhook includes `X-Shopify-Shop-Domain`; we reject
+   * requests whose domain doesn't match. Keeps config in one place.
+   * Non-secret but kept here for consistency.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(5)
+  SHOPIFY_SHOP_DOMAIN?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

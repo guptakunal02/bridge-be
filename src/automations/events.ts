@@ -21,6 +21,7 @@ export const AUTOMATION_EVENT = {
   TICKET_REOPENED: 'ticket.reopened',
   BOT_HANDOFF: 'bot.handoff',
   WEBHOOK_CUSTOM: 'webhook.custom',
+  SHOPIFY_ORDER_CONFIRMED: 'shopify.order.confirmed',
 } as const;
 
 export type AutomationEventName =
@@ -162,6 +163,50 @@ export interface WebhookCustomEventPayload {
   channelId: string;
 }
 
+/**
+ * Fires when Shopify sends an `orders/create` webhook — the admin
+ * subscribes in Shopify Admin → Settings → Notifications. Payload
+ * mirrors WebhookCustomEventPayload's send-friendly shape so the
+ * send_whatsapp_template action's no-ticket code path can be reused
+ * verbatim, plus Shopify-native extras admins can predicate on
+ * (order total, item count, etc.).
+ *
+ *   * customerPhone / customerEmail — pulled from the Shopify
+ *     customer / shipping / billing address in that fallback order.
+ *     Required because there's no ticket to resolve them from. When
+ *     neither is present the controller skips emission entirely
+ *     (nothing to deliver to) rather than firing with empty strings.
+ *   * channelId — resolved on the BE side at dispatch time (template's
+ *     bound channel). Empty string = "use template's channel".
+ *   * variables — key/value map intended for template variable
+ *     resolution. Keys documented inline below so admins can predicate
+ *     on them + bind them in templates by matching name.
+ *   * Shopify extras surface top-level for predicates:
+ *       orderName   — "#1234" style human id (name field)
+ *       orderNumber — numeric id without the prefix
+ *       orderTotal  — total_price as string (preserve precision)
+ *       currency    — "INR" / "USD"
+ *       itemCount   — sum of line_items.quantity
+ *       shopDomain  — the sending shop, for multi-tenant futures
+ *
+ * No ticket is minted; the send is pure outbound. The TicketSnapshot
+ * is a sentinel (same convention as WEBHOOK_CUSTOM); predicates
+ * should key on `event.*`, not `ticket.*`.
+ */
+export interface ShopifyOrderConfirmedEventPayload {
+  name: 'shopify.order.confirmed';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  orderName: string;
+  orderNumber: string;
+  orderTotal: string;
+  currency: string;
+  itemCount: number;
+  shopDomain: string;
+}
+
 export type AutomationEventPayload =
   | {
       event: typeof AUTOMATION_EVENT.TICKET_CREATED;
@@ -197,6 +242,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.WEBHOOK_CUSTOM;
       ticket: TicketSnapshot;
       payload: WebhookCustomEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED;
+      ticket: TicketSnapshot;
+      payload: ShopifyOrderConfirmedEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */

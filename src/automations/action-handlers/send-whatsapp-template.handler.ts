@@ -66,7 +66,14 @@ export class SendWhatsappTemplateHandler
     action: Extract<Action, { type: 'send_whatsapp_template' }>,
     ctx: AutomationEventPayload,
   ): Promise<void> {
-    if (ctx.event === AUTOMATION_EVENT.WEBHOOK_CUSTOM) {
+    // Channel-less events (webhook, shopify) use the direct-send path:
+    // no ticket, phone from payload, template's bound channel. Both
+    // payload shapes share the (name/variables/customerPhone/channelId)
+    // keys executeWebhookPath reads.
+    if (
+      ctx.event === AUTOMATION_EVENT.WEBHOOK_CUSTOM ||
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED
+    ) {
       await this.executeWebhookPath(action.templateId, ctx);
       return;
     }
@@ -103,7 +110,12 @@ export class SendWhatsappTemplateHandler
     templateId: string,
     ctx: AutomationEventPayload,
   ): Promise<void> {
-    if (ctx.event !== AUTOMATION_EVENT.WEBHOOK_CUSTOM) return;
+    if (
+      ctx.event !== AUTOMATION_EVENT.WEBHOOK_CUSTOM &&
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED
+    ) {
+      return;
+    }
     const payload = ctx.payload;
     const template = await this.templates.findOne({
       where: { id: templateId },
@@ -120,7 +132,14 @@ export class SendWhatsappTemplateHandler
       );
       return;
     }
-    if (template.channelId !== payload.channelId) {
+    // Shopify + webhook events are channel-less at trigger time;
+    // the admin binds the OUTBOUND channel via the template choice.
+    // When the event payload carries a channelId (webhook.custom sends
+    // one explicitly), require it to match the template's channel so
+    // a template authored on inbox A can't be fired via a webhook
+    // targeting inbox B. Shopify sets channelId="" (empty = "use the
+    // template's channel") so this check skips cleanly.
+    if (payload.channelId && template.channelId !== payload.channelId) {
       this.logger.warn(
         `send_whatsapp_template webhook path: template ${templateId} is on channel=${template.channelId} but webhook targeted channel=${payload.channelId}; skipping`,
       );

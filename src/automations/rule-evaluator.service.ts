@@ -55,20 +55,22 @@ export class RuleEvaluator {
       where: { event: ctx.event, enabled: true },
     });
     for (const rule of rules) {
-      // Channel scoping — strict opt-in. Empty `channel_types` means
-      // the rule fires on no channel (admin-chosen default); the FE
-      // editor surfaces this as "No channel selected — rule won't
-      // fire". Webhook sentinel carries `channelType: null`; such
-      // payloads can't match any configured channel scope, so
-      // channel-scoped rules skip webhook-triggered dispatches by
-      // construction.
+      // Channel scoping — strict opt-in for ticket-bearing events only.
+      // Empty `channel_types` means the rule fires on no channel
+      // (admin-chosen default); the FE editor surfaces this as "No
+      // channel selected — rule won't fire".
+      //
+      // Channel-less events (webhook.custom, shopify.*) carry a
+      // sentinel ticket with `channelType: null`; the event itself is
+      // the opt-in trigger, so channel scoping doesn't apply. The
+      // action handler's own targeting (template.channelId, explicit
+      // customerPhone in payload, etc.) decides where the outbound
+      // actually lands.
       const scope = Array.isArray(rule.channel_types) ? rule.channel_types : [];
-      if (
-        scope.length === 0 ||
-        ctx.ticket.channelType == null ||
-        !scope.includes(ctx.ticket.channelType)
-      ) {
-        continue;
+      if (ctx.ticket.channelType != null) {
+        if (scope.length === 0 || !scope.includes(ctx.ticket.channelType)) {
+          continue;
+        }
       }
       await this.evaluateRule(rule, ctx);
     }

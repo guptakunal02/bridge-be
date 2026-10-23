@@ -19,6 +19,7 @@ import { TagsModule } from './tags/tags.module';
 import { TeamsModule } from './teams/teams.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { UsersModule } from './users/users.module';
+import { ShopifyWebhooksModule } from './shopify-webhooks/shopify-webhooks.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
 
@@ -49,6 +50,7 @@ import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
     AutomationsModule,
     WhatsappInboxModule,
     WebhooksModule,
+    ShopifyWebhooksModule,
   ],
 })
 export class AppModule {}

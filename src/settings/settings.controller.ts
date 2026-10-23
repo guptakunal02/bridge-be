@@ -1,11 +1,25 @@
 import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Roles } from '../auth/decorators/roles.decorator';
+import type { EnvVars } from '../config/env.validation';
 import { UserRole } from '../database/enums';
+import { ShopifyWebhooksService } from '../shopify-webhooks/shopify-webhooks.service';
 import { AppSettingsService } from './app-settings.service';
 import {
   GeneralSettingsResponse,
   UpdateGeneralSettingsDto,
 } from './dto/general-settings.dto';
+
+export interface IntegrationsResponse {
+  shopify: {
+    /** True when both the secret and shop domain are set in env. */
+    configured: boolean;
+    /** Shop domain from env (non-secret), null when unconfigured. */
+    shopDomain: string | null;
+    /** Last webhook received_at for this shop, null when none seen. */
+    lastEventAt: string | null;
+  };
+}
 
 /**
  * Workspace-wide knobs. Reads are open to every authenticated user
@@ -15,7 +29,41 @@ import {
  */
 @Controller('settings')
 export class SettingsController {
-  constructor(private readonly settings: AppSettingsService) {}
+  constructor(
+    private readonly settings: AppSettingsService,
+    private readonly config: ConfigService<EnvVars, true>,
+    private readonly shopify: ShopifyWebhooksService,
+  ) {}
+
+  /**
+   * Admin-facing view of every external integration Bridge talks to.
+   * Returns ONLY metadata (configured yes/no, non-secret identifiers,
+   * last-event timestamps) — the actual secrets live in `.env` and
+   * are never exposed over the API, deliberately. Rotation requires
+   * a redeploy, which is both the security guarantee and the audit
+   * trail.
+   */
+  @Get('integrations')
+  @Roles(UserRole.ADMIN)
+  async getIntegrations(): Promise<IntegrationsResponse> {
+    const shopifySecret = this.config.get('SHOPIFY_WEBHOOK_SECRET', {
+      infer: true,
+    });
+    const shopifyDomain = this.config.get('SHOPIFY_SHOP_DOMAIN', {
+      infer: true,
+    });
+    const configured = Boolean(shopifySecret && shopifyDomain);
+    const lastEventAt = shopifyDomain
+      ? await this.shopify.lastEventAt(shopifyDomain)
+      : null;
+    return {
+      shopify: {
+        configured,
+        shopDomain: shopifyDomain ?? null,
+        lastEventAt: lastEventAt ? lastEventAt.toISOString() : null,
+      },
+    };
+  }
 
   @Get('general')
   async getGeneral(): Promise<GeneralSettingsResponse> {
