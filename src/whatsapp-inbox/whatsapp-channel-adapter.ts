@@ -128,7 +128,11 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
           waId,
           input.message.text,
           options.map((o, i) => ({
-            id: `opt-${i}`,
+            // Runtime encodes id as `${stepId}:${index}`; forward as-is
+            // so Meta returns it on button-tap and the ingest can
+            // decode step+option without searching for labels. Falls
+            // back to `opt-${i}` for callers that don't set optionId.
+            id: o.optionId ?? `opt-${i}`,
             title: o.label,
           })),
         );
@@ -149,7 +153,7 @@ export class WhatsappChannelAdapter implements ChannelAdapter {
           waId,
           input.message.text,
           options.map((o, i) => ({
-            id: `opt-${i}`,
+            id: o.optionId ?? `opt-${i}`,
             title: o.label.slice(0, 24),
           })),
         );

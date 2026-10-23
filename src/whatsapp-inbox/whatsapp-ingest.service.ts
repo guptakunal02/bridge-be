@@ -373,10 +373,21 @@ export class WhatsappIngestService {
           }),
         });
       } else {
+        // Pass through the WhatsApp button/list `id` when the inbound
+        // was an interactive-reply tap. The runtime decodes it as
+        // `${stepId}:${index}` and routes deterministically to that
+        // step + option, bypassing label matching entirely. Falls
+        // through to label match (sibling scan) for text replies or
+        // legacy sessions where buttons were sent without encoded ids.
+        const optionId =
+          msg.interactive?.button_reply?.id ??
+          msg.interactive?.list_reply?.id ??
+          undefined;
         await this.runtime.handleCustomerReply({
           ticketId: ticket.id,
           channelId: channel.id,
           replyText: message.content ?? '',
+          optionId,
         });
       }
     } catch (err) {

@@ -21,6 +21,10 @@ import { RuleEvaluatorService } from '../../rules/rule-evaluator.service';
 import type { ConditionTree } from '../../rules/rule-evaluator.service';
 import { Ticket } from '../../tickets/entities/ticket.entity';
 import { TicketActivityLog } from '../../tickets/entities/ticket-activity-log.entity';
+import {
+  BotActivityLog,
+  type BotActivityEvent,
+} from '../entities/bot-activity-log.entity';
 import { BotFlow } from '../entities/bot-flow.entity';
 import { BotSession } from '../entities/bot-session.entity';
 import { BotStep } from '../entities/bot-step.entity';
@@ -85,6 +89,8 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     private readonly steps: Repository<BotStep>,
     @InjectRepository(BotSession)
     private readonly sessions: Repository<BotSession>,
+    @InjectRepository(BotActivityLog)
+    private readonly activity: Repository<BotActivityLog>,
     @InjectRepository(Ticket)
     private readonly tickets: Repository<Ticket>,
     private readonly evaluator: RuleEvaluatorService,
@@ -121,6 +127,40 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Append a row to bot_activity_log. Fire-and-forget — a DB blip
+   * writing an audit row must never crash the runtime that produced
+   * the event; swallow + warn. The audit trail is best-effort by
+   * design (the admin loses visibility; the bot keeps working).
+   */
+  private async logActivity(input: {
+    session: BotSession;
+    event: BotActivityEvent;
+    stepId?: string | null;
+    message?: string | null;
+    payload?: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      await this.activity.save(
+        this.activity.create({
+          session_id: input.session.id,
+          ticket_id: input.session.ticket_id,
+          flow_id: input.session.flow_id,
+          step_id: input.stepId ?? null,
+          event: input.event,
+          message: input.message ?? null,
+          payload: input.payload ?? {},
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `bot_activity_log write failed for session=${input.session.id} event=${input.event}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /* Public entry points                                                 */
   /* ------------------------------------------------------------------ */
@@ -151,6 +191,13 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
         status: BotSessionStatus.ACTIVE,
       }),
     );
+    await this.logActivity({
+      session,
+      event: 'session_started',
+      stepId: flow.first_step_id,
+      message: `Session started on flow "${flow.name ?? flow.id}" at step ${flow.first_step_id}`,
+      payload: { trigger: input.trigger, flowId: flow.id },
+    });
     await this.tick(session, input.channelId);
     return session;
   }
@@ -164,6 +211,14 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     ticketId: string;
     channelId: string;
     replyText: string;
+    /**
+     * Opaque id Meta returns on a button / list reply, verbatim
+     * from the id we set when sending. Encoded as `${stepId}:${index}`
+     * — present when the customer tapped an interactive button /
+     * row, absent for plain text replies and for legacy sessions
+     * where buttons were sent before this encoding landed.
+     */
+    optionId?: string;
   }): Promise<void> {
     const session = await this.sessions.findOne({
       where: { ticket_id: input.ticketId, status: BotSessionStatus.ACTIVE },
@@ -185,6 +240,66 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     // (options-less) message wouldn't have blocked the runtime here
     // in the first place, so this reply isn't for us.
     if (!cfg.options || cfg.options.length === 0) return;
+
+    // Deterministic route via encoded button id. When Meta returns a
+    // `${stepId}:${index}` payload we trust it absolutely: look up
+    // the owning step, verify it belongs to this session's flow,
+    // and advance via the exact option's nextStepId. Works regardless
+    // of what current_step_id happens to be — the key resumability
+    // guarantee. Label matching + sibling scan stay as fallbacks for
+    // text replies / legacy sessions.
+    if (input.optionId) {
+      const colon = input.optionId.indexOf(':');
+      if (colon > 0) {
+        const encodedStepId = input.optionId.slice(0, colon);
+        const encodedIndex = Number(input.optionId.slice(colon + 1));
+        if (Number.isInteger(encodedIndex) && encodedIndex >= 0) {
+          const targetStep = await this.steps.findOne({
+            where: { id: encodedStepId },
+          });
+          if (
+            targetStep &&
+            targetStep.flow_id === step.flow_id &&
+            targetStep.type === BotStepType.MESSAGE
+          ) {
+            const targetCfg = targetStep.config as MessageStepConfig;
+            const targetOption = targetCfg.options?.[encodedIndex];
+            if (targetOption) {
+              this.logger.log(
+                `payload-routed: ticket=${input.ticketId} optionId=${input.optionId} resolved to step=${encodedStepId} option="${targetOption.label}" from current step=${step.id}`,
+              );
+              await this.logActivity({
+                session,
+                event: 'payload_routed',
+                stepId: encodedStepId,
+                message: `Payload-routed to option "${targetOption.label}" on step ${encodedStepId} (customer was answering ${encodedStepId === step.id ? 'the current step' : 'an earlier step via its original button'})`,
+                payload: {
+                  optionId: input.optionId,
+                  fromStepId: step.id,
+                  nextStepId: targetOption.nextStepId ?? null,
+                },
+              });
+              session.variables = {
+                ...session.variables,
+                __last_answer: targetOption.label,
+              };
+              if (!targetOption.nextStepId) {
+                this.logger.warn(
+                  `Option "${targetOption.label}" on step=${encodedStepId} ticket=${input.ticketId} has no nextStepId — session ending silently. Admin must wire the handle on the canvas.`,
+                );
+              }
+              session.current_step_id = targetOption.nextStepId ?? null;
+              await this.sessions.save(session);
+              await this.tick(session, input.channelId);
+              return;
+            }
+          }
+          this.logger.warn(
+            `payload-routed miss: ticket=${input.ticketId} optionId=${input.optionId} did not resolve to a known step/option — falling through to label match`,
+          );
+        }
+      }
+    }
 
     const normalised = input.replyText.trim().toLowerCase();
     let match = cfg.options.find(
@@ -223,6 +338,16 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `late-tap recovery: ticket=${input.ticketId} replyText="${input.replyText}" jumped from step=${step.id} to option on step=${uniqueMatch.stepId}`,
         );
+        await this.logActivity({
+          session,
+          event: 'late_tap_recovered',
+          stepId: uniqueMatch.stepId,
+          message: `Late-tap recovered: text "${input.replyText}" matched a sibling step's option; routing to that branch`,
+          payload: {
+            fromStepId: step.id,
+            matchedLabel: uniqueMatch.option.label,
+          },
+        });
         match = uniqueMatch.option;
       } else {
         if (lateMatches.length > 1) {
@@ -230,6 +355,16 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
             `late-tap ambiguous (${lateMatches.length} matches): ticket=${input.ticketId} replyText="${input.replyText}" — resending current step instead of guessing`,
           );
         }
+        await this.logActivity({
+          session,
+          event: 'unknown_reply',
+          stepId: step.id,
+          message:
+            lateMatches.length > 1
+              ? `Ambiguous reply "${input.replyText}" matched ${lateMatches.length} sibling steps — resending current prompt instead of guessing`
+              : `Unknown reply "${input.replyText}" — no option matched; resending current prompt`,
+          payload: { replyText: input.replyText, ambiguousMatches: lateMatches.length },
+        });
         // Unknown answer — resend the question. Later we could count
         // retries and hand off after N misses; MVP just repeats.
         await this.sendStep(
@@ -242,6 +377,13 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    await this.logActivity({
+      session,
+      event: 'option_matched',
+      stepId: step.id,
+      message: `Option "${match.label}" matched on current step`,
+      payload: { label: match.label, nextStepId: match.nextStepId ?? null },
+    });
     session.variables = {
       ...session.variables,
       __last_answer: match.label,
@@ -308,6 +450,11 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (session.current_step_id === null) {
         session.status = BotSessionStatus.COMPLETED;
         await this.sessions.save(session);
+        await this.logActivity({
+          session,
+          event: 'session_completed',
+          message: 'Session completed — current step is null (end of flow)',
+        });
         return;
       }
       const step = await this.steps.findOne({
@@ -317,6 +464,12 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `Session ${session.id} points at missing step ${session.current_step_id ?? '(null)'}; marking FAILED`,
         );
+        await this.logActivity({
+          session,
+          event: 'session_failed',
+          stepId: session.current_step_id,
+          message: `Session failed — points at missing step ${session.current_step_id}`,
+        });
         session.status = BotSessionStatus.FAILED;
         session.current_step_id = null;
         await this.sessions.save(session);
@@ -332,10 +485,25 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
         this.logger.error(
           `Session ${session.id} step ${step.id} has invalid config: ${(err as Error).message}`,
         );
+        await this.logActivity({
+          session,
+          event: 'session_failed',
+          stepId: step.id,
+          message: `Session failed — step has invalid config: ${(err as Error).message}`,
+          payload: { stepType: step.type },
+        });
         session.status = BotSessionStatus.FAILED;
         await this.sessions.save(session);
         return;
       }
+
+      await this.logActivity({
+        session,
+        event: 'step_entered',
+        stepId: step.id,
+        message: `Entered ${step.type} step`,
+        payload: { stepType: step.type },
+      });
 
       switch (step.type) {
         case BotStepType.MESSAGE: {
@@ -540,7 +708,15 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (step.type !== BotStepType.MESSAGE) return;
     const cfg = step.config as MessageStepConfig;
     const options = cfg.options?.length
-      ? cfg.options.map((o) => ({ label: renderText(o.label, variables) }))
+      ? cfg.options.map((o, i) => ({
+          label: renderText(o.label, variables),
+          // Encode step id + option index so a late tap on an old
+          // bubble's button can be routed deterministically back to
+          // THIS step's branch, regardless of what the current step
+          // happens to be when the customer finally taps. See
+          // handleCustomerReply's `optionId` path.
+          optionId: `${step.id}:${i}`,
+        }))
       : undefined;
     await this.channel.send({
       ticketId,

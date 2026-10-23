@@ -7,6 +7,7 @@ import { TicketActivityLog } from '../tickets/entities/ticket-activity-log.entit
 import { WhatsappChannelAdapter } from '../whatsapp-inbox/whatsapp-channel-adapter';
 import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { BotController } from './bot.controller';
+import { BotActivityLog } from './entities/bot-activity-log.entity';
 import { BotFlow } from './entities/bot-flow.entity';
 import { BotSession } from './entities/bot-session.entity';
 import { BotStep } from './entities/bot-step.entity';
@@ -48,6 +49,7 @@ import { CHANNEL_ADAPTER } from './runtime/channel-adapter.token';
       BotFlow,
       BotStep,
       BotSession,
+      BotActivityLog,
       Ticket,
       TicketActivityLog,
     ]),

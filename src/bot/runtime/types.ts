@@ -98,5 +98,18 @@ export interface ResolveStepConfig {
  */
 export interface OutboundMessage {
   text: string;
-  options?: Array<{ label: string }>;
+  /**
+   * Interactive options rendered by the channel adapter (WhatsApp
+   * quick-reply buttons, interactive list, etc.). Each option carries
+   * an `optionId` the runtime encodes as `${stepId}:${index}` — the
+   * adapter forwards this verbatim to the underlying channel API
+   * (WhatsApp's `interactive.button.reply.id`). When the customer
+   * taps a button, Meta's webhook returns the exact id we set, which
+   * the ingest extracts and the runtime decodes to route
+   * deterministically to the originating step + option — no label
+   * matching, no label-collision guesswork, no scanning siblings.
+   * Legacy adapter paths that only see `label` still work; the
+   * runtime's fallback matcher handles those.
+   */
+  options?: Array<{ label: string; optionId: string }>;
 }
