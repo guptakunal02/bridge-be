@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { EnvVars } from '../config/env.validation';
@@ -19,6 +26,21 @@ export interface IntegrationsResponse {
     /** Last webhook received_at for this shop, null when none seen. */
     lastEventAt: string | null;
   };
+}
+
+export interface IntegrationEventRow {
+  id: string;
+  platform: 'shopify';
+  topic: string;
+  shopDomain: string;
+  receivedAt: string;
+  payload: Record<string, unknown>;
+}
+
+export interface IntegrationEventsResponse {
+  events: IntegrationEventRow[];
+  /** ISO timestamp cursor to pass as `before` on the next page. Null when the list is exhausted. */
+  nextBefore: string | null;
 }
 
 /**
@@ -62,6 +84,49 @@ export class SettingsController {
         shopDomain: shopifyDomain ?? null,
         lastEventAt: lastEventAt ? lastEventAt.toISOString() : null,
       },
+    };
+  }
+
+  /**
+   * Inspector feed for inbound webhook events. Paginated by (received_at
+   * < before). Platform filter is optional — today the only backing
+   * table is Shopify, but the response shape carries `platform` so
+   * the FE can render multi-platform the moment we start persisting
+   * custom webhook events too.
+   */
+  @Get('integrations/events')
+  @Roles(UserRole.ADMIN)
+  async getIntegrationEvents(
+    @Query('platform') platform?: string,
+    @Query('before') before?: string,
+    @Query('limit') limitRaw?: string,
+  ): Promise<IntegrationEventsResponse> {
+    const limit = Math.min(100, Math.max(1, Number(limitRaw) || 50));
+    // Cursor is an ISO timestamp — we fetch (limit + 1) and use the
+    // last row's received_at as the nextBefore cursor so the FE can
+    // keep paginating without knowing the backing table's schema.
+    const beforeDate = before ? new Date(before) : null;
+    if (platform && platform !== 'shopify') {
+      return { events: [], nextBefore: null };
+    }
+    const rows = await this.shopify.listRecent({
+      before: beforeDate && !Number.isNaN(beforeDate.getTime()) ? beforeDate : null,
+      limit: limit + 1,
+    });
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextBefore =
+      rows.length > limit && last ? last.received_at.toISOString() : null;
+    return {
+      events: page.map((r) => ({
+        id: r.id,
+        platform: 'shopify' as const,
+        topic: r.topic,
+        shopDomain: r.shop_domain,
+        receivedAt: r.received_at.toISOString(),
+        payload: r.payload ?? {},
+      })),
+      nextBefore,
     };
   }
 

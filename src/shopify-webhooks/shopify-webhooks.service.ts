@@ -160,6 +160,26 @@ export class ShopifyWebhooksService {
     });
     return row?.received_at ?? null;
   }
+
+  /**
+   * Chronological descending page for the Events inspector.
+   * Keyset-paginated: pass the previous page's oldest `received_at`
+   * as `before` to continue. Caller usually requests `limit + 1`
+   * so it can tell whether a next page exists without a count query.
+   */
+  async listRecent(input: {
+    before: Date | null;
+    limit: number;
+  }): Promise<ShopifyWebhookEvent[]> {
+    const qb = this.events
+      .createQueryBuilder('e')
+      .orderBy('e.received_at', 'DESC')
+      .limit(input.limit);
+    if (input.before) {
+      qb.andWhere('e.received_at < :before', { before: input.before });
+    }
+    return qb.getMany();
+  }
 }
 
 interface ExtractedOrderFields {
