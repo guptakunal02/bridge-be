@@ -187,20 +187,59 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (!cfg.options || cfg.options.length === 0) return;
 
     const normalised = input.replyText.trim().toLowerCase();
-    const match = cfg.options.find(
+    let match = cfg.options.find(
       (o) => o.label.trim().toLowerCase() === normalised,
     );
 
     if (!match) {
-      // Unknown answer — resend the question. Later we could count
-      // retries and hand off after N misses; MVP just repeats.
-      await this.sendStep(
-        input.ticketId,
-        input.channelId,
-        step,
-        session.variables,
-      );
-      return;
+      // Late-tap recovery. WhatsApp keeps interactive buttons on
+      // previous messages tappable forever — a customer who tapped
+      // "Existing Order" at step A, saw the existing-order prompt
+      // at step B, then scrolled up and tapped "New Order" on A's
+      // bubble was being told the existing-order prompt again
+      // (reply didn't match any option at step B → "resend current"
+      // branch below). Scan every OTHER MESSAGE step in the same
+      // flow for a unique option label match. Unique hit → treat
+      // as the user intending to jump back and pick that branch;
+      // advance via that option's nextStepId. Ambiguous or no hit
+      // → fall through to the resend fallback.
+      const siblings = await this.steps.find({
+        where: { flow_id: step.flow_id, type: BotStepType.MESSAGE },
+      });
+      type MessageOption = { label: string; nextStepId: string };
+      const lateMatches: Array<{ stepId: string; option: MessageOption }> = [];
+      for (const sibling of siblings) {
+        if (sibling.id === step.id) continue;
+        const sibCfg = sibling.config as MessageStepConfig;
+        if (!sibCfg.options) continue;
+        for (const opt of sibCfg.options) {
+          if (opt.label.trim().toLowerCase() === normalised) {
+            lateMatches.push({ stepId: sibling.id, option: opt });
+          }
+        }
+      }
+      const uniqueMatch = lateMatches.length === 1 ? lateMatches[0] : null;
+      if (uniqueMatch) {
+        this.logger.log(
+          `late-tap recovery: ticket=${input.ticketId} replyText="${input.replyText}" jumped from step=${step.id} to option on step=${uniqueMatch.stepId}`,
+        );
+        match = uniqueMatch.option;
+      } else {
+        if (lateMatches.length > 1) {
+          this.logger.warn(
+            `late-tap ambiguous (${lateMatches.length} matches): ticket=${input.ticketId} replyText="${input.replyText}" — resending current step instead of guessing`,
+          );
+        }
+        // Unknown answer — resend the question. Later we could count
+        // retries and hand off after N misses; MVP just repeats.
+        await this.sendStep(
+          input.ticketId,
+          input.channelId,
+          step,
+          session.variables,
+        );
+        return;
+      }
     }
 
     session.variables = {
