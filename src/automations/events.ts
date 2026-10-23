@@ -22,6 +22,13 @@ export const AUTOMATION_EVENT = {
   BOT_HANDOFF: 'bot.handoff',
   WEBHOOK_CUSTOM: 'webhook.custom',
   SHOPIFY_ORDER_CONFIRMED: 'shopify.order.confirmed',
+  // Shopify deprecated `orders/partially_fulfilled` from the Admin UI;
+  // `fulfillments/create` is the modern equivalent and fires on every
+  // new fulfillment record (partial OR full). Covers "a shipment just
+  // went out" uniformly.
+  SHOPIFY_FULFILLMENT_CREATED: 'shopify.fulfillment.created',
+  SHOPIFY_ORDER_FULFILLED: 'shopify.order.fulfilled',
+  SHOPIFY_FULFILLMENT_UPDATED: 'shopify.fulfillment.updated',
 } as const;
 
 export type AutomationEventName =
@@ -207,6 +214,69 @@ export interface ShopifyOrderConfirmedEventPayload {
   shopDomain: string;
 }
 
+/**
+ * `orders/fulfilled` shares the exact order payload shape with
+ * orders/create (Shopify sends the full order object on both).
+ * Only the `name` discriminator distinguishes them in automation
+ * rules. Fires once per order, when the LAST remaining line item
+ * is fulfilled — typical consumer: "your entire order is on its
+ * way" / review-request after a wait.
+ */
+export interface ShopifyOrderFulfilledEventPayload {
+  name: 'shopify.order.fulfilled';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  orderName: string;
+  orderNumber: string;
+  orderTotal: string;
+  currency: string;
+  itemCount: number;
+  fulfillmentStatus: string;
+  shopDomain: string;
+}
+
+/**
+ * `fulfillments/create` + `fulfillments/update` share the fulfillment
+ * payload shape — the subject IS the fulfillment, not the whole order.
+ * `fulfillments/create` fires when a new fulfillment record is created
+ * (every shipment, whether partial or full), carrying the just-shipped
+ * line items + tracking info. `fulfillments/update` fires on tracking
+ * number changes and shipment-status transitions.
+ *
+ * Admins typically predicate on `shipmentStatus` to distinguish:
+ *   confirmed            → "we have your package"
+ *   in_transit           → "shipped, on the way"
+ *   out_for_delivery     → "arriving today" ← LimeChat's OFD events
+ *   attempted_delivery   → "we tried, missed you"
+ *   ready_for_pickup     → "collect from X"
+ *   delivered            → "it's arrived"
+ *   failure              → "delivery failed"
+ *
+ * Phone / email are pulled from the fulfillment's `destination` block
+ * (Shopify copies the shipping address there at fulfillment time), which
+ * covers 95%+ of real orders. An API callback to the parent order to
+ * fill in the gaps is a future addition if we see empty-destination
+ * fulfillments in the Events inspector.
+ */
+export interface ShopifyFulfillmentEventPayload {
+  name: 'shopify.fulfillment.created' | 'shopify.fulfillment.updated';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  orderId: string;
+  orderName: string | null;
+  fulfillmentId: string;
+  status: string;
+  shipmentStatus: string | null;
+  trackingCompany: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shopDomain: string;
+}
+
 export type AutomationEventPayload =
   | {
       event: typeof AUTOMATION_EVENT.TICKET_CREATED;
@@ -247,6 +317,21 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED;
       ticket: TicketSnapshot;
       payload: ShopifyOrderConfirmedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED;
+      ticket: TicketSnapshot;
+      payload: ShopifyFulfillmentEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED;
+      ticket: TicketSnapshot;
+      payload: ShopifyOrderFulfilledEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED;
+      ticket: TicketSnapshot;
+      payload: ShopifyFulfillmentEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */

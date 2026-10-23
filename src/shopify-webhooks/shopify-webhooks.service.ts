@@ -79,6 +79,26 @@ export class ShopifyWebhooksService {
       this.emitOrderConfirmed(input);
       return;
     }
+    if (input.topic === 'orders/fulfilled') {
+      this.emitOrderFulfilled(input);
+      return;
+    }
+    if (input.topic === 'fulfillments/create') {
+      this.emitFulfillment(
+        input,
+        AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED,
+        'shopify.fulfillment.created',
+      );
+      return;
+    }
+    if (input.topic === 'fulfillments/update') {
+      this.emitFulfillment(
+        input,
+        AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED,
+        'shopify.fulfillment.updated',
+      );
+      return;
+    }
     // Unknown / not-yet-wired topic — audit row is already written;
     // nothing further to do. Admin can add handling later.
     this.logger.log(
@@ -159,6 +179,141 @@ export class ShopifyWebhooksService {
       select: { received_at: true },
     });
     return row?.received_at ?? null;
+  }
+
+  /**
+   * `orders/fulfilled` carries the full order payload, same shape as
+   * orders/create. Reuses the order field extractor; only the event
+   * name and the new `fulfillmentStatus` top-level field differ in
+   * what we emit.
+   */
+  private emitOrderFulfilled(input: {
+    webhookId: string;
+    topic: string;
+    shopDomain: string;
+    payload: Record<string, unknown>;
+  }): void {
+    const extracted = extractOrderFields(input.payload);
+    if (!extracted) {
+      this.logger.warn(
+        `shopify order fulfilled: webhook_id=${input.webhookId} missing required order fields; emitting skipped`,
+      );
+      return;
+    }
+    if (!extracted.customerPhone && !extracted.customerEmail) {
+      this.logger.warn(
+        `shopify order fulfilled: webhook_id=${input.webhookId} order=${extracted.orderName} has no phone or email; emitting skipped`,
+      );
+      return;
+    }
+    const fulfillmentStatus =
+      asString(input.payload['fulfillment_status']) ?? 'fulfilled';
+    this.automations.emit({
+      event: AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED,
+      ticket: {
+        id: '',
+        channelId: '',
+        channelType: null,
+        status: TicketStatus.OPEN,
+        tags: [],
+        assigneeId: null,
+        teamId: '',
+        subject: null,
+      },
+      payload: {
+        name: 'shopify.order.fulfilled',
+        channelId: '',
+        customerPhone: extracted.customerPhone,
+        customerEmail: extracted.customerEmail,
+        orderName: extracted.orderName,
+        orderNumber: extracted.orderNumber,
+        orderTotal: extracted.orderTotal,
+        currency: extracted.currency,
+        itemCount: extracted.itemCount,
+        fulfillmentStatus,
+        shopDomain: input.shopDomain,
+        variables: {
+          order_name: extracted.orderName,
+          order_number: extracted.orderNumber,
+          order_total: extracted.orderTotal,
+          currency: extracted.currency,
+          item_count: String(extracted.itemCount),
+          fulfillment_status: fulfillmentStatus,
+          customer_email: extracted.customerEmail ?? '',
+        },
+      },
+    });
+  }
+
+  /**
+   * `fulfillments/create` + `fulfillments/update` share the same
+   * fulfillment payload shape. Caller passes the specific event name +
+   * discriminator so the engine can route rules distinctly.
+   */
+  private emitFulfillment(
+    input: {
+      webhookId: string;
+      topic: string;
+      shopDomain: string;
+      payload: Record<string, unknown>;
+    },
+    event:
+      | typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED
+      | typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED,
+    name: 'shopify.fulfillment.created' | 'shopify.fulfillment.updated',
+  ): void {
+    const extracted = extractFulfillmentFields(input.payload);
+    if (!extracted) {
+      this.logger.warn(
+        `shopify ${name}: webhook_id=${input.webhookId} missing required fulfillment fields; emitting skipped`,
+      );
+      return;
+    }
+    if (!extracted.customerPhone && !extracted.customerEmail) {
+      this.logger.warn(
+        `shopify ${name}: webhook_id=${input.webhookId} fulfillment=${extracted.fulfillmentId} has no phone or email on destination; emitting skipped`,
+      );
+      return;
+    }
+    this.automations.emit({
+      event,
+      ticket: {
+        id: '',
+        channelId: '',
+        channelType: null,
+        status: TicketStatus.OPEN,
+        tags: [],
+        assigneeId: null,
+        teamId: '',
+        subject: null,
+      },
+      payload: {
+        name,
+        channelId: '',
+        customerPhone: extracted.customerPhone,
+        customerEmail: extracted.customerEmail,
+        orderId: extracted.orderId,
+        orderName: extracted.orderName,
+        fulfillmentId: extracted.fulfillmentId,
+        status: extracted.status,
+        shipmentStatus: extracted.shipmentStatus,
+        trackingCompany: extracted.trackingCompany,
+        trackingNumber: extracted.trackingNumber,
+        trackingUrl: extracted.trackingUrl,
+        shopDomain: input.shopDomain,
+        variables: {
+          order_id: extracted.orderId,
+          order_name: extracted.orderName ?? '',
+          fulfillment_id: extracted.fulfillmentId,
+          status: extracted.status,
+          shipment_status: extracted.shipmentStatus ?? '',
+          tracking_company: extracted.trackingCompany ?? '',
+          tracking_number: extracted.trackingNumber ?? '',
+          tracking_url: extracted.trackingUrl ?? '',
+          customer_email: extracted.customerEmail ?? '',
+        },
+      },
+    });
   }
 
   /**
@@ -246,6 +401,78 @@ function extractOrderFields(
     orderTotal,
     currency,
     itemCount,
+    customerPhone,
+    customerEmail,
+  };
+}
+
+interface ExtractedFulfillmentFields {
+  orderId: string;
+  orderName: string | null;
+  fulfillmentId: string;
+  status: string;
+  shipmentStatus: string | null;
+  trackingCompany: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  customerPhone: string;
+  customerEmail: string | null;
+}
+
+/**
+ * Extract from a Shopify fulfillment payload (fulfillments/create or
+ * fulfillments/update — same shape). The customer-contact fields come
+ * from the fulfillment's own `destination` block, which Shopify
+ * populates from the shipping address at fulfillment time. If a
+ * fulfillment has no destination (rare, pickup orders), phone + email
+ * come out empty and the emit is skipped by the caller.
+ *
+ * `tracking_url` is Shopify's own normalised URL built from the
+ * tracking_company + tracking_number pair; `tracking_urls` is the
+ * array form on multi-item fulfillments. We prefer the array's first
+ * entry when present so the template render has a clickable link
+ * even when the single-field form is empty.
+ */
+function extractFulfillmentFields(
+  payload: Record<string, unknown>,
+): ExtractedFulfillmentFields | null {
+  const fulfillmentId = asString(payload['id']);
+  const orderIdRaw = payload['order_id'];
+  const orderId =
+    typeof orderIdRaw === 'number'
+      ? String(orderIdRaw)
+      : asString(orderIdRaw);
+  if (!fulfillmentId || !orderId) return null;
+
+  const orderName = asString(payload['name']); // Shopify stamps order name here on fulfillments
+  const status = asString(payload['status']) ?? 'unknown';
+  const shipmentStatus = asString(payload['shipment_status']);
+  const trackingCompany = asString(payload['tracking_company']);
+  const trackingNumber = asString(payload['tracking_number']);
+  const trackingUrls = Array.isArray(payload['tracking_urls'])
+    ? (payload['tracking_urls'] as unknown[])
+    : [];
+  const trackingUrl =
+    asString(payload['tracking_url']) ??
+    asString(trackingUrls[0]) ??
+    null;
+
+  const destination = payload['destination'] as
+    | Record<string, unknown>
+    | undefined;
+  const rawPhone = asString(destination?.['phone']) ?? null;
+  const customerPhone = rawPhone ? rawPhone.replace(/\D/g, '') : '';
+  const customerEmail = asString(destination?.['email']) ?? null;
+
+  return {
+    orderId,
+    orderName,
+    fulfillmentId,
+    status,
+    shipmentStatus,
+    trackingCompany,
+    trackingNumber,
+    trackingUrl,
     customerPhone,
     customerEmail,
   };

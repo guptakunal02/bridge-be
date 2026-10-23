@@ -74,6 +74,27 @@ export class AutomationEngine {
     await this.safeEvaluate(payload);
   }
 
+  @OnEvent(qualify(AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED))
+  async onShopifyFulfillmentCreated(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED))
+  async onShopifyOrderFulfilled(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED))
+  async onShopifyFulfillmentUpdated(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
   private async safeEvaluate(payload: AutomationEventPayload): Promise<void> {
     try {
       await this.evaluator.evaluate(payload);
