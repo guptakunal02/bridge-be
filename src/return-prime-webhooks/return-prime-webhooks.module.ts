@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ReturnPrimeWebhookEvent } from './entities/return-prime-webhook-event.entity';
+import { LensForwardSecretGuard } from './guards/lens-forward-secret.guard';
 import { ReturnPrimeWebhooksController } from './return-prime-webhooks.controller';
 import { ReturnPrimeWebhooksService } from './return-prime-webhooks.service';
 
@@ -13,7 +14,7 @@ import { ReturnPrimeWebhooksService } from './return-prime-webhooks.service';
 @Module({
   imports: [TypeOrmModule.forFeature([ReturnPrimeWebhookEvent])],
   controllers: [ReturnPrimeWebhooksController],
-  providers: [ReturnPrimeWebhooksService],
+  providers: [ReturnPrimeWebhooksService, LensForwardSecretGuard],
   exports: [ReturnPrimeWebhooksService],
 })
 export class ReturnPrimeWebhooksModule {}

@@ -8,9 +8,11 @@ import {
   Logger,
   Post,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
+import { LensForwardSecretGuard } from './guards/lens-forward-secret.guard';
 import { ReturnPrimeWebhooksService } from './return-prime-webhooks.service';
 
 /**
@@ -31,6 +33,7 @@ import { ReturnPrimeWebhooksService } from './return-prime-webhooks.service';
  */
 @Public()
 @Controller('webhooks/return-prime')
+@UseGuards(LensForwardSecretGuard)
 export class ReturnPrimeWebhooksController {
   private readonly logger = new Logger(ReturnPrimeWebhooksController.name);
 

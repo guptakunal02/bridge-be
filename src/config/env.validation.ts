@@ -197,6 +197,31 @@ export class EnvVars {
   RETURN_PRIME_XRP_TOKEN?: string;
 
   /**
+   * Shared secret between Lens (ops.teev.shop) and Bridge for RP
+   * webhook fan-forwarding. RP's own dispatcher drops deliveries to
+   * Bridge's subscription (support ticket open), so Lens forwards
+   * `request/created` + `request/refunded` to Bridge stamped with
+   * `X-Lens-Secret: <this value>`.
+   *
+   * Validation semantics on the Bridge receiver side:
+   *   - unset in env           → guard skips (open endpoint; preserves
+   *                              current behaviour for safe dev + for
+   *                              the direct-from-RP path if RP ever
+   *                              starts delivering again)
+   *   - set + header absent    → allow through (direct RP calls won't
+   *                              carry this header; treat as RP)
+   *   - set + header present   → must match (constant-time); mismatch
+   *                              returns 401
+   *
+   * Rotate: edit on BOTH sides (Lens's forwarder env + here) in the
+   * same deploy window to avoid a validation gap.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  LENS_FORWARD_SECRET?: string;
+
+  /**
    * Clickpost webhook authentication key. We generate 32+ chars of
    * random entropy and the admin pastes it into Clickpost's dashboard
    * (Settings → Notifications → Webhooks → auth type: X-Api-Key).
