@@ -87,26 +87,31 @@ export class ReturnPrimeWebhooksService {
   }
 
   /**
-   * Build a stable idempotency key for this webhook. Prefer the
-   * payload's request id + topic + timestamp (natural key over the
-   * business event). Fall back to a hash of the raw body when any of
-   * those are missing — a hash is deterministic even without
-   * identifying fields, so a true retry still dedups.
+   * Build a stable idempotency key for this webhook. Based on
+   * confirmed payloads at the ops.teev.shop RP consumer:
+   *   - `id` is RP's internal request id (e.g. `6adc52fc...`)
+   *   - `updated_at` bumps on every mutation (approved → received →
+   *     refunded, etc.)
+   * Together they're unique per request per state transition — a
+   * retry of the same transition has identical both, dedups cleanly.
+   * `topic` prefix keeps separate event types independent (same
+   * request firing both created + refunded gets 2 rows, correctly).
+   * Hash fallback preserves dedup even when fields are missing.
    */
   private deriveWebhookId(
     topic: string,
     payload: Record<string, unknown>,
   ): string {
     const requestId =
-      asString(payload['_id']) ??
       asString(payload['id']) ??
+      asString(payload['_id']) ??
       asString(payload['request_id']) ??
       asString((payload['request'] as Record<string, unknown>)?.['_id']) ??
       asString((payload['request'] as Record<string, unknown>)?.['id']) ??
       null;
     const updatedAt =
-      asString(payload['updatedAt']) ??
       asString(payload['updated_at']) ??
+      asString(payload['updatedAt']) ??
       asString(
         (payload['request'] as Record<string, unknown>)?.['updatedAt'],
       ) ??
