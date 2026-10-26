@@ -36,6 +36,29 @@ export class Segment {
   @Column({ type: 'uuid', name: 'created_by' })
   created_by!: string;
 
+  /**
+   * Which of the 5 Customer fields were actually mapped from the
+   * uploaded CSV. Always includes `country_code` + `phone_number`
+   * (mandatory at mapping time); may additionally include any of
+   * `first_name`, `last_name`, `email` depending on what the admin
+   * chose.
+   *
+   * Phase-3 broadcast validates that every variable referenced by
+   * the chosen MARKETING template (`{{first_name}}` etc.) is
+   * present in this array — otherwise rejects with a clear error
+   * ("template uses {{first_name}} but this segment didn't map
+   * first_name"). The mapping is captured once per segment on
+   * first upload; subsequent re-uploads to the same segment must
+   * use the same mapping (service enforces).
+   */
+  @Column({
+    type: 'text',
+    array: true,
+    default: () => `'{}'::text[]`,
+    name: 'mapped_fields',
+  })
+  mappedFields!: string[];
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

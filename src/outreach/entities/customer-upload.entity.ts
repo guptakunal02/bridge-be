@@ -77,6 +77,28 @@ export class CustomerUpload {
   })
   rejections!: Array<{ line: number; reason: string }>;
 
+  /**
+   * The column mapping admin chose at the start step. Shape:
+   *   { country_code: "<csv column name>",
+   *     phone_number: "<csv column name>",
+   *     first_name?:  "<csv column name>",
+   *     last_name?:   "<csv column name>",
+   *     email?:       "<csv column name>" }
+   *
+   * NULL on a staged row (file uploaded, mapping not yet
+   * chosen) — the admin UI's polling endpoint uses this to
+   * distinguish "waiting for input" from "worker is processing"
+   * without a separate status enum value.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  mapping!: {
+    country_code: string;
+    phone_number: string;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+  } | null;
+
   @Column({ type: 'text', nullable: true })
   error!: string | null;
 

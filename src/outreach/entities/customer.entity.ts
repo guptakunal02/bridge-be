@@ -33,8 +33,33 @@ export class Customer {
   @Column({ type: 'text' })
   phone!: string;
 
-  @Column({ type: 'text', nullable: true })
-  name!: string | null;
+  /**
+   * Country code portion of the phone, e.g. "91" for India.
+   * Nullable because:
+   *   * STOP-handler-created rows arrive from Meta's webhook as a
+   *     digits-only `from` field — we assume "91" during backfill
+   *     but future webhook sources (international numbers) may
+   *     leave this NULL until re-identified via CSV upload.
+   *   * Phase-3 broadcast filters out marketing_opted_out=false
+   *     rows regardless of country_code; a NULL doesn't affect
+   *     send eligibility, only display.
+   */
+  @Column({ type: 'text', nullable: true, name: 'country_code' })
+  countryCode!: string | null;
+
+  /**
+   * Phone number without the country-code prefix. Mirror field of
+   * `phone` (which stays the dedup key as the full combined form).
+   * See the migration for the backfill heuristic.
+   */
+  @Column({ type: 'text', nullable: true, name: 'phone_number' })
+  phoneNumber!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'first_name' })
+  firstName!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'last_name' })
+  lastName!: string | null;
 
   @Column({ type: 'text', nullable: true })
   email!: string | null;

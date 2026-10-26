@@ -17,6 +17,13 @@ export interface SegmentDetail {
   optedOutCount: number;
   /** totalMembers − optedOutCount. The "actual" audience size. */
   willReceiveCount: number;
+  /**
+   * Which of the 5 Customer fields were mapped from the uploaded
+   * CSV. Always includes country_code + phone_number; may include
+   * first_name, last_name, email. Phase 3 broadcast reads this to
+   * refuse templates referencing fields this segment doesn't carry.
+   */
+  mappedFields: string[];
 }
 
 /**
@@ -84,7 +91,22 @@ export class SegmentsService {
       totalMembers: total,
       optedOutCount: optedOut,
       willReceiveCount: total - optedOut,
+      mappedFields: seg.mappedFields,
     };
+  }
+
+  /**
+   * Overwrites `segment.mapped_fields` with the fields the admin
+   * chose on this upload. Called by CustomerUploadService.start.
+   * If a second upload later arrives with a different mapping, we
+   * take the latest — matches the admin's intuition that uploads
+   * refresh the schema.
+   */
+  async setMappedFields(
+    segmentId: string,
+    fields: string[],
+  ): Promise<void> {
+    await this.segments.update({ id: segmentId }, { mappedFields: fields });
   }
 
   /**

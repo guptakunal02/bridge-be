@@ -84,7 +84,10 @@ export class SegmentsController {
     rows: Array<{
       id: string;
       phone: string;
-      name: string | null;
+      countryCode: string | null;
+      phoneNumber: string | null;
+      firstName: string | null;
+      lastName: string | null;
       email: string | null;
       marketing_opted_out: boolean;
     }>;
@@ -101,7 +104,10 @@ export class SegmentsController {
       rows: rows.map((c) => ({
         id: c.id,
         phone: c.phone,
-        name: c.name,
+        countryCode: c.countryCode,
+        phoneNumber: c.phoneNumber,
+        firstName: c.firstName,
+        lastName: c.lastName,
         email: c.email,
         marketing_opted_out: c.marketing_opted_out,
       })),

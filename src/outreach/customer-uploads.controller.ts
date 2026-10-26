@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   NotFoundException,
@@ -17,36 +18,39 @@ import { AdminOnly } from '../auth/decorators/admin-only.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { CustomerUploadStatus } from '../database/enums';
-import { CustomerUploadService } from './customer-upload.service';
+import {
+  CustomerUploadService,
+  MAPPABLE_FIELDS,
+  type UploadMapping,
+} from './customer-upload.service';
 import { SegmentsService } from './segments.service';
 
-/**
- * Where multer parks CSVs before the worker drains them. /tmp
- * is ephemeral + process-isolated — perfect for upload scratch
- * space. The worker unlinks files on completion / failure; stray
- * files from a crashed worker get OS-reaped on reboot.
- */
 const UPLOAD_DIR = '/tmp/bridge-uploads';
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-// mkdir once at module-load time; multer's diskStorage expects
-// the directory to exist before the first write. Idempotent.
 try {
   mkdirSync(UPLOAD_DIR, { recursive: true });
 } catch {
-  /* already exists or race — safe to ignore */
+  /* already exists */
 }
 
 /**
- * Admin uploads a CSV against an existing segment. The controller
- * handles multipart ingest + file-size guard; the worker (kicked
- * off inside `CustomerUploadService.create`) owns the parse +
- * upsert + progress loop.
+ * Admin uploads CSVs against an existing segment through a two-step
+ * flow:
  *
- * Return shape favours polling: POST returns `{uploadId}` immediately,
- * and the admin UI polls GET /uploads/:uid every ~3s until status
- * transitions to COMPLETED or FAILED. All counters are updated per
- * batch, so progress is visible before completion.
+ *   POST /segments/:id/uploads/stage          (multipart)
+ *     Parses header + first 5 data rows, suggests a mapping based
+ *     on common synonyms, returns { uploadId, columns, sampleRows,
+ *     suggestedMapping }. Worker is NOT started.
+ *
+ *   POST /segments/:id/uploads/:uploadId/start   (JSON mapping)
+ *     Validates the admin's chosen mapping, stamps it onto the
+ *     upload row + segment.mapped_fields, kicks the worker. Admin
+ *     then polls GET /uploads/:uid for progress as before.
+ *
+ * The split avoids the old "guess and silently reject everything"
+ * failure mode where a Shopify export's `phonenumber` + `firstname`
+ * + `lastname` columns went unrecognized.
  */
 @Controller('segments/:segmentId/uploads')
 @AdminOnly()
@@ -56,15 +60,12 @@ export class CustomerUploadsController {
     private readonly segments: SegmentsService,
   ) {}
 
-  @Post()
+  @Post('stage')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
         destination: UPLOAD_DIR,
         filename: (_req, file, cb) => {
-          // Timestamp + random suffix prevents collisions between
-          // concurrent uploads from different admins. Original name
-          // is persisted on the row for the admin UI.
           const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
           cb(null, `${stamp}${extname(file.originalname)}`);
         },
@@ -80,27 +81,71 @@ export class CustomerUploadsController {
       },
     }),
   )
-  async upload(
+  async stage(
     @Param('segmentId', new ParseUUIDPipe()) segmentId: string,
     @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<{
     uploadId: string;
-    status: CustomerUploadStatus;
+    columns: string[];
+    sampleRows: Array<Record<string, string>>;
+    suggestedMapping: Partial<UploadMapping>;
   }> {
     if (!file) throw new BadRequestException('file field is required');
-    // Verify segment exists before accepting the upload — otherwise
-    // the worker crashes mid-batch with an FK violation and the
-    // admin sees FAILED with a confusing message. Fail loud up front.
-    await this.segments.findById(segmentId);
-    const upload = await this.uploads.create({
+    await this.segments.findById(segmentId); // verifies segment exists
+    return this.uploads.stage({
       segmentId,
       uploadedBy: user.id,
       fileName: file.originalname,
       fileSize: file.size,
       filePath: file.path,
     });
-    return { uploadId: upload.id, status: upload.status };
+  }
+
+  @Post(':uploadId/start')
+  async start(
+    @Param('segmentId', new ParseUUIDPipe()) _segmentId: string,
+    @Param('uploadId', new ParseUUIDPipe()) uploadId: string,
+    @Body() body: { mapping: UploadMapping },
+  ): Promise<{
+    uploadId: string;
+    status: CustomerUploadStatus;
+  }> {
+    const mapping = body?.mapping;
+    if (!mapping || typeof mapping !== 'object') {
+      throw new BadRequestException('mapping object is required');
+    }
+    // country_code and phone_number are mandatory. Other fields are
+    // optional — their presence propagates to segment.mapped_fields
+    // so broadcast-time template validation can refuse mismatches.
+    if (
+      !mapping.country_code ||
+      !mapping.phone_number ||
+      typeof mapping.country_code !== 'string' ||
+      typeof mapping.phone_number !== 'string'
+    ) {
+      throw new BadRequestException(
+        'mapping.country_code and mapping.phone_number are both required',
+      );
+    }
+    // Guard against stray keys from a buggy client — only MAPPABLE_FIELDS
+    // are honoured; everything else is dropped so an admin's accidental
+    // {foo: "bar"} doesn't end up persisted on the upload row.
+    const sanitised: UploadMapping = {
+      country_code: mapping.country_code,
+      phone_number: mapping.phone_number,
+      ...(mapping.first_name
+        ? { first_name: String(mapping.first_name) }
+        : {}),
+      ...(mapping.last_name
+        ? { last_name: String(mapping.last_name) }
+        : {}),
+      ...(mapping.email ? { email: String(mapping.email) } : {}),
+    };
+    const _mappable = MAPPABLE_FIELDS; // keep for compile-time check
+    void _mappable;
+    const row = await this.uploads.start(uploadId, sanitised);
+    return { uploadId: row.id, status: row.status };
   }
 
   @Get()
@@ -116,6 +161,7 @@ export class CustomerUploadsController {
       succeeded_rows: number;
       skipped_rows: number;
       rejected_rows: number;
+      mapping: UploadMapping | null;
       createdAt: Date;
       completed_at: Date | null;
     }>
@@ -130,6 +176,7 @@ export class CustomerUploadsController {
       succeeded_rows: r.succeeded_rows,
       skipped_rows: r.skipped_rows,
       rejected_rows: r.rejected_rows,
+      mapping: r.mapping,
       createdAt: r.createdAt,
       completed_at: r.completed_at,
     }));
@@ -148,6 +195,7 @@ export class CustomerUploadsController {
     skipped_rows: number;
     rejected_rows: number;
     rejections: Array<{ line: number; reason: string }>;
+    mapping: UploadMapping | null;
     error: string | null;
     completed_at: Date | null;
   }> {
@@ -162,6 +210,7 @@ export class CustomerUploadsController {
       skipped_rows: row.skipped_rows,
       rejected_rows: row.rejected_rows,
       rejections: row.rejections,
+      mapping: row.mapping,
       error: row.error,
       completed_at: row.completed_at,
     };

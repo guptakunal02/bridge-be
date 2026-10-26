@@ -25,7 +25,10 @@ export class CustomersController {
     rows: Array<{
       id: string;
       phone: string;
-      name: string | null;
+      countryCode: string | null;
+      phoneNumber: string | null;
+      firstName: string | null;
+      lastName: string | null;
       email: string | null;
       opted_out_at: Date | null;
       opted_out_keyword: string | null;
@@ -39,7 +42,10 @@ export class CustomersController {
       rows: rows.map((c) => ({
         id: c.id,
         phone: c.phone,
-        name: c.name,
+        countryCode: c.countryCode,
+        phoneNumber: c.phoneNumber,
+        firstName: c.firstName,
+        lastName: c.lastName,
         email: c.email,
         opted_out_at: c.opted_out_at,
         opted_out_keyword: c.opted_out_keyword,

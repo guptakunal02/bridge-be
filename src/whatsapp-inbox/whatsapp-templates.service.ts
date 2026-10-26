@@ -25,6 +25,18 @@ import {
   TEMPLATE_VARIABLES_BY_NAME,
   type VariableMappingEntry,
 } from './template-variables';
+
+/**
+ * The only variables a MARKETING template may reference. Mirrors
+ * the 3 optional fields a segment can map (first_name, last_name,
+ * email); country_code / phone_number are never usable as body
+ * variables (they're the identity key, not content).
+ */
+const MARKETING_ALLOWED_VARIABLES: ReadonlySet<string> = new Set([
+  'first_name',
+  'last_name',
+  'email',
+]);
 import { WhatsappSenderService } from './whatsapp-sender.service';
 import { TemplateVariableResolverService } from './template-variable-resolver.service';
 
@@ -339,6 +351,23 @@ export class WhatsappTemplatesService {
         throw new BadRequestException(
           `Unknown variable "{{${name}}}". Use the picker on {{ to insert a known variable.`,
         );
+      }
+    }
+    // Marketing templates have NO ticket context when sent — they go
+    // out through broadcasts targeting segments, and the only data a
+    // segment carries is the 5 Customer fields mapped at upload time.
+    // Reject MARKETING templates that reference ticket-only variables
+    // (order_id, agent_name, etc.) at authoring time so the error
+    // surfaces immediately, not at broadcast-time rejection.
+    if (dto.category === WhatsappTemplateCategory.MARKETING) {
+      for (const name of refs) {
+        if (!MARKETING_ALLOWED_VARIABLES.has(name)) {
+          throw new BadRequestException(
+            `Variable {{${name}}} isn't allowed in marketing templates. ` +
+              `Marketing templates can only use first_name, last_name, email — ` +
+              `the fields that come from a segment's uploaded CSV.`,
+          );
+        }
       }
     }
 

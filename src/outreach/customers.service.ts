@@ -5,8 +5,12 @@ import { CustomerSource } from '../database/enums';
 import { Customer } from './entities/customer.entity';
 
 export interface UpsertRow {
+  /** Full combined phone (country_code + phone_number, digits only). */
   phone: string;
-  name: string | null;
+  countryCode: string | null;
+  phoneNumber: string | null;
+  firstName: string | null;
+  lastName: string | null;
   email: string | null;
 }
 
@@ -93,21 +97,36 @@ export class CustomersService {
     }
     const dedupedRows = Array.from(deduped.values());
 
+    // 7 values per row: phone, country_code, phone_number,
+    // first_name, last_name, email, source
+    const COLS = 7;
     const placeholders: string[] = [];
     const params: unknown[] = [];
     dedupedRows.forEach((row, i) => {
-      const base = i * 4;
-      placeholders.push(
-        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`,
+      const base = i * COLS;
+      const spots = Array.from({ length: COLS }, (_, k) => `$${base + k + 1}`).join(', ');
+      placeholders.push(`(${spots})`);
+      params.push(
+        row.phone,
+        row.countryCode,
+        row.phoneNumber,
+        row.firstName,
+        row.lastName,
+        row.email,
+        source,
       );
-      params.push(row.phone, row.name, row.email, source);
     });
 
     const sql = `
-      INSERT INTO customer (phone, name, email, source)
+      INSERT INTO customer (
+        phone, country_code, phone_number, first_name, last_name, email, source
+      )
       VALUES ${placeholders.join(', ')}
       ON CONFLICT (phone) DO UPDATE SET
-        name = COALESCE(customer.name, EXCLUDED.name),
+        country_code = COALESCE(customer.country_code, EXCLUDED.country_code),
+        phone_number = COALESCE(customer.phone_number, EXCLUDED.phone_number),
+        first_name = COALESCE(customer.first_name, EXCLUDED.first_name),
+        last_name = COALESCE(customer.last_name, EXCLUDED.last_name),
         email = COALESCE(customer.email, EXCLUDED.email),
         "updatedAt" = NOW()
       RETURNING id, phone, (xmax = 0) AS inserted;
@@ -180,9 +199,17 @@ export class CustomersService {
       return existing;
     }
 
+    // STOP-created rows don't have CSV-sourced metadata, so the
+    // display fields are NULL. The country_code is assumed "91"
+    // because every inbound WhatsApp sender we observe is Indian
+    // (surma.in is India-only); re-tag this when international
+    // customers start arriving.
     const created = this.customers.create({
       phone: normalised,
-      name: null,
+      countryCode: normalised.length === 12 && normalised.startsWith('91') ? '91' : null,
+      phoneNumber: normalised.length === 12 && normalised.startsWith('91') ? normalised.slice(2) : normalised,
+      firstName: null,
+      lastName: null,
       email: null,
       source: CustomerSource.WHATSAPP_INBOUND,
       marketing_opted_out: true,
