@@ -34,6 +34,77 @@ interface ParsedRow {
   email: string | null;
 }
 
+/**
+ * Which CSV columns map to which Customer field. Resolved from the
+ * header row (first line of the CSV) via a synonym table. Shopify's
+ * customer export uses `countrycode` + `phonenumber` + `firstname` +
+ * `lastname`; a hand-written CSV might use `phone` + `name`; LimeChat
+ * exports use `wa_id`. All three should "just work" without the admin
+ * having to pre-process the file.
+ */
+interface ColumnMapping {
+  phoneCol: string;
+  countryCodeCol: string | null;
+  nameCol: string | null;
+  firstNameCol: string | null;
+  lastNameCol: string | null;
+  emailCol: string | null;
+}
+
+/** Lowercased header names that map to each Customer field. */
+const PHONE_SYNONYMS = new Set([
+  'phone',
+  'phonenumber',
+  'phone_number',
+  'mobile',
+  'mobile_number',
+  'mobilenumber',
+  'contact',
+  'contact_number',
+  'contactnumber',
+  'wa_id',
+  'whatsapp',
+  'whatsapp_number',
+  'number',
+  'msisdn',
+]);
+const COUNTRY_CODE_SYNONYMS = new Set([
+  'countrycode',
+  'country_code',
+  'cc',
+  'dialcode',
+  'dial_code',
+]);
+const NAME_SYNONYMS = new Set([
+  'name',
+  'full_name',
+  'fullname',
+  'customer_name',
+  'customername',
+  'display_name',
+  'displayname',
+]);
+const FIRST_NAME_SYNONYMS = new Set([
+  'firstname',
+  'first_name',
+  'given_name',
+  'givenname',
+]);
+const LAST_NAME_SYNONYMS = new Set([
+  'lastname',
+  'last_name',
+  'surname',
+  'family_name',
+  'familyname',
+]);
+const EMAIL_SYNONYMS = new Set([
+  'email',
+  'email_address',
+  'emailaddress',
+  'mail',
+  'e_mail',
+]);
+
 interface WorkerCounters {
   total: number;
   processed: number;
@@ -179,10 +250,21 @@ export class CustomerUploadService {
     filePath: string,
     counters: WorkerCounters,
   ): Promise<void> {
+    // Column-mapping is resolved from the header row via the synonym
+    // tables; csv-parse's `columns` callback fires on the first row
+    // and lets us capture that mapping into a closure before data
+    // rows start streaming.
+    let mapping: ColumnMapping | null = null;
     const parser = createReadStream(filePath).pipe(
       parse({
-        columns: (headers: string[]) =>
-          headers.map((h) => h.trim().toLowerCase()),
+        columns: (headers: string[]) => {
+          const normalised = headers.map((h) => h.trim().toLowerCase());
+          mapping = resolveColumnMapping(normalised);
+          // csv-parse keys records by whatever we return here. Return
+          // the normalised names so `record[mapping.phoneCol]` works
+          // without a second lookup.
+          return normalised;
+        },
         bom: true,
         trim: true,
         skip_empty_lines: true,
@@ -199,7 +281,16 @@ export class CustomerUploadService {
     for await (const record of parser) {
       currentLine += 1;
       counters.total += 1;
-      const parsed = this.validateRow(record, currentLine, counters);
+      // Resolved on first data row — if the header mapping failed
+      // (no phone-like column), surface a hard error so the admin
+      // sees FAILED with a clear reason instead of 100% rejected.
+      if (!mapping) {
+        throw new Error(
+          `No phone-like column found in CSV header. Expected one of: ` +
+            `${[...PHONE_SYNONYMS].slice(0, 6).join(', ')}, …`,
+        );
+      }
+      const parsed = this.validateRow(record, mapping, currentLine, counters);
       if (!parsed) continue;
       batch.push(parsed);
       batchLineRange.push({ line: currentLine });
@@ -234,22 +325,57 @@ export class CustomerUploadService {
    */
   private validateRow(
     record: Record<string, string>,
+    mapping: ColumnMapping,
     line: number,
     counters: WorkerCounters,
   ): ParsedRow | null {
-    const rawPhone = (record['phone'] ?? '').toString().trim();
+    const rawPhone = (record[mapping.phoneCol] ?? '').toString().trim();
     if (!rawPhone) {
       this.reject(counters, line, 'missing phone');
       return null;
     }
-    const normalised = CustomersService.normalizePhone(rawPhone);
-    if (normalised.length < 10) {
+    // Country code concatenation — only when BOTH columns exist AND
+    // the phone value doesn't already carry its own prefix (digits
+    // length ≥ 11 implies it does). Prevents double-prefixing on
+    // CSVs that redundantly ship country code alongside an E.164-
+    // style number.
+    const cc = mapping.countryCodeCol
+      ? (record[mapping.countryCodeCol] ?? '').toString().trim()
+      : '';
+    const phoneDigitsOnly = CustomersService.normalizePhone(rawPhone);
+    const combined =
+      cc && phoneDigitsOnly.length <= 10
+        ? CustomersService.normalizePhone(cc + rawPhone)
+        : phoneDigitsOnly;
+    if (combined.length < 10) {
       this.reject(counters, line, `invalid phone "${rawPhone}"`);
       return null;
     }
-    const name = this.optional(record['name']);
-    const email = this.optional(record['email']);
-    return { phone: normalised, name, email };
+
+    // Name resolution: dedicated `name` column wins; otherwise fall
+    // back to `firstname [+ lastname]` concatenation. Null when
+    // neither exists.
+    let name: string | null = null;
+    if (mapping.nameCol) {
+      name = this.optional(record[mapping.nameCol]);
+    } else if (mapping.firstNameCol || mapping.lastNameCol) {
+      const first =
+        (mapping.firstNameCol
+          ? (record[mapping.firstNameCol] ?? '').toString()
+          : '') ?? '';
+      const last =
+        (mapping.lastNameCol
+          ? (record[mapping.lastNameCol] ?? '').toString()
+          : '') ?? '';
+      const combinedName = `${first.trim()} ${last.trim()}`.trim();
+      name = combinedName.length > 0 ? combinedName : null;
+    }
+
+    const email = mapping.emailCol
+      ? this.optional(record[mapping.emailCol])
+      : null;
+
+    return { phone: combined, name, email };
   }
 
   private optional(v: unknown): string | null {
@@ -322,3 +448,32 @@ export class CustomerUploadService {
     }
   }
 }
+
+/**
+ * Pick the right CSV columns to drive Customer upserts from the
+ * header row's synonym matches. Returns null when NO phone-like
+ * column exists — the streaming pipeline then throws a hard FAILED
+ * error so the admin sees a clear reason instead of a mysterious
+ * 100%-rejected upload.
+ */
+function resolveColumnMapping(normalised: string[]): ColumnMapping | null {
+  const phoneCol = normalised.find((h) => PHONE_SYNONYMS.has(h));
+  if (!phoneCol) return null;
+  const countryCodeCol =
+    normalised.find((h) => COUNTRY_CODE_SYNONYMS.has(h)) ?? null;
+  const nameCol = normalised.find((h) => NAME_SYNONYMS.has(h)) ?? null;
+  const firstNameCol =
+    normalised.find((h) => FIRST_NAME_SYNONYMS.has(h)) ?? null;
+  const lastNameCol =
+    normalised.find((h) => LAST_NAME_SYNONYMS.has(h)) ?? null;
+  const emailCol = normalised.find((h) => EMAIL_SYNONYMS.has(h)) ?? null;
+  return {
+    phoneCol,
+    countryCodeCol,
+    nameCol,
+    firstNameCol,
+    lastNameCol,
+    emailCol,
+  };
+}
+
