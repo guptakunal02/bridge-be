@@ -311,6 +311,8 @@ export class WhatsappTemplatesService {
         url?: string;
         phone_number?: string;
       }>;
+      /** Phase 2b — Max Price bid cap, paisa per 1,000 deliveries. */
+      maxPriceAmount?: number;
     },
   ): Promise<WhatsappTemplate> {
     await this.assertWhatsappChannel(channelId);
@@ -393,6 +395,17 @@ export class WhatsappTemplatesService {
     if (phoneButtonCount > 1) {
       throw new BadRequestException(
         'Only one PHONE_NUMBER button is allowed per template',
+      );
+    }
+    // Max Price (Phase 2b) is MARKETING-only — Meta restricts the
+    // feature. Reject early so an admin trying to cap a utility OTP
+    // doesn't make a round-trip to Meta just to get the same answer.
+    if (
+      dto.maxPriceAmount !== undefined &&
+      dto.category !== WhatsappTemplateCategory.MARKETING
+    ) {
+      throw new BadRequestException(
+        'Max price can only be set on MARKETING templates',
       );
     }
     // Narrow DTO → discriminated union. Validator already enforced
@@ -553,6 +566,10 @@ export class WhatsappTemplatesService {
             : null,
         footerText: dto.footerText?.trim() || null,
         buttons: buttons.length > 0 ? buttons : null,
+        maxPriceAmount:
+          dto.maxPriceAmount !== undefined
+            ? String(dto.maxPriceAmount)
+            : null,
         createdBy,
       }),
     );
@@ -672,6 +689,9 @@ export class WhatsappTemplatesService {
       template.language,
       variables,
       template.headerMediaUrl,
+      template.maxPriceAmount !== null
+        ? Number(template.maxPriceAmount)
+        : null,
     );
     return { wamid };
   }

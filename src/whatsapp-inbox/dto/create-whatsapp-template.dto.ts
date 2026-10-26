@@ -4,11 +4,14 @@ import {
   IsArray,
   IsEnum,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateNested,
 } from 'class-validator';
@@ -138,6 +141,21 @@ export class CreateWhatsappTemplateDto {
   @ValidateNested({ each: true })
   @Type(() => WhatsappTemplateButtonDto)
   buttons?: WhatsappTemplateButtonDto[];
+
+  /**
+   * Phase 2b — Max Price bid cap in paisa per 1,000 deliveries.
+   * E.g. ₹100/1k → 10,000. Hard-coded ceiling of 10,00,000 paisa
+   * (= ₹10,000 / 1k = ₹10 / message) catches typos (an extra zero
+   * is a common Indian-currency finger slip). Service rejects on
+   * non-MARKETING category.
+   *
+   * Omit entirely to send at Meta's default auction price.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  maxPriceAmount?: number;
 }
 
 /**

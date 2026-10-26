@@ -1717,6 +1717,9 @@ export class TicketsService {
       template.language,
       variables,
       template.headerMediaUrl,
+      template.maxPriceAmount !== null
+        ? Number(template.maxPriceAmount)
+        : null,
     );
 
     try {

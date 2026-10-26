@@ -189,6 +189,20 @@ export class WhatsappTemplate {
   @Column({ type: 'jsonb', nullable: true })
   buttons!: WhatsappTemplateButton[] | null;
 
+  /**
+   * Max Price bid cap in paisa per 1,000 deliveries. NULL = no cap
+   * (send at Meta's default auction price). Only meaningful for
+   * MARKETING templates — the create path refuses to set it on
+   * UTILITY / AUTHENTICATION. At send time, the sender injects
+   * this as `optimization_spec.bid_amount` on the Meta send call.
+   *
+   * Bigint on the wire because TypeORM maps `bigint` to a JS string
+   * (regular ints only hold 2^53); for safety we Number()-coerce
+   * at the DTO boundary where we know the value fits.
+   */
+  @Column({ type: 'bigint', nullable: true, name: 'max_price_amount' })
+  maxPriceAmount!: string | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy!: string | null;
 

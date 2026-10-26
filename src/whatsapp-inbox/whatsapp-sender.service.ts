@@ -680,6 +680,13 @@ export class WhatsappSenderService {
    * header parameter that Meta expects. Buttons stay static on the
    * template definition, so no per-send parameter is needed for them.
    *
+   * Phase 2b adds `maxPriceAmount` — when set (paisa / 1,000
+   * deliveries), the payload grows an `optimization_spec` block that
+   * tells Meta "cap my cost at this bid." Only valid for MARKETING
+   * templates (enforced at template-create time); the sender passes
+   * whatever the caller hands it, so a broadcast-time per-send
+   * override is a trivial Phase 3 addition.
+   *
    * `variables` is the array of {{1}}, {{2}}, … body values in order.
    * Empty array for static templates.
    */
@@ -689,6 +696,7 @@ export class WhatsappSenderService {
     language: string,
     variables: string[],
     headerImageUrl?: string | null,
+    maxPriceAmount?: number | null,
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -726,7 +734,7 @@ export class WhatsappSenderService {
       });
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: digits,
@@ -737,6 +745,20 @@ export class WhatsappSenderService {
         ...(components.length > 0 ? { components } : {}),
       },
     };
+    // Phase 2b — Max Price bid cap. Only attached when caller
+    // supplied a value. Meta's `optimization_spec` lives at the
+    // top level of the message, NOT inside `template` — easy to
+    // nest incorrectly and get a silent default-pricing fallback.
+    if (
+      typeof maxPriceAmount === 'number' &&
+      Number.isFinite(maxPriceAmount) &&
+      maxPriceAmount > 0
+    ) {
+      payload.optimization_spec = {
+        message_bid_strategy: 'LOWEST_COST_WITH_BID_CAP',
+        bid_amount: maxPriceAmount,
+      };
+    }
 
     let res: Response;
     try {

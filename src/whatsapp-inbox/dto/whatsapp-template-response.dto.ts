@@ -38,6 +38,8 @@ export interface WhatsappTemplateResponse {
   headerMediaUrl: string | null;
   footerText: string | null;
   buttons: WhatsappTemplateButton[] | null;
+  /** Phase 2b — Max Price in paisa per 1,000 deliveries. */
+  maxPriceAmount: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -67,6 +69,10 @@ export function toTemplateResponse(
     headerMediaUrl: t.headerMediaUrl,
     footerText: t.footerText,
     buttons: t.buttons,
+    // bigint survives TypeORM as string; coerce at the DTO boundary.
+    // Validator caps at 1_000_000 so Number() always fits a safe int.
+    maxPriceAmount:
+      t.maxPriceAmount !== null ? Number(t.maxPriceAmount) : null,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };
