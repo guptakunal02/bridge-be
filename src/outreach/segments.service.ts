@@ -115,6 +115,16 @@ export class SegmentsService {
     limit: number,
     offset: number,
   ): Promise<{ rows: Customer[]; total: number }> {
+    // ORDER BY on a column from a joined (not selected) table breaks
+    // under TypeORM's take()/skip() pagination: it auto-wraps the
+    // query in a DISTINCT subquery, and `sc.added_at` isn't in the
+    // inner SELECT (only Customer entity columns are), so Postgres
+    // errors with `column distinctAlias.sc_added_at does not exist`.
+    // c.createdAt IS a Customer column — included in the inner
+    // SELECT — and in practice is virtually identical to added_at
+    // (customers are created and joined to a segment in the same
+    // transaction, 1k rows apart at most). Fine proxy for "recently
+    // added to this segment" without needing a raw-SQL rewrite.
     const [rows, total] = await this.customers
       .createQueryBuilder('c')
       .innerJoin(
@@ -123,7 +133,7 @@ export class SegmentsService {
         'sc.customer_id = c.id AND sc.segment_id = :segmentId',
         { segmentId },
       )
-      .orderBy('sc.added_at', 'DESC')
+      .orderBy('c.createdAt', 'DESC')
       .take(limit)
       .skip(offset)
       .getManyAndCount();
