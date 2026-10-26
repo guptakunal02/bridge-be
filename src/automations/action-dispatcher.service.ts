@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Action, ActionHandler } from './action';
 import { AddTagHandler } from './action-handlers/add-tag.handler';
+import { OptOutCustomerHandler } from './action-handlers/opt-out-customer.handler';
 import { RemoveTagHandler } from './action-handlers/remove-tag.handler';
 import { SendEmailTemplateHandler } from './action-handlers/send-email-template.handler';
 import { SendWhatsappTemplateHandler } from './action-handlers/send-whatsapp-template.handler';
@@ -33,6 +34,7 @@ export class ActionDispatcher {
     setTeam: SetTeamHandler,
     sendWhatsappTemplate: SendWhatsappTemplateHandler,
     sendEmailTemplate: SendEmailTemplateHandler,
+    optOutCustomer: OptOutCustomerHandler,
   ) {
     // Keys are hard-coded strings instead of reading `handler.type`
     // from the instance. The handlers participate in the
@@ -52,6 +54,7 @@ export class ActionDispatcher {
       ['set_team', setTeam as ActionHandler],
       ['send_whatsapp_template', sendWhatsappTemplate as ActionHandler],
       ['send_email_template', sendEmailTemplate as ActionHandler],
+      ['opt_out_customer', optOutCustomer as ActionHandler],
     ]);
   }
 

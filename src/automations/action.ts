@@ -16,7 +16,8 @@ export type ActionType =
   | 'set_assignee'
   | 'set_team'
   | 'send_whatsapp_template'
-  | 'send_email_template';
+  | 'send_email_template'
+  | 'opt_out_customer';
 
 export type Action =
   | { type: 'add_tag'; tagName: string }
@@ -29,6 +30,19 @@ export type Action =
       userId: string | null;
     }
   | { type: 'set_team'; teamId: string }
+  | {
+      type: 'opt_out_customer';
+      /**
+       * Human-readable label stored on Customer.opted_out_keyword
+       * so an admin inspecting the opted-out list can trace WHY
+       * a particular contact was opted out (which rule matched).
+       * Optional — handler falls back to "automation" when absent.
+       *
+       * NOTE: this label is diagnostic only — it never participates
+       * in matching or filtering. Change it freely at any time.
+       */
+      reasonLabel?: string;
+    }
   | {
       type: 'send_whatsapp_template';
       /**

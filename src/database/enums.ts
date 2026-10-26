@@ -204,3 +204,34 @@ export enum EmailTemplateKind {
   REPLY = 'REPLY',
   OUTREACH = 'OUTREACH',
 }
+
+/**
+ * Where a Customer record first appeared from. Diagnostic only —
+ * routing / consent / segmentation never key off source. Preserved
+ * so an admin can answer "did we buy this contact or did they come
+ * in through the inbox?" from the admin UI without a join.
+ */
+export enum CustomerSource {
+  CSV = 'CSV',
+  WHATSAPP_INBOUND = 'WHATSAPP_INBOUND',
+  SHOPIFY_WEBHOOK = 'SHOPIFY_WEBHOOK',
+}
+
+/**
+ * Lifecycle of a single CSV upload job. The upload runs in the
+ * background from a setImmediate kickoff on the controller; this
+ * enum is the admin-facing resumption surface (frontend polls
+ * GET /segments/:id/uploads/:uid every ~3s). States:
+ *
+ *   PENDING    — row inserted, worker not yet picked it up
+ *   PROCESSING — worker streaming + batched upserting
+ *   COMPLETED  — final counters written; file deleted from disk
+ *   FAILED     — fatal error (bad encoding, out-of-disk, DB
+ *                outage); `error` column holds the reason
+ */
+export enum CustomerUploadStatus {
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+}

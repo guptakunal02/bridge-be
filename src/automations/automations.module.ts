@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EmailInboxModule } from '../email-inbox/email-inbox.module';
+import { OutreachModule } from '../outreach/outreach.module';
 import { Team } from '../teams/entities/team.entity';
 import { TicketsModule } from '../tickets/tickets.module';
 import { User } from '../users/entities/user.entity';
@@ -8,6 +9,7 @@ import { WhatsappTemplate } from '../whatsapp-inbox/entities/whatsapp-template.e
 import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { ActionDispatcher } from './action-dispatcher.service';
 import { AddTagHandler } from './action-handlers/add-tag.handler';
+import { OptOutCustomerHandler } from './action-handlers/opt-out-customer.handler';
 import { RemoveTagHandler } from './action-handlers/remove-tag.handler';
 import { SendEmailTemplateHandler } from './action-handlers/send-email-template.handler';
 import { SendWhatsappTemplateHandler } from './action-handlers/send-whatsapp-template.handler';
@@ -39,6 +41,7 @@ import { RuleEvaluator } from './rule-evaluator.service';
     // consumes WhatsappSenderService exported by WhatsappInboxModule
     // for the webhook-driven ticketless template send.
     forwardRef(() => WhatsappInboxModule),
+    OutreachModule,
   ],
   controllers: [AutomationsController],
   providers: [
@@ -54,6 +57,7 @@ import { RuleEvaluator } from './rule-evaluator.service';
     SetTeamHandler,
     SendWhatsappTemplateHandler,
     SendEmailTemplateHandler,
+    OptOutCustomerHandler,
   ],
   exports: [AutomationEngine],
 })

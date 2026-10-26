@@ -13,6 +13,7 @@ import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { EmailInboxModule } from './email-inbox/email-inbox.module';
 import { HealthModule } from './health/health.module';
+import { OutreachModule } from './outreach/outreach.module';
 import { RulesModule } from './rules/rules.module';
 import { SettingsModule } from './settings/settings.module';
 import { TagsModule } from './tags/tags.module';
@@ -55,6 +56,7 @@ import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
     ShopifyWebhooksModule,
     ReturnPrimeWebhooksModule,
     ClickpostWebhooksModule,
+    OutreachModule,
   ],
 })
 export class AppModule {}

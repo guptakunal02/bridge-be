@@ -37,6 +37,7 @@ const VALID_ACTION_TYPES: ReadonlySet<Action['type']> = new Set<Action['type']>(
   'set_team',
   'send_whatsapp_template',
   'send_email_template',
+  'opt_out_customer',
 ]);
 
 const V1_SETTABLE_STATUSES: ReadonlySet<TicketStatus> = new Set<TicketStatus>([
@@ -202,6 +203,19 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
       if (typeof obj.templateId !== 'string' || obj.templateId.length === 0) {
         errors.push(
           `${path}.templateId: must be a non-empty UUID of a ${type === 'send_whatsapp_template' ? 'WhatsApp' : 'email'} template`,
+        );
+      }
+      break;
+    case 'opt_out_customer':
+      // reasonLabel is optional and purely diagnostic; the only
+      // constraint is "if present, it must be a non-empty string"
+      // so we don't store empty strings and have to render-fallback.
+      if (
+        obj.reasonLabel !== undefined &&
+        (typeof obj.reasonLabel !== 'string' || obj.reasonLabel.length === 0)
+      ) {
+        errors.push(
+          `${path}.reasonLabel: must be a non-empty string when provided`,
         );
       }
       break;
