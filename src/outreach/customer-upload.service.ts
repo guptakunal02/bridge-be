@@ -282,8 +282,17 @@ export class CustomerUploadService {
     }));
     const { ids, insertedCount, updatedCount } =
       await this.customers.upsertBatch(upsertRows, CustomerSource.CSV);
+    // CustomersService.upsertBatch dedupes within the batch before
+    // issuing the SQL (Postgres rejects `ON CONFLICT DO UPDATE` on
+    // repeated conflict keys in one VALUES list). The collapsed
+    // duplicates are "redundant" rows — the admin shipped them, we
+    // ran them through, and they contributed no new work. Bucket
+    // them into `skipped` so the accounting adds up:
+    //   processed = succeeded + skipped + rejected
+    const intraBatchDupes =
+      batch.length - (insertedCount + updatedCount);
     counters.succeeded += insertedCount;
-    counters.skipped += updatedCount;
+    counters.skipped += updatedCount + intraBatchDupes;
     counters.processed += batch.length;
     await this.segments.addMembershipsBatch(segmentId, ids);
   }

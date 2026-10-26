@@ -78,19 +78,29 @@ export class CustomersService {
       return { ids: [], insertedCount: 0, updatedCount: 0 };
     }
 
+    // Intra-batch dedup: Postgres rejects `INSERT ... ON CONFLICT
+    // DO UPDATE` when the same conflict key appears twice in a
+    // single VALUES list ("cannot affect row a second time").
+    // Real CSVs often have duplicate rows adjacent to each other
+    // (export glitches, repeated manual appends), so this isn't a
+    // theoretical concern. Last-write-wins — matches the admin's
+    // mental model that the latest CSV row is authoritative on
+    // name/email for the same phone.
+    const deduped = new Map<string, UpsertRow>();
+    for (const row of rows) {
+      const normalised = CustomersService.normalizePhone(row.phone);
+      deduped.set(normalised, { ...row, phone: normalised });
+    }
+    const dedupedRows = Array.from(deduped.values());
+
     const placeholders: string[] = [];
     const params: unknown[] = [];
-    rows.forEach((row, i) => {
+    dedupedRows.forEach((row, i) => {
       const base = i * 4;
       placeholders.push(
         `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`,
       );
-      params.push(
-        CustomersService.normalizePhone(row.phone),
-        row.name,
-        row.email,
-        source,
-      );
+      params.push(row.phone, row.name, row.email, source);
     });
 
     const sql = `
@@ -106,9 +116,12 @@ export class CustomersService {
     const results: Array<{ id: string; phone: string; inserted: boolean }> =
       await this.customers.query(sql, params);
 
-    // Align results back to the input order; INSERT RETURNING can
-    // reorder rows under concurrent conflict resolution, so build
-    // a phone→id map and pull in input order.
+    // Build phone→id map from results, then map ORIGINAL rows back
+    // to IDs (not dedupedRows). The caller (CSV worker) feeds this
+    // into addMembershipsBatch — composite-PK ON CONFLICT DO NOTHING
+    // on segment_customer handles duplicate customerIds silently, so
+    // returning the full-length id array (one per input row) keeps
+    // the counter accounting honest.
     const byPhone = new Map(results.map((r) => [r.phone, r]));
     const ids = rows.map(
       (r) => byPhone.get(CustomersService.normalizePhone(r.phone))!.id,
