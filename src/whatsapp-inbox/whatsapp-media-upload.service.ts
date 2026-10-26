@@ -62,58 +62,62 @@ export class WhatsappMediaUploadService {
       );
     }
 
-    // 1 — S3 upload for durable send-time URL + admin preview.
-    const { url } = await this.s3.upload({
-      filename,
-      contentType,
-      body: buffer,
-    });
-
-    // 2 — Open the Meta resumable upload session.
+    // S3 upload + Meta session-create are independent and run in
+    // parallel — we only pay the slower of the two instead of the
+    // sum. The subsequent Meta bytes upload needs the uploadId AND
+    // the buffer, so it still waits on both. Net saving: ~0.5–1.5s
+    // on a cold run (S3 round-trip ~1s, Meta session ~0.5–1s).
     const appId = this.config.get('WHATSAPP_APP_ID', { infer: true });
     const token = this.config.get('WHATSAPP_ACCESS_TOKEN', { infer: true });
     const version = this.config.get('WHATSAPP_GRAPH_API_VERSION', {
       infer: true,
     });
-
     const sessionUrl =
       `https://graph.facebook.com/${version}/${appId}/uploads` +
       `?file_name=${encodeURIComponent(filename)}` +
       `&file_length=${buffer.byteLength}` +
       `&file_type=${encodeURIComponent(contentType)}`;
 
-    let sessionRes: Response;
+    const startedAt = Date.now();
+    let url: string;
+    let uploadId: string;
     try {
-      sessionRes = await fetch(sessionUrl, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const [s3Result, sessionRes] = await Promise.all([
+        this.s3.upload({ filename, contentType, body: buffer }),
+        fetch(sessionUrl, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+      url = s3Result.url;
+      if (!sessionRes.ok) {
+        const body = await sessionRes.text();
+        this.logger.warn(
+          `Meta upload-session rejected ${sessionRes.status}: ${body.slice(0, 400)}`,
+        );
+        throw new InternalServerErrorException(
+          `Meta refused to open an upload session (HTTP ${sessionRes.status})`,
+        );
+      }
+      const sessionJson: { id?: string } = await sessionRes.json();
+      if (!sessionJson.id) {
+        throw new InternalServerErrorException(
+          'Meta returned no upload id on session create',
+        );
+      }
+      uploadId = sessionJson.id;
     } catch (err) {
+      if (err instanceof InternalServerErrorException) throw err;
       this.logger.error(
-        `Meta upload-session network error: ${
+        `S3+Meta parallel step failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
       throw new InternalServerErrorException(
-        'Could not reach Meta to prepare the upload — retry in a moment',
+        'Could not prepare the upload — retry in a moment',
       );
     }
-    if (!sessionRes.ok) {
-      const body = await sessionRes.text();
-      this.logger.warn(
-        `Meta upload-session rejected ${sessionRes.status}: ${body.slice(0, 400)}`,
-      );
-      throw new InternalServerErrorException(
-        `Meta refused to open an upload session (HTTP ${sessionRes.status})`,
-      );
-    }
-    const sessionJson: { id?: string } = await sessionRes.json();
-    const uploadId = sessionJson.id;
-    if (!uploadId) {
-      throw new InternalServerErrorException(
-        'Meta returned no upload id on session create',
-      );
-    }
+    const parallelMs = Date.now() - startedAt;
 
     // 3 — Push the bytes. The second call uses `Authorization: OAuth`
     // (not Bearer) — a Meta quirk documented on the Resumable Upload
@@ -157,8 +161,11 @@ export class WhatsappMediaUploadService {
       );
     }
 
+    const totalMs = Date.now() - startedAt;
+    const bytesMs = totalMs - parallelMs;
     this.logger.log(
-      `Template header uploaded: s3=${url.slice(-32)} metaHandle=${handle.slice(0, 12)}…`,
+      `Template header uploaded in ${totalMs}ms (parallel=${parallelMs}ms, bytes=${bytesMs}ms): ` +
+        `size=${(buffer.byteLength / 1024).toFixed(0)}KB s3=${url.slice(-32)} metaHandle=${handle.slice(0, 12)}…`,
     );
     return { url, handle };
   }
