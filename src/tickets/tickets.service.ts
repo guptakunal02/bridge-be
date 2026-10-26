@@ -1716,6 +1716,7 @@ export class TicketsService {
       template.name,
       template.language,
       variables,
+      template.headerMediaUrl,
     );
 
     try {

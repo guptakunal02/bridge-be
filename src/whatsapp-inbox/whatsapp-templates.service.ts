@@ -13,9 +13,11 @@ import type { EnvVars } from '../config/env.validation';
 import {
   ChannelType,
   WhatsappTemplateCategory,
+  WhatsappTemplateHeaderType,
   WhatsappTemplateStatus,
 } from '../database/enums';
 import { WhatsappTemplate } from './entities/whatsapp-template.entity';
+import type { WhatsappTemplateButton } from './template-buttons';
 import {
   convertNamedBodyToPositional,
   extractVariableReferences,
@@ -294,6 +296,21 @@ export class WhatsappTemplatesService {
       language: string;
       body: string;
       variableMapping?: Array<{ name: string; fallback?: string | null }>;
+      /** Phase 2a — visual rich fields. */
+      headerType?: WhatsappTemplateHeaderType;
+      headerText?: string;
+      headerMediaHandle?: string;
+      headerMediaUrl?: string;
+      footerText?: string;
+      // Accept the DTO's wider shape (type+text+optional url+optional
+      // phone_number); narrowed to the discriminated union below so
+      // the entity + Meta payload builder see type-safe variants.
+      buttons?: Array<{
+        type: 'URL' | 'PHONE_NUMBER' | 'QUICK_REPLY';
+        text: string;
+        url?: string;
+        phone_number?: string;
+      }>;
     },
   ): Promise<WhatsappTemplate> {
     await this.assertWhatsappChannel(channelId);
@@ -351,31 +368,122 @@ export class WhatsappTemplatesService {
     });
     const url = `https://graph.facebook.com/${version}/${wabaId}/message_templates`;
 
+    // ---- Validate the Phase 2a visual-rich fields ----
+    const headerType = dto.headerType ?? WhatsappTemplateHeaderType.NONE;
+    if (
+      headerType === WhatsappTemplateHeaderType.IMAGE &&
+      (!dto.headerMediaHandle || !dto.headerMediaUrl)
+    ) {
+      throw new BadRequestException(
+        'Image headers require both headerMediaHandle and headerMediaUrl (upload the sample first via POST /media)',
+      );
+    }
+    if (
+      headerType === WhatsappTemplateHeaderType.TEXT &&
+      (!dto.headerText || !dto.headerText.trim())
+    ) {
+      throw new BadRequestException(
+        'headerText is required when headerType is TEXT',
+      );
+    }
+    const rawButtons = dto.buttons ?? [];
+    const phoneButtonCount = rawButtons.filter(
+      (b) => b.type === 'PHONE_NUMBER',
+    ).length;
+    if (phoneButtonCount > 1) {
+      throw new BadRequestException(
+        'Only one PHONE_NUMBER button is allowed per template',
+      );
+    }
+    // Narrow DTO → discriminated union. Validator already enforced
+    // the shape per `type`; this cast is safe.
+    const buttons: WhatsappTemplateButton[] = rawButtons.map((b) => {
+      if (b.type === 'URL') {
+        if (!b.url) {
+          throw new BadRequestException(
+            `URL button "${b.text}" is missing a url`,
+          );
+        }
+        return { type: 'URL', text: b.text, url: b.url };
+      }
+      if (b.type === 'PHONE_NUMBER') {
+        if (!b.phone_number) {
+          throw new BadRequestException(
+            `PHONE_NUMBER button "${b.text}" is missing a phone_number`,
+          );
+        }
+        return {
+          type: 'PHONE_NUMBER',
+          text: b.text,
+          phone_number: b.phone_number,
+        };
+      }
+      return { type: 'QUICK_REPLY', text: b.text };
+    });
+
+    // ---- Compose the Meta components array ----
+    const components: Array<Record<string, unknown>> = [];
+    if (headerType === WhatsappTemplateHeaderType.TEXT) {
+      components.push({ type: 'HEADER', format: 'TEXT', text: dto.headerText });
+    } else if (headerType === WhatsappTemplateHeaderType.IMAGE) {
+      components.push({
+        type: 'HEADER',
+        format: 'IMAGE',
+        example: { header_handle: [dto.headerMediaHandle] },
+      });
+    }
+    components.push(
+      orderedMapping.length > 0
+        ? {
+            type: 'BODY',
+            text: positionalBody,
+            // Meta's reviewer uses `example.body_text` to understand
+            // what each {{n}} will be filled with — without it the
+            // template looks ambiguous ("Hi {{1}}") and the reviewer
+            // tends to reject under TAG_CONTENT_MISMATCH or
+            // INCORRECT_CATEGORY. We feed back the author's own
+            // fallback as the sample so Meta sees the full
+            // intended text filled in. body_text is a 2D array:
+            // one example set, N values matching N positional slots.
+            example: {
+              body_text: [
+                orderedMapping.map((m) => m.fallback ?? 'sample'),
+              ],
+            },
+          }
+        : { type: 'BODY', text: positionalBody },
+    );
+    if (dto.footerText && dto.footerText.trim()) {
+      components.push({ type: 'FOOTER', text: dto.footerText.trim() });
+    }
+    if (buttons.length > 0) {
+      components.push({
+        type: 'BUTTONS',
+        // Meta accepts type strings in lowercase for buttons —
+        // url / phone_number / quick_reply — distinct from the
+        // top-level TYPE string on components ("HEADER" / "BUTTONS")
+        // which stays uppercase. Not consistent, but documented.
+        buttons: buttons.map((b) => {
+          if (b.type === 'URL') {
+            return { type: 'URL', text: b.text, url: b.url };
+          }
+          if (b.type === 'PHONE_NUMBER') {
+            return {
+              type: 'PHONE_NUMBER',
+              text: b.text,
+              phone_number: b.phone_number,
+            };
+          }
+          return { type: 'QUICK_REPLY', text: b.text };
+        }),
+      });
+    }
+
     const payload = {
       name: dto.name,
       language: dto.language,
       category: dto.category,
-      components: [
-        orderedMapping.length > 0
-          ? {
-              type: 'BODY',
-              text: positionalBody,
-              // Meta's reviewer uses `example.body_text` to understand
-              // what each {{n}} will be filled with — without it the
-              // template looks ambiguous ("Hi {{1}}") and the reviewer
-              // tends to reject under TAG_CONTENT_MISMATCH or
-              // INCORRECT_CATEGORY. We feed back the author's own
-              // fallback as the sample so Meta sees the full
-              // intended text filled in. body_text is a 2D array:
-              // one example set, N values matching N positional slots.
-              example: {
-                body_text: [
-                  orderedMapping.map((m) => m.fallback ?? 'sample'),
-                ],
-              },
-            }
-          : { type: 'BODY', text: positionalBody },
-      ],
+      components,
     };
 
     let res: Response;
@@ -430,6 +538,21 @@ export class WhatsappTemplatesService {
           orderedMapping.length > 0 ? orderedMapping : null,
         metaTemplateId: metaResp.id,
         rejectionReason: null,
+        headerType,
+        headerText:
+          headerType === WhatsappTemplateHeaderType.TEXT
+            ? (dto.headerText ?? null)
+            : null,
+        headerMediaHandle:
+          headerType === WhatsappTemplateHeaderType.IMAGE
+            ? (dto.headerMediaHandle ?? null)
+            : null,
+        headerMediaUrl:
+          headerType === WhatsappTemplateHeaderType.IMAGE
+            ? (dto.headerMediaUrl ?? null)
+            : null,
+        footerText: dto.footerText?.trim() || null,
+        buttons: buttons.length > 0 ? buttons : null,
         createdBy,
       }),
     );
@@ -548,6 +671,7 @@ export class WhatsappTemplatesService {
       template.name,
       template.language,
       variables,
+      template.headerMediaUrl,
     );
     return { wamid };
   }

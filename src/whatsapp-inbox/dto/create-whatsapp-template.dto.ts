@@ -3,14 +3,24 @@ import {
   ArrayMaxSize,
   IsArray,
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { WhatsappTemplateCategory } from '../../database/enums';
+import {
+  WhatsappTemplateCategory,
+  WhatsappTemplateHeaderType,
+} from '../../database/enums';
+import {
+  WHATSAPP_BUTTON_TEXT_MAX,
+  WHATSAPP_FOOTER_TEXT_MAX,
+  WHATSAPP_HEADER_TEXT_MAX,
+} from '../template-buttons';
 
 /**
  * One entry in the DTO's `variableMapping` array — a reference to a
@@ -90,4 +100,71 @@ export class CreateWhatsappTemplateDto {
   @ValidateNested({ each: true })
   @Type(() => WhatsappTemplateVariableMappingDto)
   variableMapping?: WhatsappTemplateVariableMappingDto[];
+
+  /**
+   * Visual-rich additions (Phase 2a). Header, footer, and buttons.
+   * All optional — a legacy body-only template is a valid shape.
+   *
+   * `headerType=IMAGE` requires `headerMediaHandle` + `headerMediaUrl`
+   * — the admin obtains these by first POSTing the sample image to
+   * /channels/:id/whatsapp-templates/media which returns both.
+   */
+  @IsOptional()
+  @IsEnum(WhatsappTemplateHeaderType)
+  headerType?: WhatsappTemplateHeaderType;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(WHATSAPP_HEADER_TEXT_MAX)
+  headerText?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(10)
+  headerMediaHandle?: string;
+
+  @IsOptional()
+  @IsUrl({ require_tld: true, require_protocol: true })
+  headerMediaUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(WHATSAPP_FOOTER_TEXT_MAX)
+  footerText?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @ValidateNested({ each: true })
+  @Type(() => WhatsappTemplateButtonDto)
+  buttons?: WhatsappTemplateButtonDto[];
+}
+
+/**
+ * One button on the template's BUTTONS component. Discriminated on
+ * `type`; validator rejects the field combinations that are illegal
+ * for each type (URL requires `url`, PHONE_NUMBER requires
+ * `phone_number`, QUICK_REPLY takes neither).
+ */
+export class WhatsappTemplateButtonDto {
+  @IsString()
+  @IsIn(['URL', 'PHONE_NUMBER', 'QUICK_REPLY'])
+  type!: 'URL' | 'PHONE_NUMBER' | 'QUICK_REPLY';
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(WHATSAPP_BUTTON_TEXT_MAX)
+  text!: string;
+
+  @IsOptional()
+  @IsUrl({ require_tld: true, require_protocol: true })
+  url?: string;
+
+  // Meta expects E.164 or near-E.164 (country code + digits). Keep
+  // the regex permissive — Meta's own validator is the final arbiter.
+  @IsOptional()
+  @Matches(/^\+?[0-9][0-9 \-()]{6,}$/, {
+    message: 'phone_number must be an international phone number',
+  })
+  phone_number?: string;
 }

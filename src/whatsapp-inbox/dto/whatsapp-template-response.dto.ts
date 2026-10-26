@@ -1,8 +1,10 @@
 import {
   WhatsappTemplateCategory,
+  WhatsappTemplateHeaderType,
   WhatsappTemplateStatus,
 } from '../../database/enums';
 import { WhatsappTemplate } from '../entities/whatsapp-template.entity';
+import type { WhatsappTemplateButton } from '../template-buttons';
 import type { VariableMappingEntry } from '../template-variables';
 
 export interface WhatsappTemplateResponse {
@@ -30,6 +32,12 @@ export interface WhatsappTemplateResponse {
    * falls back to the positional "fill {{1}} manually" UX.
    */
   variableMapping: VariableMappingEntry[] | null;
+  /** Phase 2a visual-rich fields. All default-neutral on legacy rows. */
+  headerType: WhatsappTemplateHeaderType;
+  headerText: string | null;
+  headerMediaUrl: string | null;
+  footerText: string | null;
+  buttons: WhatsappTemplateButton[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +59,14 @@ export function toTemplateResponse(
     createdBy: t.createdBy,
     creatorName: t.creator?.name ?? null,
     variableMapping: t.variableMapping,
+    // headerMediaHandle intentionally excluded — it's a Meta-internal
+    // identifier of no use to the FE; `headerMediaUrl` is what the
+    // preview + send-time image.link reads.
+    headerType: t.headerType,
+    headerText: t.headerText,
+    headerMediaUrl: t.headerMediaUrl,
+    footerText: t.footerText,
+    buttons: t.buttons,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };

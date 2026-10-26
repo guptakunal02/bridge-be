@@ -206,6 +206,27 @@ export enum EmailTemplateKind {
 }
 
 /**
+ * Visual header type on a WhatsApp message template. Driven by Meta's
+ * HEADER component contract — one component per template, one `format`
+ * per header.
+ *
+ *   NONE  — no header component on the template (body-only, legacy
+ *           shape; the default for migrated rows).
+ *   TEXT  — plain text, max 60 chars, no variables in V1.
+ *   IMAGE — image attached. Author uploads a sample at template-create
+ *           time (Meta reviews the sample); send-time can override the
+ *           URL per broadcast.
+ *
+ * VIDEO + DOCUMENT are intentionally omitted from V1 — same upload
+ * mechanics, different mime filter; add when a merchant actually asks.
+ */
+export enum WhatsappTemplateHeaderType {
+  NONE = 'NONE',
+  TEXT = 'TEXT',
+  IMAGE = 'IMAGE',
+}
+
+/**
  * Where a Customer record first appeared from. Diagnostic only —
  * routing / consent / segmentation never key off source. Preserved
  * so an admin can answer "did we buy this contact or did they come

@@ -19,6 +19,7 @@ import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
 import { TemplateVariableResolverService } from './template-variable-resolver.service';
 import { WhatsappChannelAdapter } from './whatsapp-channel-adapter';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
+import { WhatsappMediaUploadService } from './whatsapp-media-upload.service';
 import { WhatsappSenderService } from './whatsapp-sender.service';
 import { WhatsappTemplatesController } from './whatsapp-templates.controller';
 import { WhatsappTemplatesService } from './whatsapp-templates.service';
@@ -92,6 +93,7 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     WhatsappIngestService,
     WhatsappSenderService,
     WhatsappTemplatesService,
+    WhatsappMediaUploadService,
     TemplateVariableResolverService,
     WhatsappSignatureGuard,
     WhatsappChannelAdapter,

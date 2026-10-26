@@ -11,9 +11,11 @@ import {
 import { Channel } from '../../channels/entities/channel.entity';
 import {
   WhatsappTemplateCategory,
+  WhatsappTemplateHeaderType,
   WhatsappTemplateStatus,
 } from '../../database/enums';
 import { User } from '../../users/entities/user.entity';
+import type { WhatsappTemplateButton } from '../template-buttons';
 import type { VariableMappingEntry } from '../template-variables';
 
 /**
@@ -132,6 +134,60 @@ export class WhatsappTemplate {
    */
   @Column({ type: 'jsonb', nullable: true, name: 'variable_mapping' })
   variableMapping!: VariableMappingEntry[] | null;
+
+  /**
+   * Visual-rich fields on the template. Meta's HEADER / FOOTER /
+   * BUTTONS components. All nullable because:
+   *   - every pre-Phase-2 row has header_type = NONE and no footer
+   *     or buttons,
+   *   - a template may legitimately have body-only (utility OTPs,
+   *     plain re-engagement) so emptiness is first-class.
+   *
+   * See template-buttons.ts for the discriminated button shape.
+   */
+  @Column({
+    type: 'enum',
+    enum: WhatsappTemplateHeaderType,
+    enumName: 'whatsapp_template_header_type_enum',
+    default: WhatsappTemplateHeaderType.NONE,
+    name: 'header_type',
+  })
+  headerType!: WhatsappTemplateHeaderType;
+
+  @Column({ type: 'text', nullable: true, name: 'header_text' })
+  headerText!: string | null;
+
+  /**
+   * Opaque Meta handle returned by the Resumable Upload API. Required
+   * on template-create when headerType = IMAGE; populated server-side
+   * right after the admin's file lands on S3. NOT used on send — Meta
+   * takes the send-time URL from `headerMediaUrl` (or an admin-supplied
+   * override at broadcast time).
+   */
+  @Column({ type: 'text', nullable: true, name: 'header_media_handle' })
+  headerMediaHandle!: string | null;
+
+  /**
+   * S3 URL for the sample image. Doubles as the preview image in the
+   * template admin UI and as the default send-time `image.link`
+   * passed to Meta's send API. A broadcast can override this per
+   * campaign so one "promo_banner" template can be reused with a
+   * different hero image every sale.
+   */
+  @Column({ type: 'text', nullable: true, name: 'header_media_url' })
+  headerMediaUrl!: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'footer_text' })
+  footerText!: string | null;
+
+  /**
+   * Zero-to-three buttons rendered beneath the body. Stored as jsonb
+   * (not a child table) because the shape is small and never queried
+   * individually — the admin edits the whole array as one unit. Null
+   * on legacy rows; empty array on authored-with-no-buttons rows.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  buttons!: WhatsappTemplateButton[] | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy!: string | null;

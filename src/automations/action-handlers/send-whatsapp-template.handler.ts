@@ -171,6 +171,7 @@ export class SendWhatsappTemplateHandler
         template.name,
         template.language,
         variables,
+        template.headerMediaUrl,
       );
       this.logger.log(
         `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${payload.customerPhone}`,

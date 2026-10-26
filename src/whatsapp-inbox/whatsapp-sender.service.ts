@@ -674,15 +674,21 @@ export class WhatsappSenderService {
    *     ]
    *   }
    *
-   * V1 only ships BODY-component templates — no HEADER (image/video),
-   * no BUTTONS. `variables` is the array of {{1}}, {{2}}, … values
-   * in order. Empty array for static templates.
+   * Phase 2a adds `headerImageUrl` — when the template has an IMAGE
+   * header, caller passes the template's `headerMediaUrl` (or a
+   * per-campaign override from a broadcast send) and we attach the
+   * header parameter that Meta expects. Buttons stay static on the
+   * template definition, so no per-send parameter is needed for them.
+   *
+   * `variables` is the array of {{1}}, {{2}}, … body values in order.
+   * Empty array for static templates.
    */
   async sendTemplate(
     waId: string,
     templateName: string,
     language: string,
     variables: string[],
+    headerImageUrl?: string | null,
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -698,18 +704,27 @@ export class WhatsappSenderService {
     });
     const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
 
-    const components =
-      variables.length > 0
-        ? [
-            {
-              type: 'body',
-              parameters: variables.map((v) => ({
-                type: 'text',
-                text: v,
-              })),
-            },
-          ]
-        : [];
+    const components: Array<Record<string, unknown>> = [];
+    if (headerImageUrl) {
+      // Meta's send-API header shape for IMAGE: a single parameter
+      // whose `image.link` is any publicly fetchable URL. We feed the
+      // template's canonical S3 URL (or a broadcast-time override).
+      components.push({
+        type: 'header',
+        parameters: [
+          { type: 'image', image: { link: headerImageUrl } },
+        ],
+      });
+    }
+    if (variables.length > 0) {
+      components.push({
+        type: 'body',
+        parameters: variables.map((v) => ({
+          type: 'text',
+          text: v,
+        })),
+      });
+    }
 
     const payload = {
       messaging_product: 'whatsapp',
