@@ -256,3 +256,46 @@ export enum CustomerUploadStatus {
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
 }
+
+/**
+ * Lifecycle of a marketing broadcast. States:
+ *
+ *   DRAFT     — admin created the broadcast + we snapshotted the
+ *               recipient set, but hasn't clicked Start yet. Admin
+ *               can still cancel or edit timing-related fields.
+ *   SCHEDULED — admin set a `scheduled_for` in the future; a cron
+ *               tick is responsible for flipping SCHEDULED → SENDING
+ *               at the right moment. (V1 is synchronous: SCHEDULED
+ *               is reserved; use DRAFT→SENDING directly for immediate
+ *               sends.)
+ *   SENDING   — worker is actively iterating recipients.
+ *   COMPLETED — worker finished the full recipient list; some rows
+ *               may be FAILED but the broadcast itself is done.
+ *   CANCELLED — admin hit Cancel; worker stopped at the next batch
+ *               boundary. Already-sent rows stay as SENT; the rest
+ *               stay PENDING.
+ *   FAILED    — unrecoverable error (template deleted mid-run,
+ *               Meta auth revoked, etc.). Rare.
+ */
+export enum BroadcastStatus {
+  DRAFT = 'DRAFT',
+  SCHEDULED = 'SCHEDULED',
+  SENDING = 'SENDING',
+  COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
+  FAILED = 'FAILED',
+}
+
+/**
+ * Per-recipient state within a broadcast. The worker owns the
+ * PENDING → SENT transition at send-attempt time; the WhatsApp
+ * delivery webhook flips SENT → DELIVERED → READ (future). FAILED
+ * is terminal and carries `last_error` for debugging.
+ */
+export enum BroadcastRecipientStatus {
+  PENDING = 'PENDING',
+  SENT = 'SENT',
+  DELIVERED = 'DELIVERED',
+  READ = 'READ',
+  FAILED = 'FAILED',
+}
