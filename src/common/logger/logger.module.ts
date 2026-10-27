@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import type { EnvVars } from '../../config/env.validation';
 import { NodeEnv } from '../../config/env.validation';
+import { MemoryMonitorService } from '../memory-monitor.service';
 
 export const REQUEST_ID_HEADER = 'x-request-id';
 
@@ -62,5 +63,6 @@ export const REQUEST_ID_HEADER = 'x-request-id';
       },
     }),
   ],
+  providers: [MemoryMonitorService],
 })
 export class LoggerModule {}
