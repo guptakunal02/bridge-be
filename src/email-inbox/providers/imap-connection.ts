@@ -203,6 +203,18 @@ export class ImapConnection {
         await sleep(5000);
         try {
           const token = await this.freshToken();
+          // Clear listeners from the old client BEFORE dropping the ref.
+          // Gmail terminates IDLE every ~30 minutes; each reconnect built
+          // a fresh ImapFlow but left the old instance's `exists` / `close`
+          // / `error` listeners attached. Over ~4h of reconnects the
+          // retained closures (and their captured scope) grew the heap
+          // past V8's default 970 MB ceiling and OOM-killed the process.
+          // See: pm2 restart loop 2026-10-27, bridge-be process id=1.
+          try {
+            this.client.removeAllListeners();
+          } catch {
+            // ignore — old client may already be in a bad state
+          }
           this.client = this.buildClient(token);
           await this.client.connect();
           const mb = await this.openMailboxOrFallback();
@@ -334,6 +346,13 @@ export class ImapConnection {
       await this.client.logout();
     } catch {
       // ignore — socket may already be closed
+    }
+    // Defensive: strip listeners after logout too, in case the channel is
+    // restarted later and the old client object outlives the GC window.
+    try {
+      this.client.removeAllListeners();
+    } catch {
+      // ignore
     }
   }
 }
