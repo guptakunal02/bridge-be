@@ -32,6 +32,13 @@ export class MemoryMonitorService implements OnModuleInit, OnModuleDestroy {
   private readonly startedAt = Date.now();
 
   onModuleInit(): void {
+    // Diagnostic: dual-path. If the Nest Logger isn't fully wired to
+    // pino at module-init time, our snapshots would silently vanish.
+    // console.log goes to stdout which pm2 captures directly — if we
+    // see this but not the Logger line, we know the issue is pino
+    // routing, not instantiation.
+    // eslint-disable-next-line no-console
+    console.log('[MemoryMonitor] onModuleInit fired');
     // Fire once at boot so we have a baseline, then every 60s.
     this.snapshot('boot');
     this.timer = setInterval(() => this.snapshot('tick'), 60_000);
@@ -50,8 +57,12 @@ export class MemoryMonitorService implements OnModuleInit, OnModuleDestroy {
     const m = process.memoryUsage();
     const toMB = (b: number): number => Math.round(b / 1024 / 1024);
     const uptimeSec = Math.round((Date.now() - this.startedAt) / 1000);
-    this.logger.log(
-      `MEM-SNAPSHOT reason=${reason} uptime=${uptimeSec}s rss=${toMB(m.rss)}MB heapTotal=${toMB(m.heapTotal)}MB heapUsed=${toMB(m.heapUsed)}MB external=${toMB(m.external)}MB arrayBuffers=${toMB(m.arrayBuffers)}MB`,
-    );
+    const line = `MEM-SNAPSHOT reason=${reason} uptime=${uptimeSec}s rss=${toMB(m.rss)}MB heapTotal=${toMB(m.heapTotal)}MB heapUsed=${toMB(m.heapUsed)}MB external=${toMB(m.external)}MB arrayBuffers=${toMB(m.arrayBuffers)}MB`;
+    this.logger.log(line);
+    // Belt-and-braces: also write to stdout directly so pm2 captures
+    // it even if pino isn't picking up this Logger instance for some
+    // reason. If both appear, we can delete the console path later.
+    // eslint-disable-next-line no-console
+    console.log(line);
   }
 }
