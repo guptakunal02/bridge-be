@@ -37,6 +37,25 @@ const MARKETING_ALLOWED_VARIABLES: ReadonlySet<string> = new Set([
   'last_name',
   'email',
 ]);
+
+/**
+ * Hidden max-price ceiling we stamp on every MARKETING template at
+ * creation time, in paisa per 1,000 deliveries (₹200/1k). Admins
+ * never see or set this directly — it exists only so that broadcasts
+ * can scale an effective bid via Meta's `per_message_bid_multiplier`
+ * (a per-send multiplier against the template's bid_amount).
+ *
+ * The ceiling is deliberately above Meta's current India marketing
+ * published rate (~₹1/msg, so ₹1000/1k) and above the top of the
+ * reach-estimate curve we observed (~₹172/1k). A broadcast slider
+ * from ₹0 (= default pricing, no multiplier) to this ceiling gives
+ * the admin the whole realistic bid range at any point in time.
+ *
+ * When Meta raises India's published rate past this value, bump
+ * the ceiling. The template authoring UI stays unchanged — admins
+ * never bind to a specific bid at the template level.
+ */
+export const TEMPLATE_HIDDEN_CEILING_PAISA = 200_000;
 import { WhatsappSenderService } from './whatsapp-sender.service';
 import { TemplateVariableResolverService } from './template-variable-resolver.service';
 
@@ -426,15 +445,25 @@ export class WhatsappTemplatesService {
         'Only one PHONE_NUMBER button is allowed per template',
       );
     }
-    // Max Price (Phase 2b) is MARKETING-only — Meta restricts the
-    // feature. Reject early so an admin trying to cap a utility OTP
-    // doesn't make a round-trip to Meta just to get the same answer.
-    if (
-      dto.maxPriceAmount !== undefined &&
-      dto.category !== WhatsappTemplateCategory.MARKETING
-    ) {
+    // Max price is MARKETING-only AND admin-invisible — we stamp a
+    // hidden ceiling (TEMPLATE_HIDDEN_CEILING_PAISA) on every MARKETING
+    // template so broadcasts can scale an effective bid via the
+    // per_message_bid_multiplier knob at send time. Admin never sees
+    // this value in the template authoring UI; the bidding UX lives
+    // entirely on the broadcast.
+    //
+    // UTILITY and AUTHENTICATION categories don't get the ceiling —
+    // Meta doesn't honour optimization_spec for them, and they send
+    // through the Cloud API (/messages), not /marketing_messages.
+    const applyHiddenCeiling =
+      dto.category === WhatsappTemplateCategory.MARKETING;
+    // Reject if a DTO still carries a maxPriceAmount — the field is
+    // deprecated after the broadcast-level pricing pivot. Clear
+    // signal to any legacy caller.
+    if (dto.maxPriceAmount !== undefined) {
       throw new BadRequestException(
-        'Max price can only be set on MARKETING templates',
+        'Max price can no longer be set on templates. ' +
+          'Pricing is picked per broadcast — leave this field off.',
       );
     }
     // Narrow DTO → discriminated union. Validator already enforced
@@ -521,12 +550,23 @@ export class WhatsappTemplatesService {
       });
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       name: dto.name,
       language: dto.language,
       category: dto.category,
       components,
     };
+    // Marketing templates ALWAYS go out with the hidden ceiling in
+    // optimization_spec. This is what wires every marketing template
+    // into Meta's auction + unlocks the broadcast-level multiplier
+    // at send time. UTILITY / AUTHENTICATION templates omit it (Meta
+    // doesn't honour the field for those categories).
+    if (applyHiddenCeiling) {
+      payload.optimization_spec = {
+        bid_amount: TEMPLATE_HIDDEN_CEILING_PAISA,
+        bid_strategy: 'LOWEST_COST_WITH_BID_CAP',
+      };
+    }
 
     let res: Response;
     try {
@@ -595,10 +635,11 @@ export class WhatsappTemplatesService {
             : null,
         footerText: dto.footerText?.trim() || null,
         buttons: buttons.length > 0 ? buttons : null,
-        maxPriceAmount:
-          dto.maxPriceAmount !== undefined
-            ? String(dto.maxPriceAmount)
-            : null,
+        // Persisted ceiling matches what we sent to Meta so the
+        // broadcast path can read it as the multiplier's divisor.
+        maxPriceAmount: applyHiddenCeiling
+          ? String(TEMPLATE_HIDDEN_CEILING_PAISA)
+          : null,
         createdBy,
       }),
     );

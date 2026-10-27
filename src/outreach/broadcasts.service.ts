@@ -31,7 +31,12 @@ export interface BroadcastDetail {
   max_tries: number;
   retry_window_minutes: number;
   header_image_url_override: string | null;
+  /** The internal multiplier Meta's auction uses. Diagnostic only. */
   per_message_bid_multiplier: number | null;
+  /** Admin-facing effective bid in paisa / 1,000 deliveries.
+   *  Computed = multiplier × template.maxPriceAmount ceiling.
+   *  Null = default rate-card pricing. */
+  bid_amount_paisa: number | null;
   total_recipients: number;
   sent_count: number;
   delivered_count: number;
@@ -87,7 +92,9 @@ export class BroadcastsService {
       maxTries?: number;
       retryWindowMinutes?: number;
       headerImageUrlOverride?: string;
-      perMessageBidMultiplier?: number;
+      /** Absolute bid in paisa / 1,000 deliveries picked at
+       *  broadcast time. Converted to a Meta multiplier internally. */
+      bidAmountPaisa?: number;
     },
   ): Promise<Broadcast> {
     const segment = await this.segments.findOne({
@@ -146,9 +153,26 @@ export class BroadcastsService {
           max_tries: input.maxTries ?? 3,
           retry_window_minutes: input.retryWindowMinutes ?? 60,
           header_image_url_override: input.headerImageUrlOverride ?? null,
+          // Convert absolute bid → per_message_bid_multiplier against
+          // the template's hidden ceiling. Only applies when the
+          // template has a ceiling (MARKETING) AND the admin picked a
+          // non-zero bid; otherwise we send with no multiplier and
+          // Meta uses the template's default (ceiling) price — or
+          // rate-card pricing for templates without a ceiling.
           per_message_bid_multiplier:
-            typeof input.perMessageBidMultiplier === 'number'
-              ? String(input.perMessageBidMultiplier)
+            typeof input.bidAmountPaisa === 'number' &&
+            input.bidAmountPaisa > 0 &&
+            template.maxPriceAmount !== null
+              ? String(
+                  Math.min(
+                    10,
+                    Math.max(
+                      0.1,
+                      input.bidAmountPaisa /
+                        Number(template.maxPriceAmount),
+                    ),
+                  ).toFixed(2),
+                )
               : null,
           created_by: createdBy,
         }),
@@ -258,6 +282,10 @@ export class BroadcastsService {
         b.per_message_bid_multiplier !== null
           ? Number(b.per_message_bid_multiplier)
           : null,
+      // Recompute the admin-facing bid from the stored multiplier +
+      // the template's hidden ceiling. Loaded here (one extra SELECT)
+      // so the FE never needs to resolve the template separately.
+      bid_amount_paisa: await this.resolveAbsoluteBid(b),
       total_recipients: b.total_recipients,
       sent_count: b.sent_count,
       delivered_count: b.delivered_count,
@@ -271,6 +299,26 @@ export class BroadcastsService {
       started_at: b.started_at,
       completed_at: b.completed_at,
     };
+  }
+
+  /**
+   * Compute the admin-facing absolute bid (paisa / 1k) from the
+   * stored multiplier + the template's hidden ceiling. Null = no
+   * bid override was picked at creation time; Meta uses the
+   * template's default (ceiling) price for marketing templates, or
+   * rate-card pricing for others.
+   */
+  private async resolveAbsoluteBid(
+    b: Broadcast,
+  ): Promise<number | null> {
+    if (b.per_message_bid_multiplier === null) return null;
+    const tpl = await this.templates.findOne({
+      where: { id: b.template_id },
+    });
+    if (!tpl || tpl.maxPriceAmount === null) return null;
+    const ceiling = Number(tpl.maxPriceAmount);
+    const mult = Number(b.per_message_bid_multiplier);
+    return Math.round(ceiling * mult);
   }
 
   async start(id: string): Promise<Broadcast> {

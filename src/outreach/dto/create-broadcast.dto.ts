@@ -57,14 +57,16 @@ export class CreateBroadcastDto {
   headerImageUrlOverride?: string;
 
   /**
-   * Per-message bid multiplier applied against the template's
-   * max-price `bid_amount`. Meta's bid_spec accepts 0.1–10 at send
-   * time; 1.0 is unchanged. Omit (or send 1.0) for "use the
-   * template's bid as-is."
+   * Absolute max-price bid for this broadcast, in paisa per 1,000
+   * marketing deliveries. Admin picks this from the reach-estimate
+   * slider in the broadcast create wizard. Omit for Meta's default
+   * (rate-card) pricing. Service converts to Meta's
+   * `per_message_bid_multiplier` internally by dividing against the
+   * template's hidden ceiling. Capped above by the ceiling itself.
    */
   @IsOptional()
-  @IsNumber()
-  @Min(0.1)
-  @Max(10)
-  perMessageBidMultiplier?: number;
+  @IsInt()
+  @Min(0)
+  @Max(2_000_000)
+  bidAmountPaisa?: number;
 }
