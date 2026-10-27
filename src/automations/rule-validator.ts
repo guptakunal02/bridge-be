@@ -238,6 +238,24 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
             }
           }
         }
+        if (
+          obj.header_image_path !== undefined &&
+          (typeof obj.header_image_path !== 'string' ||
+            obj.header_image_path.length === 0)
+        ) {
+          errors.push(
+            `${path}.header_image_path: must be a non-empty JSON path when provided`,
+          );
+        }
+        if (
+          obj.header_image_fallback !== undefined &&
+          (typeof obj.header_image_fallback !== 'string' ||
+            obj.header_image_fallback.length === 0)
+        ) {
+          errors.push(
+            `${path}.header_image_fallback: must be a non-empty URL when provided`,
+          );
+        }
       }
       break;
     case 'opt_out_customer':

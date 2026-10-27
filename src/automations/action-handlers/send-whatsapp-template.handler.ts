@@ -233,13 +233,36 @@ export class SendWhatsappTemplateHandler
       );
       return;
     }
+    // Header image. For IMAGE-header templates, three-tier fallback:
+    //   1. resolveJsonPath(raw, header_image_path)   — per-event dynamic
+    //   2. header_image_fallback                     — admin's static backup
+    //   3. template.headerMediaUrl                   — original Meta sample
+    // Static text / no-header templates skip this entirely.
+    let headerUrl: string | null = template.headerMediaUrl;
+    if (template.headerType === 'IMAGE') {
+      const dynamic =
+        action.header_image_path && raw
+          ? resolveJsonPath(raw, action.header_image_path)
+          : null;
+      headerUrl =
+        dynamic ??
+        action.header_image_fallback ??
+        template.headerMediaUrl;
+      if (!headerUrl) {
+        this.logger.warn(
+          `send_whatsapp_template webhook path: template ${templateId} has IMAGE header but no resolvable URL (binding=${action.header_image_path ?? 'none'}, fallback=${action.header_image_fallback ?? 'none'}, sample=${template.headerMediaUrl ?? 'none'}); skipping`,
+        );
+        return;
+      }
+    }
+
     try {
       await this.sender.sendTemplate(
         recipientPhone,
         template.name,
         template.language,
         variables,
-        template.headerMediaUrl,
+        headerUrl,
         {
           useMarketingEndpoint: template.maxPriceAmount !== null,
         },

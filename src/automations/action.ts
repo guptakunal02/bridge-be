@@ -82,6 +82,21 @@ export type Action =
        * unchanged.
        */
       variable_bindings?: Record<string, string>;
+      /**
+       * Phase 4 — JSON path to a per-send image URL for templates whose
+       * header_type is IMAGE. Three-tier fallback at send time:
+       *   1. resolveJsonPath(payload, header_image_path)
+       *   2. header_image_fallback   (admin's static backup URL)
+       *   3. template.headerMediaUrl (the sample uploaded for Meta)
+       * Only honored when the template has IMAGE header; ignored otherwise.
+       */
+      header_image_path?: string;
+      /**
+       * Phase 4 — static backup image URL. Used when header_image_path
+       * resolves to null, OR when there's no header_image_path at all.
+       * Must be publicly reachable (Meta fetches it at send time).
+       */
+      header_image_fallback?: string;
     }
   | {
       type: 'send_email_template';
