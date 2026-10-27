@@ -56,6 +56,32 @@ export type Action =
        * with a log line.
        */
       templateId: string;
+      /**
+       * Phase 4 — event-driven sends (Shopify / Clickpost / Return
+       * Prime webhooks). When present, the handler resolves the
+       * recipient's phone number from this JSON path against the
+       * full webhook payload (e.g. "additional.phone" for Clickpost,
+       * "customer.default_address.phone" for Shopify). Null/absent
+       * means: fall back to the pre-populated payload.customerPhone
+       * (the pre-Phase-4 shape — kept for backward compat with any
+       * existing rules).
+       */
+      recipient_phone_path?: string;
+      /**
+       * Phase 4 — map each template variable to a JSON path in the
+       * webhook payload. Keys are variable names (as declared in
+       * the template body: `{{order_id}}` → key "order_id"); values
+       * are dot-paths (e.g. "additional.order_id"). At send time
+       * the handler resolves each path, falls back to the template's
+       * stored fallback string when the path yields null/undefined,
+       * and finally to "" if no fallback exists.
+       *
+       * Null/absent means: use the legacy path (handler reads
+       * pre-populated payload.variables[name] keyed by the template's
+       * variableMapping[]). This keeps existing automations working
+       * unchanged.
+       */
+      variable_bindings?: Record<string, string>;
     }
   | {
       type: 'send_email_template';

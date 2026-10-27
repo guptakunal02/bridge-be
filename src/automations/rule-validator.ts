@@ -205,6 +205,40 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
           `${path}.templateId: must be a non-empty UUID of a ${type === 'send_whatsapp_template' ? 'WhatsApp' : 'email'} template`,
         );
       }
+      // Phase 4 — event-binding fields are optional. Validate shape
+      // when present so a mangled rule can't persist and later fail
+      // deep in the handler at send time.
+      if (type === 'send_whatsapp_template') {
+        if (
+          obj.recipient_phone_path !== undefined &&
+          (typeof obj.recipient_phone_path !== 'string' ||
+            obj.recipient_phone_path.length === 0)
+        ) {
+          errors.push(
+            `${path}.recipient_phone_path: must be a non-empty JSON path (e.g. "additional.phone") when provided`,
+          );
+        }
+        if (obj.variable_bindings !== undefined) {
+          const vb: unknown = obj.variable_bindings;
+          if (
+            vb === null ||
+            typeof vb !== 'object' ||
+            Array.isArray(vb)
+          ) {
+            errors.push(
+              `${path}.variable_bindings: must be an object of {variableName: jsonPath}`,
+            );
+          } else {
+            for (const [k, v] of Object.entries(vb as Record<string, unknown>)) {
+              if (typeof v !== 'string' || v.length === 0) {
+                errors.push(
+                  `${path}.variable_bindings.${k}: must be a non-empty JSON path`,
+                );
+              }
+            }
+          }
+        }
+      }
       break;
     case 'opt_out_customer':
       // reasonLabel is optional and purely diagnostic; the only

@@ -39,4 +39,14 @@ export class CustomEventDto {
   @IsString()
   @MaxLength(64)
   channelId!: string;
+
+  /**
+   * Phase 4 — full raw event JSON. When present, send_whatsapp_template
+   * actions with variable_bindings resolve JSON paths against this
+   * object. Optional for backward compat; pre-Phase-4 callers can
+   * continue sending only `variables` and omit this.
+   */
+  @IsOptional()
+  @IsObject()
+  rawPayload?: Record<string, unknown>;
 }

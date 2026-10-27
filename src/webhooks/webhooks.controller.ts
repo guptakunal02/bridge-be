@@ -92,6 +92,7 @@ export class WebhooksController {
         variables: body.variables ?? {},
         customerPhone: body.customerPhone.trim(),
         channelId: body.channelId.trim(),
+        rawPayload: body.rawPayload,
       },
     });
     return { accepted: true };

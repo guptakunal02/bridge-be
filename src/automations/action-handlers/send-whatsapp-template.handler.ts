@@ -8,6 +8,7 @@ import { WhatsappTemplateStatus } from '../../database/enums';
 import type { Action, ActionHandler } from '../action';
 import { AutomationSystemActor } from '../automation-system-actor';
 import { AUTOMATION_EVENT, type AutomationEventPayload } from '../events';
+import { resolveJsonPath } from '../json-path';
 
 /**
  * send_whatsapp_template handler. Has TWO paths depending on the
@@ -66,15 +67,19 @@ export class SendWhatsappTemplateHandler
     action: Extract<Action, { type: 'send_whatsapp_template' }>,
     ctx: AutomationEventPayload,
   ): Promise<void> {
-    // Channel-less events (webhook, shopify) use the direct-send path:
-    // no ticket, phone from payload, template's bound channel. Both
-    // payload shapes share the (name/variables/customerPhone/channelId)
-    // keys executeWebhookPath reads.
+    // Channel-less events (webhook, shopify, upcoming clickpost/RP) use
+    // the direct-send path: no ticket, phone from payload, template's
+    // bound channel. All webhook payload shapes share the
+    // (name/variables/customerPhone/channelId) keys executeWebhookPath
+    // reads; rawPayload is optional and used by Phase-4 bindings.
     if (
       ctx.event === AUTOMATION_EVENT.WEBHOOK_CUSTOM ||
-      ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED ||
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED ||
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED ||
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED
     ) {
-      await this.executeWebhookPath(action.templateId, ctx);
+      await this.executeWebhookPath(action, ctx);
       return;
     }
     await this.executeTicketPath(action.templateId, ctx);
@@ -107,15 +112,19 @@ export class SendWhatsappTemplateHandler
   }
 
   private async executeWebhookPath(
-    templateId: string,
+    action: Extract<Action, { type: 'send_whatsapp_template' }>,
     ctx: AutomationEventPayload,
   ): Promise<void> {
     if (
       ctx.event !== AUTOMATION_EVENT.WEBHOOK_CUSTOM &&
-      ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED &&
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED &&
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED &&
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED
     ) {
       return;
     }
+    const templateId = action.templateId;
     const payload = ctx.payload;
     const template = await this.templates.findOne({
       where: { id: templateId },
@@ -145,15 +154,74 @@ export class SendWhatsappTemplateHandler
       );
       return;
     }
+
+    // Phase 4 — rule-level JSON-path bindings. When the admin configured
+    // variable_bindings in the action config, resolve each template
+    // variable from the raw event JSON instead of trusting the emitter
+    // to pre-populate payload.variables. Falls through to the legacy
+    // path when the action has no bindings so pre-Phase-4 rules keep
+    // working unchanged.
+    const useBindings =
+      action.variable_bindings !== undefined &&
+      Object.keys(action.variable_bindings).length > 0;
+    const raw = payload.rawPayload ?? null;
+
+    // Recipient phone. Phase 4 path overrides pre-populated
+    // payload.customerPhone; if the resolved path yields null, we skip
+    // (no fallback for recipient — there's no sensible default).
+    let recipientPhone = payload.customerPhone;
+    if (action.recipient_phone_path) {
+      if (!raw) {
+        this.logger.warn(
+          `send_whatsapp_template webhook path: template ${templateId} has recipient_phone_path but event lacks rawPayload; skipping`,
+        );
+        return;
+      }
+      const resolved = resolveJsonPath(raw, action.recipient_phone_path);
+      if (!resolved) {
+        this.logger.warn(
+          `send_whatsapp_template webhook path: template ${templateId} recipient_phone_path=${action.recipient_phone_path} resolved to null; skipping`,
+        );
+        return;
+      }
+      recipientPhone = resolved;
+    }
+
+    // Variables. Three resolution modes:
+    //   1. Phase 4 rule bindings  → resolve each var's JSON path
+    //   2. Legacy named mapping   → payload.variables[entry.name]
+    //   3. No mapping, no vars    → send empty variables array
     const mapping = template.variableMapping;
     const variables: string[] = [];
-    if (mapping && mapping.length > 0) {
+    if (useBindings) {
+      if (!raw) {
+        this.logger.warn(
+          `send_whatsapp_template webhook path: template ${templateId} uses variable_bindings but event lacks rawPayload; skipping`,
+        );
+        return;
+      }
+      if (!mapping || mapping.length === 0) {
+        this.logger.warn(
+          `send_whatsapp_template webhook path: template ${templateId} uses variable_bindings but template has no variableMapping; skipping`,
+        );
+        return;
+      }
       for (const entry of mapping) {
-        const raw = payload.variables[entry.name];
+        const path = action.variable_bindings![entry.name];
+        const resolved = path ? resolveJsonPath(raw, path) : null;
         const value =
-          raw === undefined || raw === null
+          resolved === null
             ? (entry.fallback ?? '')
-            : String(raw);
+            : resolved;
+        variables.push(value);
+      }
+    } else if (mapping && mapping.length > 0) {
+      for (const entry of mapping) {
+        const rawVal = payload.variables[entry.name];
+        const value =
+          rawVal === undefined || rawVal === null
+            ? (entry.fallback ?? '')
+            : String(rawVal);
         variables.push(value);
       }
     } else if (template.variableCount > 0) {
@@ -167,7 +235,7 @@ export class SendWhatsappTemplateHandler
     }
     try {
       await this.sender.sendTemplate(
-        payload.customerPhone,
+        recipientPhone,
         template.name,
         template.language,
         variables,
@@ -177,11 +245,11 @@ export class SendWhatsappTemplateHandler
         },
       );
       this.logger.log(
-        `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${payload.customerPhone}`,
+        `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${recipientPhone}${useBindings ? ' (bindings)' : ''}`,
       );
     } catch (err) {
       this.logger.warn(
-        `send_whatsapp_template webhook send failed: event=${payload.name} template=${template.name} to=${payload.customerPhone}: ${
+        `send_whatsapp_template webhook send failed: event=${payload.name} template=${template.name} to=${recipientPhone}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

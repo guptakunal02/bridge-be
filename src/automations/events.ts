@@ -168,6 +168,16 @@ export interface WebhookCustomEventPayload {
   variables: Record<string, string | number | boolean>;
   customerPhone: string;
   channelId: string;
+  /**
+   * Phase 4 — full raw JSON body as received from the external
+   * webhook caller. The send_whatsapp_template action's
+   * variable_bindings resolve JSON paths against this object (e.g.
+   * "additional.latest_status.remark" for a Clickpost tracking
+   * event). Optional for backward compat with pre-Phase-4 callers;
+   * when absent the handler falls back to the pre-populated
+   * `variables` map keyed by template variableMapping[].name.
+   */
+  rawPayload?: Record<string, unknown>;
 }
 
 /**
@@ -212,6 +222,8 @@ export interface ShopifyOrderConfirmedEventPayload {
   currency: string;
   itemCount: number;
   shopDomain: string;
+  /** Phase 4 — the raw Shopify order JSON. See WebhookCustomEventPayload.rawPayload. */
+  rawPayload?: Record<string, unknown>;
 }
 
 /**
@@ -235,6 +247,8 @@ export interface ShopifyOrderFulfilledEventPayload {
   itemCount: number;
   fulfillmentStatus: string;
   shopDomain: string;
+  /** Phase 4 — the raw Shopify order JSON. See WebhookCustomEventPayload.rawPayload. */
+  rawPayload?: Record<string, unknown>;
 }
 
 /**
@@ -275,6 +289,8 @@ export interface ShopifyFulfillmentEventPayload {
   trackingNumber: string | null;
   trackingUrl: string | null;
   shopDomain: string;
+  /** Phase 4 — the raw Shopify fulfillment JSON. See WebhookCustomEventPayload.rawPayload. */
+  rawPayload?: Record<string, unknown>;
 }
 
 export type AutomationEventPayload =

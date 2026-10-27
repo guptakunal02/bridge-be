@@ -167,6 +167,9 @@ export class ShopifyWebhooksService {
           item_count: String(extracted.itemCount),
           customer_email: extracted.customerEmail ?? '',
         },
+        // Phase 4 — raw Shopify payload for rule-level variable_bindings
+        // (admin picks arbitrary JSON paths in the automation editor).
+        rawPayload: input.payload,
       },
     });
   }
@@ -241,6 +244,7 @@ export class ShopifyWebhooksService {
           fulfillment_status: fulfillmentStatus,
           customer_email: extracted.customerEmail ?? '',
         },
+        rawPayload: input.payload,
       },
     });
   }
@@ -312,6 +316,7 @@ export class ShopifyWebhooksService {
           tracking_url: extracted.trackingUrl ?? '',
           customer_email: extracted.customerEmail ?? '',
         },
+        rawPayload: input.payload,
       },
     });
   }
