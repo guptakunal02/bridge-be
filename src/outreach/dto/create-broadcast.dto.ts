@@ -1,6 +1,7 @@
 import {
   IsInt,
   IsISO8601,
+  IsNumber,
   IsOptional,
   IsString,
   IsUrl,
@@ -54,4 +55,16 @@ export class CreateBroadcastDto {
   @IsOptional()
   @IsUrl({ require_tld: true, require_protocol: true })
   headerImageUrlOverride?: string;
+
+  /**
+   * Per-message bid multiplier applied against the template's
+   * max-price `bid_amount`. Meta's bid_spec accepts 0.1–10 at send
+   * time; 1.0 is unchanged. Omit (or send 1.0) for "use the
+   * template's bid as-is."
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(0.1)
+  @Max(10)
+  perMessageBidMultiplier?: number;
 }

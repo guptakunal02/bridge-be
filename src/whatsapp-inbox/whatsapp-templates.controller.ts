@@ -28,6 +28,11 @@ import {
 } from './dto/whatsapp-template-response.dto';
 import { WhatsappTemplate } from './entities/whatsapp-template.entity';
 import { WhatsappMediaUploadService } from './whatsapp-media-upload.service';
+import {
+  WhatsappReachEstimateService,
+  type ReachEstimateDateInterval,
+  type ReachEstimateResponse,
+} from './whatsapp-reach-estimate.service';
 import { WhatsappTemplatesService } from './whatsapp-templates.service';
 
 /**
@@ -46,9 +51,44 @@ export class WhatsappTemplatesController {
   constructor(
     private readonly templatesService: WhatsappTemplatesService,
     private readonly mediaUpload: WhatsappMediaUploadService,
+    private readonly reachEstimate: WhatsappReachEstimateService,
     @InjectRepository(WhatsappTemplate)
     private readonly templates: Repository<WhatsappTemplate>,
   ) {}
+
+  /**
+   * Marketing Messages Lite reach-estimate proxy. Returns Meta's
+   * bid-vs-delivery curve for the given country + lookback window.
+   * The admin UI uses this to render the max-price slider in
+   * template authoring and in broadcast creation.
+   *
+   * The route is auth-protected (any logged-in member) because it
+   * exposes the WABA token's pricing surface implicitly; keeping it
+   * out of public reach prevents an outsider from scraping Meta's
+   * pricing curve via Bridge.
+   */
+  @Get('reach-estimate')
+  async getReachEstimate(
+    @Query('country') country?: string,
+    @Query('dateInterval') dateInterval?: string,
+  ): Promise<ReachEstimateResponse> {
+    const normCountry = (country ?? 'IN').toUpperCase();
+    const INTERVAL_OPTIONS: ReachEstimateDateInterval[] = [
+      'L1D',
+      'L7D',
+      'L14D',
+      'L28D',
+    ];
+    const normInterval = INTERVAL_OPTIONS.includes(
+      (dateInterval ?? 'L7D') as ReachEstimateDateInterval,
+    )
+      ? ((dateInterval ?? 'L7D') as ReachEstimateDateInterval)
+      : 'L7D';
+    return this.reachEstimate.estimate({
+      country: normCountry,
+      dateInterval: normInterval,
+    });
+  }
 
   /**
    * Upload a header image for template authoring. Two-sided

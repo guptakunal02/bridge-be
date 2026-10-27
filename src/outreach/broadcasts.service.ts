@@ -31,6 +31,7 @@ export interface BroadcastDetail {
   max_tries: number;
   retry_window_minutes: number;
   header_image_url_override: string | null;
+  per_message_bid_multiplier: number | null;
   total_recipients: number;
   sent_count: number;
   delivered_count: number;
@@ -86,6 +87,7 @@ export class BroadcastsService {
       maxTries?: number;
       retryWindowMinutes?: number;
       headerImageUrlOverride?: string;
+      perMessageBidMultiplier?: number;
     },
   ): Promise<Broadcast> {
     const segment = await this.segments.findOne({
@@ -144,6 +146,10 @@ export class BroadcastsService {
           max_tries: input.maxTries ?? 3,
           retry_window_minutes: input.retryWindowMinutes ?? 60,
           header_image_url_override: input.headerImageUrlOverride ?? null,
+          per_message_bid_multiplier:
+            typeof input.perMessageBidMultiplier === 'number'
+              ? String(input.perMessageBidMultiplier)
+              : null,
           created_by: createdBy,
         }),
       );
@@ -248,6 +254,10 @@ export class BroadcastsService {
       max_tries: b.max_tries,
       retry_window_minutes: b.retry_window_minutes,
       header_image_url_override: b.header_image_url_override,
+      per_message_bid_multiplier:
+        b.per_message_bid_multiplier !== null
+          ? Number(b.per_message_bid_multiplier)
+          : null,
       total_recipients: b.total_recipients,
       sent_count: b.sent_count,
       delivered_count: b.delivered_count,

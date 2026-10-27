@@ -43,6 +43,7 @@ export class BroadcastsController {
       maxTries: dto.maxTries,
       retryWindowMinutes: dto.retryWindowMinutes,
       headerImageUrlOverride: dto.headerImageUrlOverride,
+      perMessageBidMultiplier: dto.perMessageBidMultiplier,
     });
     return { id: row.id };
   }

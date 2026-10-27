@@ -20,6 +20,7 @@ import { TemplateVariableResolverService } from './template-variable-resolver.se
 import { WhatsappChannelAdapter } from './whatsapp-channel-adapter';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
 import { WhatsappMediaUploadService } from './whatsapp-media-upload.service';
+import { WhatsappReachEstimateService } from './whatsapp-reach-estimate.service';
 import { WhatsappSenderService } from './whatsapp-sender.service';
 import { WhatsappTemplatesController } from './whatsapp-templates.controller';
 import { WhatsappTemplatesService } from './whatsapp-templates.service';
@@ -94,6 +95,7 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     WhatsappSenderService,
     WhatsappTemplatesService,
     WhatsappMediaUploadService,
+    WhatsappReachEstimateService,
     TemplateVariableResolverService,
     WhatsappSignatureGuard,
     WhatsappChannelAdapter,

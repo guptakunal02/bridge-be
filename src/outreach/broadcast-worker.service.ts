@@ -101,10 +101,6 @@ export class BroadcastWorkerService implements OnModuleInit {
 
     const headerImageUrl =
       broadcast.header_image_url_override ?? template.headerMediaUrl;
-    const maxPrice =
-      template.maxPriceAmount !== null
-        ? Number(template.maxPriceAmount)
-        : null;
 
     this.logger.log(
       `Broadcast ${broadcastId} starting: total=${broadcast.total_recipients} template=${template.name}`,
@@ -126,7 +122,7 @@ export class BroadcastWorkerService implements OnModuleInit {
       // Fire in parallel per batch — fine for I/O-bound Meta calls.
       await Promise.all(
         batch.map((r) =>
-          this.sendOne(r, broadcast, template, headerImageUrl, maxPrice),
+          this.sendOne(r, broadcast, template, headerImageUrl),
         ),
       );
 
@@ -169,7 +165,6 @@ export class BroadcastWorkerService implements OnModuleInit {
     broadcast: Broadcast,
     template: WhatsappTemplate,
     headerImageUrl: string | null,
-    maxPriceAmount: number | null,
   ): Promise<void> {
     // Variables are already positional + ordered from snapshot time.
     // sender.sendTemplate takes a positional string[].
@@ -205,7 +200,13 @@ export class BroadcastWorkerService implements OnModuleInit {
           template.language,
           variables,
           headerImageUrl,
-          maxPriceAmount,
+          {
+            useMarketingEndpoint: template.maxPriceAmount !== null,
+            perMessageBidMultiplier:
+              broadcast.per_message_bid_multiplier !== null
+                ? Number(broadcast.per_message_bid_multiplier)
+                : null,
+          },
         );
         await this.recipients.update(recipient.id, {
           status: BroadcastRecipientStatus.SENT,

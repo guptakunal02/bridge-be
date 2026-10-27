@@ -81,6 +81,26 @@ export class Broadcast {
   header_image_url_override!: string | null;
 
   /**
+   * Per-broadcast bid multiplier applied to the template's max-price
+   * `bid_amount` on every message. Legal values 0.1–10 per Meta's
+   * marketing_messages API. NULL = default 1.0 = pass the template's
+   * bid through unchanged. 0.5 halves the effective bid for this
+   * broadcast; 1.5 raises it by 50%. Only has an effect when the
+   * template itself was created with a max price.
+   *
+   * numeric(5,2) on the wire → string on the TS side; coerce to
+   * Number() before passing to the sender.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+    name: 'per_message_bid_multiplier',
+  })
+  per_message_bid_multiplier!: string | null;
+
+  /**
    * Stats aggregates — updated per-batch by the worker so the
    * detail page can poll a single row instead of GROUP BY'ing the
    * recipients table. Reconciled at the end of a run.

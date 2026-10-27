@@ -172,9 +172,9 @@ export class SendWhatsappTemplateHandler
         template.language,
         variables,
         template.headerMediaUrl,
-        template.maxPriceAmount !== null
-          ? Number(template.maxPriceAmount)
-          : null,
+        {
+          useMarketingEndpoint: template.maxPriceAmount !== null,
+        },
       );
       this.logger.log(
         `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${payload.customerPhone}`,

@@ -718,9 +718,9 @@ export class WhatsappTemplatesService {
       template.language,
       variables,
       template.headerMediaUrl,
-      template.maxPriceAmount !== null
-        ? Number(template.maxPriceAmount)
-        : null,
+      {
+        useMarketingEndpoint: template.maxPriceAmount !== null,
+      },
     );
     return { wamid };
   }

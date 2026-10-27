@@ -680,12 +680,25 @@ export class WhatsappSenderService {
    * header parameter that Meta expects. Buttons stay static on the
    * template definition, so no per-send parameter is needed for them.
    *
-   * Phase 2b adds `maxPriceAmount` — when set (paisa / 1,000
-   * deliveries), the payload grows an `optimization_spec` block that
-   * tells Meta "cap my cost at this bid." Only valid for MARKETING
-   * templates (enforced at template-create time); the sender passes
-   * whatever the caller hands it, so a broadcast-time per-send
-   * override is a trivial Phase 3 addition.
+   * Phase 2b (corrected after reading Meta docs more carefully in
+   * Phase 3): the max-price `bid_amount` lives on the TEMPLATE
+   * (`optimization_spec` at template-create time), not on individual
+   * messages. At send time, two things matter:
+   *   1. Templates that carry a max price can ONLY be sent via the
+   *      Marketing Messages API (`/marketing_messages`). The Cloud
+   *      API (`/messages`) rejects them with error 131061.
+   *   2. The admin can optionally scale that template's bid up or
+   *      down per message with `bid_spec.per_message_bid_multiplier`
+   *      (0.1–10, default 1.0). This is the per-broadcast "same
+   *      template, different budget per campaign" lever.
+   *
+   * `marketingOptions`:
+   *   * `useMarketingEndpoint` — set when the template was created
+   *     with `optimization_spec` (we store this as
+   *     template.maxPriceAmount !== null). If true, routes through
+   *     `/marketing_messages` instead of `/messages`.
+   *   * `perMessageBidMultiplier` — scales the template's bid for
+   *     this specific message. Only valid when useMarketingEndpoint.
    *
    * `variables` is the array of {{1}}, {{2}}, … body values in order.
    * Empty array for static templates.
@@ -696,7 +709,10 @@ export class WhatsappSenderService {
     language: string,
     variables: string[],
     headerImageUrl?: string | null,
-    maxPriceAmount?: number | null,
+    marketingOptions?: {
+      useMarketingEndpoint: boolean;
+      perMessageBidMultiplier?: number | null;
+    },
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -710,7 +726,16 @@ export class WhatsappSenderService {
     const version = this.config.get('WHATSAPP_GRAPH_API_VERSION', {
       infer: true,
     });
-    const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+    // Max-price templates MUST use /marketing_messages. Cloud API
+    // (`/messages`) returns error 131061 ("Marketing templates
+    // containing bid_spec are not supported by the Cloud API") the
+    // moment it sees one. Other templates stay on /messages — same
+    // ingress Meta recommends for utility, authentication, and plain
+    // marketing templates.
+    const useMarketing = marketingOptions?.useMarketingEndpoint === true;
+    const url = useMarketing
+      ? `https://graph.facebook.com/${version}/${phoneNumberId}/marketing_messages`
+      : `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
 
     const components: Array<Record<string, unknown>> = [];
     if (headerImageUrl) {
@@ -745,18 +770,20 @@ export class WhatsappSenderService {
         ...(components.length > 0 ? { components } : {}),
       },
     };
-    // Phase 2b — Max Price bid cap. Only attached when caller
-    // supplied a value. Meta's `optimization_spec` lives at the
-    // top level of the message, NOT inside `template` — easy to
-    // nest incorrectly and get a silent default-pricing fallback.
+    // Per-message bid multiplier only applies to marketing_messages
+    // and only when the template already has a max price (template-
+    // level optimization_spec). Scales the template's bid up or
+    // down (0.5 = half, 1.5 = 1.5x, default 1.0 unchanged).
+    const mult = marketingOptions?.perMessageBidMultiplier;
     if (
-      typeof maxPriceAmount === 'number' &&
-      Number.isFinite(maxPriceAmount) &&
-      maxPriceAmount > 0
+      useMarketing &&
+      typeof mult === 'number' &&
+      Number.isFinite(mult) &&
+      mult > 0 &&
+      mult !== 1
     ) {
-      payload.optimization_spec = {
-        message_bid_strategy: 'LOWEST_COST_WITH_BID_CAP',
-        bid_amount: maxPriceAmount,
+      payload.bid_spec = {
+        per_message_bid_multiplier: mult,
       };
     }
 
