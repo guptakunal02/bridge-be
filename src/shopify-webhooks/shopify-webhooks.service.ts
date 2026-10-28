@@ -382,11 +382,43 @@ export class ShopifyWebhooksService {
     webhookId: string;
     payload: Record<string, unknown>;
   }): Promise<void> {
-    const secret = this.config.get('LENS_INTERNAL_SECRET', { infer: true });
-    if (!secret) {
-      // Dev-mode Bridge without surma-ops wired up. Expected; just skip.
-      return;
+    // Local-only aggregations first — these don't need a network hop
+    // and are useful even when surma-ops is unreachable. Picks the
+    // human-readable line_items[].name (e.g. "Salt & Pepper Top in
+    // Black - L") because templates typically read like:
+    //   "Product: {{products}}, Amount: ₹{{order_total}}"
+    // Also exposes a count so admins can conditionally say
+    // "your product" vs "your 2 products" via automation predicate.
+    const items = input.payload['line_items'];
+    if (Array.isArray(items) && items.length > 0) {
+      const names: string[] = [];
+      const titles: string[] = [];
+      for (const it of items) {
+        if (it && typeof it === 'object') {
+          const n = (it as Record<string, unknown>)['name'];
+          const t = (it as Record<string, unknown>)['title'];
+          if (typeof n === 'string' && n.trim()) names.push(n.trim());
+          if (typeof t === 'string' && t.trim()) titles.push(t.trim());
+        }
+      }
+      if (names.length > 0 || titles.length > 0) {
+        const existing =
+          (input.payload['enrichments'] as
+            | Record<string, unknown>
+            | undefined) ?? {};
+        if (names.length > 0) existing['product_names'] = names.join(', ');
+        if (titles.length > 0) existing['product_titles'] = titles.join(', ');
+        existing['product_count'] = items.length;
+        input.payload['enrichments'] = existing;
+      }
     }
+
+    // Remote hop — first-product image URL via surma-ops cache. Best-
+    // effort; on failure the automation rule's header_image_fallback
+    // kicks in at send time. See 2026-10-28 contract committed in
+    // bridge-be #8408a4f + surma-ops side.
+    const secret = this.config.get('LENS_INTERNAL_SECRET', { infer: true });
+    if (!secret) return;
     const sku = extractFirstLineItemSku(input.payload);
     if (!sku) {
       this.logger.log(
@@ -403,8 +435,6 @@ export class ShopifyWebhooksService {
         signal: ac.signal,
       });
       if (!res.ok) {
-        // 404 = unknown SKU, 502 = missing product_id or Shopify fail.
-        // Both are known fallback cases per the contract.
         this.logger.log(
           `shopify order confirmed: webhook_id=${input.webhookId} sku=${sku} image lookup returned ${res.status} — falling back`,
         );
@@ -422,8 +452,6 @@ export class ShopifyWebhooksService {
       existing['first_product_image_source'] = body.source ?? 'unknown';
       input.payload['enrichments'] = existing;
     } catch (err) {
-      // Timeout, network error, or body parse failure. Log + continue —
-      // webhook ACK is never blocked by the enrichment hop.
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.log(
         `shopify order confirmed: webhook_id=${input.webhookId} sku=${sku} image lookup failed: ${msg} — falling back`,
