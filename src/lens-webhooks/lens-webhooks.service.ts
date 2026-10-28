@@ -34,7 +34,7 @@ export class LensWebhooksService {
   ) {}
 
   async handle(input: {
-    topic: 'ndr' | 'npr';
+    topic: 'ndr' | 'npr' | 'rto';
     event_id: string;
     received_at?: string;
     payload: Record<string, unknown>;
@@ -67,16 +67,22 @@ export class LensWebhooksService {
   }
 
   private emit(input: {
-    topic: 'ndr' | 'npr';
+    topic: 'ndr' | 'npr' | 'rto';
     event_id: string;
     payload: Record<string, unknown>;
   }): void {
     const event =
       input.topic === 'ndr'
         ? AUTOMATION_EVENT.LENS_NDR
-        : AUTOMATION_EVENT.LENS_NPR;
-    const name: 'lens.ndr' | 'lens.npr' =
-      input.topic === 'ndr' ? 'lens.ndr' : 'lens.npr';
+        : input.topic === 'npr'
+          ? AUTOMATION_EVENT.LENS_NPR
+          : AUTOMATION_EVENT.LENS_RTO;
+    const name: 'lens.ndr' | 'lens.npr' | 'lens.rto' =
+      input.topic === 'ndr'
+        ? 'lens.ndr'
+        : input.topic === 'npr'
+          ? 'lens.npr'
+          : 'lens.rto';
 
     this.automations.emit({
       // Sentinel ticket — channel-less event. Rule evaluator bypasses

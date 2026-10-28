@@ -45,6 +45,14 @@ export const AUTOMATION_EVENT = {
   LENS_NDR: 'lens.ndr',
   LENS_NPR: 'lens.npr',
   /**
+   * Lens-forwarded RTO (Return To Origin) events. Fires when a parcel
+   * is on its way back to the merchant warehouse after N failed
+   * delivery attempts — the point where "we tried but it's coming
+   * back" needs a customer-facing nudge (reconfirm address, offer a
+   * discount to re-ship, etc.).
+   */
+  LENS_RTO: 'lens.rto',
+  /**
    * Customer tapped a QUICK_REPLY button on an outbound template.
    * Meta webhooks the button-reply back; the ingest side parses the
    * stamped payload JSON ({button_id, ctx}) and emits this event
@@ -401,7 +409,7 @@ export interface ShopifyFulfillmentEventPayload {
  * and the admin's binding rules handle the mapping.
  */
 export interface LensExceptionEventPayload {
-  name: 'lens.ndr' | 'lens.npr';
+  name: 'lens.ndr' | 'lens.npr' | 'lens.rto';
   variables: Record<string, string | number | boolean>;
   customerPhone: string;
   channelId: string;
@@ -452,6 +460,11 @@ export type AutomationEventPayload =
     }
   | {
       event: typeof AUTOMATION_EVENT.LENS_NPR;
+      ticket: TicketSnapshot;
+      payload: LensExceptionEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.LENS_RTO;
       ticket: TicketSnapshot;
       payload: LensExceptionEventPayload;
     }

@@ -4,8 +4,8 @@ import { IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'cla
  * Shape of the body on POST /webhooks/lens, locked by the Lens-side
  * contract (see Lens's deploy handoff doc):
  *
- *   topic       — 'ndr' | 'npr'. Future topics (e.g. 'rto') land as
- *                 enum additions on both sides.
+ *   topic       — 'ndr' | 'npr' | 'rto'. Each gets emitted as its
+ *                 own typed automation event so rules can discriminate.
  *   event_id    — Lens's stable idempotency key — reused from the
  *                 LimeChat idempotency key — so retries from either
  *                 side land on the same row via our UNIQUE constraint.
@@ -17,8 +17,8 @@ import { IsIn, IsNotEmpty, IsObject, IsOptional, IsString, MaxLength } from 'cla
  */
 export class LensEventDto {
   @IsString()
-  @IsIn(['ndr', 'npr'])
-  topic!: 'ndr' | 'npr';
+  @IsIn(['ndr', 'npr', 'rto'])
+  topic!: 'ndr' | 'npr' | 'rto';
 
   @IsString()
   @IsNotEmpty()
