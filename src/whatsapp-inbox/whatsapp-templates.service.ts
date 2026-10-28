@@ -326,7 +326,11 @@ export class WhatsappTemplatesService {
       category: WhatsappTemplateCategory;
       language: string;
       body: string;
-      variableMapping?: Array<{ name: string; fallback?: string | null }>;
+      variableMapping?: Array<{
+        name: string;
+        fallback?: string | null;
+        example?: string | null;
+      }>;
       /** Phase 2a — visual rich fields. */
       headerType?: WhatsappTemplateHeaderType;
       headerText?: string;
@@ -364,22 +368,26 @@ export class WhatsappTemplatesService {
     // happens here so Meta sees the shape it expects and the local
     // row keeps the human-readable version + an ordered mapping.
     const refs = extractVariableReferences(dto.body);
-    for (const name of refs) {
-      const v = TEMPLATE_VARIABLES_BY_NAME[name];
-      if (!v) {
-        throw new BadRequestException(
-          `Unknown variable "{{${name}}}". Use the picker on {{ to insert a known variable.`,
-        );
-      }
-    }
     // Marketing templates have NO ticket context when sent — they go
     // out through broadcasts targeting segments, and the only data a
     // segment carries is the 5 Customer fields mapped at upload time.
-    // Reject MARKETING templates that reference ticket-only variables
-    // (order_id, agent_name, etc.) at authoring time so the error
-    // surfaces immediately, not at broadcast-time rejection.
+    // Enforce registry membership + the segment-safe subset.
+    //
+    // UTILITY templates skip the registry check entirely: admin's
+    // automation rule binds each {{name}} to a JSON path at rule-
+    // creation time (see action.variable_bindings), so names can be
+    // anything the author wants (order_name, tracking_url, status,
+    // etc.) — the registry is only meaningful for ticket-context
+    // auto-resolution, which doesn't apply to event-bound sends.
     if (dto.category === WhatsappTemplateCategory.MARKETING) {
       for (const name of refs) {
+        const v = TEMPLATE_VARIABLES_BY_NAME[name];
+        if (!v) {
+          throw new BadRequestException(
+            `Unknown variable "{{${name}}}" in marketing template. ` +
+              `Use first_name, last_name, or email — the segment-safe fields.`,
+          );
+        }
         if (!MARKETING_ALLOWED_VARIABLES.has(name)) {
           throw new BadRequestException(
             `Variable {{${name}}} isn't allowed in marketing templates. ` +
@@ -391,20 +399,42 @@ export class WhatsappTemplatesService {
     }
 
     const providedByName = new Map(
-      (dto.variableMapping ?? []).map((m) => [m.name, m.fallback ?? null]),
+      (dto.variableMapping ?? []).map(
+        (m) =>
+          [m.name, {
+            fallback: m.fallback ?? null,
+            example: m.example ?? null,
+          }] as const,
+      ),
     );
     const orderedMapping: VariableMappingEntry[] = refs.map((name) => {
-      const v = TEMPLATE_VARIABLES_BY_NAME[name]!;
-      const nullable = isNullableFor(v, 'WHATSAPP');
-      const providedFallback = providedByName.get(name) ?? null;
-      if (nullable && (!providedFallback || !providedFallback.trim())) {
-        throw new BadRequestException(
-          `Variable {{${name}}} may be null on some WhatsApp tickets — a fallback is required.`,
-        );
+      const v = TEMPLATE_VARIABLES_BY_NAME[name];
+      const provided = providedByName.get(name);
+      const providedFallback = provided?.fallback ?? null;
+      const providedExample = provided?.example ?? null;
+      if (v) {
+        // Registry variable (customer/ticket field). Enforce the
+        // nullable-fallback rule so a template whose placeholder may
+        // resolve to null at send time has a safe default.
+        const nullable = isNullableFor(v, 'WHATSAPP');
+        if (nullable && (!providedFallback || !providedFallback.trim())) {
+          throw new BadRequestException(
+            `Variable {{${name}}} may be null on some WhatsApp tickets — a fallback is required.`,
+          );
+        }
+        return {
+          name,
+          fallback: nullable ? providedFallback!.trim() : null,
+          example: providedExample?.trim() || null,
+        };
       }
+      // Non-registry (UTILITY event-bound) variable: carry whatever
+      // the admin provided; no fallback requirement, since the rule's
+      // header_image_fallback + variable_bindings handle resolution.
       return {
         name,
-        fallback: nullable ? providedFallback!.trim() : null,
+        fallback: providedFallback?.trim() || null,
+        example: providedExample?.trim() || null,
       };
     });
     const { positionalBody } = convertNamedBodyToPositional(dto.body);
@@ -512,13 +542,17 @@ export class WhatsappTemplatesService {
             // what each {{n}} will be filled with — without it the
             // template looks ambiguous ("Hi {{1}}") and the reviewer
             // tends to reject under TAG_CONTENT_MISMATCH or
-            // INCORRECT_CATEGORY. We feed back the author's own
-            // fallback as the sample so Meta sees the full
-            // intended text filled in. body_text is a 2D array:
-            // one example set, N values matching N positional slots.
+            // INCORRECT_CATEGORY. Prefer the author's real-event-
+            // derived `example` (populated by the authoring UI's
+            // JSON-tree click → captures the actual event value);
+            // fall back to the admin's fallback string; finally to
+            // "sample". body_text is a 2D array: one example set,
+            // N values matching N positional slots.
             example: {
               body_text: [
-                orderedMapping.map((m) => m.fallback ?? 'sample'),
+                orderedMapping.map(
+                  (m) => m.example ?? m.fallback ?? 'sample',
+                ),
               ],
             },
           }

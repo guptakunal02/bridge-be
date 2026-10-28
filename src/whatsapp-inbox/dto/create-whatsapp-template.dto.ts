@@ -47,6 +47,19 @@ export class WhatsappTemplateVariableMappingDto {
   @MinLength(1)
   @MaxLength(300)
   fallback?: string | null;
+
+  /**
+   * Realistic sample value for Meta's review step. The authoring UI
+   * populates this when the admin clicks a JSON tree field — the
+   * actual value from that recent event becomes the example Meta
+   * sees. Not involved in send-time resolution; only in the Meta
+   * template-submission payload under `example.body_text`.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  example?: string | null;
 }
 
 /**

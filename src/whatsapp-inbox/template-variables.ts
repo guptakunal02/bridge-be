@@ -184,8 +184,20 @@ export function convertNamedBodyToPositional(body: string): {
  * per unique variable name in the body, in the order they first
  * appeared (which also matches their {{1}}, {{2}}, … positional ids
  * in Meta's body).
+ *
+ *   fallback — used at SEND time when the resolver returns null for
+ *              this variable. Short default like "there" for first_name.
+ *   example  — passed to Meta ONLY at template-submission time as the
+ *              example.body_text sample. If the author pulled this from
+ *              a real recent event via the authoring UI's event-sample
+ *              helper, Meta's reviewer sees realistic data (e.g.
+ *              "Nilambri" instead of a generic "sample"), which
+ *              improves approval rates for templates whose placeholders
+ *              would otherwise look empty / generic. Not involved in
+ *              send-time resolution.
  */
 export interface VariableMappingEntry {
   name: string;
   fallback: string | null;
+  example?: string | null;
 }
