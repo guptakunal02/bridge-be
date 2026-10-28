@@ -290,20 +290,6 @@ export class ImapConnection {
           }
           ingested++;
           if (uid) this.lastUid = Math.max(this.lastUid, uid);
-          // Release off-heap buffers so V8 doesn't have to wait for the
-          // iterator to free them. Confirmed root cause of the Oct 28
-          // OOM cascade: msg.source + parsed.attachments[].content are
-          // Node Buffers (external memory, not V8 heap). The iterator
-          // and mailparser can hold these alive beyond the iteration
-          // scope. Explicit null-out drops the reference so GC can
-          // reclaim the external memory on the next sweep.
-          (msg as { source?: Buffer | null }).source = null;
-          if (parsed.attachments) {
-            for (const a of parsed.attachments) {
-              (a as { content?: Buffer | null }).content = null;
-            }
-          }
-          parsedForLog = null;
         } catch (parseOrIngestErr) {
           // Fail-forward: skip the message, log with enough detail
           // for a manual re-ingest from Gmail, and keep the cursor
@@ -322,6 +308,25 @@ export class ImapConnection {
             `[${label}] drain(${trigger}) uid=${uid} ingest failed — SKIPPING. messageId=${msgId} from=${sender} subject="${subject}" error=${(parseOrIngestErr as Error).message}`,
           );
           if (uid) this.lastUid = Math.max(this.lastUid, uid);
+        } finally {
+          // Release off-heap Buffers on BOTH paths — this used to be
+          // success-only, which left a leak when simpleParser or the
+          // ingest hop threw (bad encoding, DB constraint, downstream
+          // timeout). msg.source and parsed.attachments[].content are
+          // Node Buffers in external memory, and the imapflow fetch
+          // iterator + mailparser's internal references hold them
+          // alive beyond this iteration's scope unless we null them
+          // out explicitly. The Oct 28 heap snapshot caught 88 MB of
+          // JSArrayBufferData in a single process — fits ~15-20
+          // leaked attachments, which lines up with a bad-email rate
+          // of one per hour on real Gmail traffic.
+          (msg as { source?: Buffer | null }).source = null;
+          if (parsedForLog?.attachments) {
+            for (const a of parsedForLog.attachments) {
+              (a as { content?: Buffer | null }).content = null;
+            }
+          }
+          parsedForLog = null;
         }
       }
     } catch (fetchErr) {
