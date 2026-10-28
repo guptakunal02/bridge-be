@@ -160,37 +160,63 @@ export class SendWhatsappTemplateHandler
       return;
     }
 
-    // Phase 4 — rule-level JSON-path bindings. When the admin configured
-    // variable_bindings in the action config, resolve each template
-    // variable from the raw event JSON instead of trusting the emitter
-    // to pre-populate payload.variables. Falls through to the legacy
-    // path when the action has no bindings so pre-Phase-4 rules keep
-    // working unchanged.
-    const useBindings =
-      action.variable_bindings !== undefined &&
-      Object.keys(action.variable_bindings).length > 0;
+    // Phase 4 — JSON-path bindings resolve against the raw event JSON.
+    // Fallback chain, strongest first:
+    //   1. action.variable_bindings[name]       — rule-level override
+    //   2. template.variableMapping[i].path     — authoring-time default
+    //   3. (legacy) payload.variables[name]     — pre-Phase-4 emitter map
+    //
+    // Same chain applies to recipient_phone_path and header_image_path.
+    // The template-stored paths let us hide the full binding UI in the
+    // automation editor when the admin already picked everything at
+    // authoring time (common case). The rule-level override is kept
+    // for rules that need a non-standard variant (notify an ops phone
+    // instead of the customer's, pull a different image path, etc.).
     const raw = payload.rawPayload ?? null;
 
-    // Recipient phone. Phase 4 path overrides pre-populated
-    // payload.customerPhone; if the resolved path yields null, we skip
-    // (no fallback for recipient — there's no sensible default).
+    // Recipient phone. action.recipient_phone_path (rule override) wins,
+    // then template.recipientPhonePath (authoring default), then the
+    // pre-populated payload.customerPhone (legacy emitter path).
+    const effectiveRecipientPath =
+      action.recipient_phone_path ?? template.recipientPhonePath ?? null;
     let recipientPhone = payload.customerPhone;
-    if (action.recipient_phone_path) {
+    if (effectiveRecipientPath) {
       if (!raw) {
         this.logger.warn(
           `send_whatsapp_template webhook path: template ${templateId} has recipient_phone_path but event lacks rawPayload; skipping`,
         );
         return;
       }
-      const resolved = resolveJsonPath(raw, action.recipient_phone_path);
+      const resolved = resolveJsonPath(raw, effectiveRecipientPath);
       if (!resolved) {
         this.logger.warn(
-          `send_whatsapp_template webhook path: template ${templateId} recipient_phone_path=${action.recipient_phone_path} resolved to null; skipping`,
+          `send_whatsapp_template webhook path: template ${templateId} recipient_phone_path=${effectiveRecipientPath} resolved to null; skipping`,
         );
         return;
       }
       recipientPhone = resolved;
     }
+
+    // Merge the per-variable path chain. Rule-level overrides take
+    // precedence per-key; any name the rule didn't override picks up
+    // the template's stored path (variableMapping[i].path). Only when
+    // neither is set do we fall through to the legacy payload.variables
+    // map (the pre-Phase-4 shape where the emitter pre-populated vars
+    // keyed by the template's variableMapping[].name).
+    const effectiveBindings: Record<string, string> = {};
+    if (template.variableMapping) {
+      for (const entry of template.variableMapping) {
+        if (entry.path && entry.path.length > 0) {
+          effectiveBindings[entry.name] = entry.path;
+        }
+      }
+    }
+    if (action.variable_bindings) {
+      for (const [k, v] of Object.entries(action.variable_bindings)) {
+        effectiveBindings[k] = v;
+      }
+    }
+    const useBindings = Object.keys(effectiveBindings).length > 0;
 
     // Variables. Three resolution modes:
     //   1. Phase 4 rule bindings  → resolve each var's JSON path
@@ -212,7 +238,7 @@ export class SendWhatsappTemplateHandler
         return;
       }
       for (const entry of mapping) {
-        const path = action.variable_bindings![entry.name];
+        const path = effectiveBindings[entry.name];
         const resolved = path ? resolveJsonPath(raw, path) : null;
         const value =
           resolved === null
@@ -245,9 +271,11 @@ export class SendWhatsappTemplateHandler
     // Static text / no-header templates skip this entirely.
     let headerUrl: string | null = template.headerMediaUrl;
     if (template.headerType === 'IMAGE') {
+      const effectiveImagePath =
+        action.header_image_path ?? template.headerImagePath ?? null;
       const dynamic =
-        action.header_image_path && raw
-          ? resolveJsonPath(raw, action.header_image_path)
+        effectiveImagePath && raw
+          ? resolveJsonPath(raw, effectiveImagePath)
           : null;
       headerUrl =
         dynamic ??
@@ -255,7 +283,7 @@ export class SendWhatsappTemplateHandler
         template.headerMediaUrl;
       if (!headerUrl) {
         this.logger.warn(
-          `send_whatsapp_template webhook path: template ${templateId} has IMAGE header but no resolvable URL (binding=${action.header_image_path ?? 'none'}, fallback=${action.header_image_fallback ?? 'none'}, sample=${template.headerMediaUrl ?? 'none'}); skipping`,
+          `send_whatsapp_template webhook path: template ${templateId} has IMAGE header but no resolvable URL (binding=${effectiveImagePath ?? 'none'}, fallback=${action.header_image_fallback ?? 'none'}, sample=${template.headerMediaUrl ?? 'none'}); skipping`,
         );
         return;
       }

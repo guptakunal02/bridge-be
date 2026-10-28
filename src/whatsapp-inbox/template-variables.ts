@@ -200,4 +200,20 @@ export interface VariableMappingEntry {
   name: string;
   fallback: string | null;
   example?: string | null;
+  /**
+   * JSON path (e.g. `$.customer.phone`, `$.order_id`) captured when
+   * the admin clicked a field in the event-sample tree during
+   * template authoring. Used as the default `variable_bindings[name]`
+   * value for any automation rule that picks this template — the
+   * rule editor hides the per-variable binding UI entirely when all
+   * paths are stored, so admins who already picked their fields
+   * during template authoring don't have to pick them again.
+   *
+   * Optional: templates authored before this field existed, templates
+   * synced from Meta BM, and templates where the admin typed `{{var}}`
+   * manually (without clicking) will all have `path` absent on their
+   * entries. Automation rules can still override at the rule level —
+   * `action.variable_bindings[name]` wins when both are set.
+   */
+  path?: string | null;
 }

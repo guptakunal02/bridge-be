@@ -40,6 +40,10 @@ export interface WhatsappTemplateResponse {
   buttons: WhatsappTemplateButton[] | null;
   /** Phase 2b — Max Price in paisa per 1,000 deliveries. */
   maxPriceAmount: number | null;
+  /** Phase 4 — default JSON path for recipient phone, inherited by rules. */
+  recipientPhonePath: string | null;
+  /** Phase 4 — default JSON path for per-event image URL (IMAGE headers). */
+  headerImagePath: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,6 +77,8 @@ export function toTemplateResponse(
     // Validator caps at 1_000_000 so Number() always fits a safe int.
     maxPriceAmount:
       t.maxPriceAmount !== null ? Number(t.maxPriceAmount) : null,
+    recipientPhonePath: t.recipientPhonePath,
+    headerImagePath: t.headerImagePath,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };

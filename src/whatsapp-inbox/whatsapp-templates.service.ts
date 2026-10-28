@@ -333,7 +333,17 @@ export class WhatsappTemplatesService {
         name: string;
         fallback?: string | null;
         example?: string | null;
+        /** Default JSON path captured on the authoring UI's JSON-tree
+         *  click. Automation rules inherit this as the per-variable
+         *  binding path when the admin picks this template. */
+        path?: string | null;
       }>;
+      /** Default recipient phone JSON path (admin picked once at
+       *  authoring time; every automation rule using this template
+       *  inherits it). */
+      recipientPhonePath?: string;
+      /** Default per-event image URL path for IMAGE-header templates. */
+      headerImagePath?: string;
       /** Phase 2a — visual rich fields. */
       headerType?: WhatsappTemplateHeaderType;
       headerText?: string;
@@ -426,6 +436,7 @@ export class WhatsappTemplatesService {
           [m.name, {
             fallback: m.fallback ?? null,
             example: m.example ?? null,
+            path: m.path ?? null,
           }] as const,
       ),
     );
@@ -434,6 +445,7 @@ export class WhatsappTemplatesService {
       const provided = providedByName.get(name);
       const providedFallback = provided?.fallback ?? null;
       const providedExample = provided?.example ?? null;
+      const providedPath = provided?.path?.trim() || null;
       if (v) {
         // Registry variable (customer/ticket field). Enforce the
         // nullable-fallback rule so a template whose placeholder may
@@ -448,6 +460,7 @@ export class WhatsappTemplatesService {
           name,
           fallback: nullable ? providedFallback!.trim() : null,
           example: providedExample?.trim() || null,
+          path: providedPath,
         };
       }
       // Non-registry (UTILITY event-bound) variable: carry whatever
@@ -457,6 +470,7 @@ export class WhatsappTemplatesService {
         name,
         fallback: providedFallback?.trim() || null,
         example: providedExample?.trim() || null,
+        path: providedPath,
       };
     });
     const { positionalBody } = convertNamedBodyToPositional(dto.body);
@@ -739,6 +753,11 @@ export class WhatsappTemplatesService {
         maxPriceAmount: applyHiddenCeiling
           ? String(TEMPLATE_HIDDEN_CEILING_PAISA)
           : null,
+        recipientPhonePath: dto.recipientPhonePath?.trim() || null,
+        headerImagePath:
+          headerType === WhatsappTemplateHeaderType.IMAGE
+            ? (dto.headerImagePath?.trim() || null)
+            : null,
         createdBy,
       }),
     );

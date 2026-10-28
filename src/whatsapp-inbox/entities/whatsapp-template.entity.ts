@@ -203,6 +203,29 @@ export class WhatsappTemplate {
   @Column({ type: 'bigint', nullable: true, name: 'max_price_amount' })
   maxPriceAmount!: string | null;
 
+  /**
+   * Default JSON path to the recipient's phone number inside the raw
+   * event payload. Captured during template authoring (admin clicks a
+   * phone field on the event-sample tree). An automation rule picking
+   * this template inherits the path as its `recipient_phone_path`
+   * unless the rule explicitly overrides it. Null = admin never
+   * bound a default (older templates, Meta-synced ones, or admin
+   * who typed `{{var}}` manually).
+   */
+  @Column({ type: 'text', nullable: true, name: 'recipient_phone_path' })
+  recipientPhonePath!: string | null;
+
+  /**
+   * Default JSON path for the per-event image URL — only meaningful
+   * for IMAGE-header templates. Same inheritance behaviour as
+   * recipientPhonePath: automation rule's `header_image_path` wins
+   * when set, otherwise falls back to this. The template's static
+   * sample (`headerMediaUrl`) remains the final fallback at send
+   * time if the path resolves to null.
+   */
+  @Column({ type: 'text', nullable: true, name: 'header_image_path' })
+  headerImagePath!: string | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy!: string | null;
 

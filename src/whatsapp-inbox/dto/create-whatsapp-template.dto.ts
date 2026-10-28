@@ -60,6 +60,19 @@ export class WhatsappTemplateVariableMappingDto {
   @MinLength(1)
   @MaxLength(300)
   example?: string | null;
+
+  /**
+   * JSON path captured when the admin clicked this variable's field
+   * on the event-sample tree. Any automation rule picking this
+   * template inherits this as its `variable_bindings[name]` default,
+   * so the admin doesn't have to re-pick the same field at rule
+   * creation time. Rule-level override still wins when set.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  path?: string | null;
 }
 
 /**
@@ -169,6 +182,27 @@ export class CreateWhatsappTemplateDto {
   @Min(1)
   @Max(1_000_000)
   maxPriceAmount?: number;
+
+  /**
+   * Default JSON path to the recipient's phone (e.g. `customer.phone`).
+   * Captured during authoring. Automation rules picking this template
+   * inherit it unless they explicitly override `recipient_phone_path`.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  recipientPhonePath?: string;
+
+  /**
+   * Default JSON path for the per-event image URL. Only used when
+   * headerType === IMAGE; ignored otherwise.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  headerImagePath?: string;
 }
 
 /**
