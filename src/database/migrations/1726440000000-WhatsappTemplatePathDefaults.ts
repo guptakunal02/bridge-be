@@ -26,15 +26,13 @@ export class WhatsappTemplatePathDefaults1726440000000
     await queryRunner.query(`
       ALTER TABLE whatsapp_template
         ADD COLUMN recipient_phone_path text NULL,
-        ADD COLUMN header_image_path text NULL,
-        ADD COLUMN authored_event text NULL;
+        ADD COLUMN header_image_path text NULL;
     `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       ALTER TABLE whatsapp_template
-        DROP COLUMN authored_event,
         DROP COLUMN header_image_path,
         DROP COLUMN recipient_phone_path;
     `);
