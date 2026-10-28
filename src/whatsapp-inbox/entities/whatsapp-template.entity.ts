@@ -226,6 +226,19 @@ export class WhatsappTemplate {
   @Column({ type: 'text', nullable: true, name: 'header_image_path' })
   headerImagePath!: string | null;
 
+  /**
+   * Name of the automation event the admin picked when authoring this
+   * template (via the Event sample helper's source dropdown). Lets the
+   * automation editor pre-select the matching event when the admin
+   * picks this template, and surface a tiny warning when the rule's
+   * event differs from what the template was authored against. Null
+   * on templates authored before this column shipped + on templates
+   * where the admin never picked a source. Admin-advisory only — the
+   * handler doesn't gate dispatch on this.
+   */
+  @Column({ type: 'text', nullable: true, name: 'authored_event' })
+  authoredEvent!: string | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy!: string | null;
 

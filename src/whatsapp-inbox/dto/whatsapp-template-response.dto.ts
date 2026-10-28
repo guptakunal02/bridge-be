@@ -44,6 +44,8 @@ export interface WhatsappTemplateResponse {
   recipientPhonePath: string | null;
   /** Phase 4 — default JSON path for per-event image URL (IMAGE headers). */
   headerImagePath: string | null;
+  /** Phase 4 — event name the admin picked at authoring. Null = none. */
+  authoredEvent: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -79,6 +81,7 @@ export function toTemplateResponse(
       t.maxPriceAmount !== null ? Number(t.maxPriceAmount) : null,
     recipientPhonePath: t.recipientPhonePath,
     headerImagePath: t.headerImagePath,
+    authoredEvent: t.authoredEvent,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };

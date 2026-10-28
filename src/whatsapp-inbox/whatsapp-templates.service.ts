@@ -344,6 +344,8 @@ export class WhatsappTemplatesService {
       recipientPhonePath?: string;
       /** Default per-event image URL path for IMAGE-header templates. */
       headerImagePath?: string;
+      /** Event the admin authored this template against. */
+      authoredEvent?: string;
       /** Phase 2a — visual rich fields. */
       headerType?: WhatsappTemplateHeaderType;
       headerText?: string;
@@ -758,6 +760,7 @@ export class WhatsappTemplatesService {
           headerType === WhatsappTemplateHeaderType.IMAGE
             ? (dto.headerImagePath?.trim() || null)
             : null,
+        authoredEvent: dto.authoredEvent?.trim() || null,
         createdBy,
       }),
     );

@@ -203,6 +203,19 @@ export class CreateWhatsappTemplateDto {
   @MinLength(1)
   @MaxLength(300)
   headerImagePath?: string;
+
+  /**
+   * Name of the automation event the admin picked at authoring time
+   * (via the Event sample helper's source dropdown). Admin-advisory
+   * only — automation rules use it to pre-select the matching event
+   * when the template is picked, saving two clicks and avoiding
+   * mismatches.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  authoredEvent?: string;
 }
 
 /**
