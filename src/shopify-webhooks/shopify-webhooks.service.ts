@@ -103,6 +103,10 @@ export class ShopifyWebhooksService {
       this.emitOrderFulfilled(input);
       return;
     }
+    if (input.topic === 'orders/cancelled') {
+      this.emitOrderCancelled(input);
+      return;
+    }
     if (input.topic === 'fulfillments/create') {
       this.emitFulfillment(
         input,
@@ -310,6 +314,97 @@ export class ShopifyWebhooksService {
           subtotal_price: extracted.subtotalPrice,
           discount_codes: extracted.discountCodes.join(', '),
           tags: extracted.tags.join(', '),
+        },
+        rawPayload: input.payload,
+      },
+    });
+  }
+
+  /**
+   * `orders/cancelled` — same order payload shape as orders/create,
+   * with `cancelled_at` + `cancel_reason` filled in. We hoist both to
+   * top-level event fields so rules can filter on cancel_reason
+   * ("inventory" vs "customer") without JSON-path dives.
+   */
+  private emitOrderCancelled(input: {
+    webhookId: string;
+    topic: string;
+    shopDomain: string;
+    payload: Record<string, unknown>;
+  }): void {
+    const extracted = extractOrderFields(input.payload);
+    if (!extracted) {
+      this.logger.warn(
+        `shopify order cancelled: webhook_id=${input.webhookId} missing required order fields; emitting skipped`,
+      );
+      return;
+    }
+    if (!extracted.customerPhone && !extracted.customerEmail) {
+      this.logger.warn(
+        `shopify order cancelled: webhook_id=${input.webhookId} order=${extracted.orderName} has no phone or email; emitting skipped`,
+      );
+      return;
+    }
+    const cancelReason = asString(input.payload['cancel_reason']);
+    const cancelledAt = asString(input.payload['cancelled_at']);
+    this.automations.emit({
+      event: AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED,
+      ticket: {
+        id: '',
+        channelId: '',
+        channelType: null,
+        status: TicketStatus.OPEN,
+        tags: [],
+        assigneeId: null,
+        teamId: '',
+        subject: null,
+      },
+      payload: {
+        name: 'shopify.order.cancelled',
+        channelId: '',
+        customerPhone: extracted.customerPhone,
+        customerEmail: extracted.customerEmail,
+        orderName: extracted.orderName,
+        orderNumber: extracted.orderNumber,
+        orderTotal: extracted.orderTotal,
+        currency: extracted.currency,
+        itemCount: extracted.itemCount,
+        shopDomain: input.shopDomain,
+        tags: extracted.tags,
+        financialStatus: extracted.financialStatus,
+        fulfillmentStatus: extracted.fulfillmentStatus,
+        paymentGateway: extracted.paymentGateway,
+        discountCodes: extracted.discountCodes,
+        note: extracted.note,
+        sourceName: extracted.sourceName,
+        shippingCity: extracted.shippingCity,
+        shippingProvince: extracted.shippingProvince,
+        shippingCountry: extracted.shippingCountry,
+        customerTags: extracted.customerTags,
+        totalDiscount: extracted.totalDiscount,
+        subtotalPrice: extracted.subtotalPrice,
+        totalTax: extracted.totalTax,
+        cancelReason,
+        cancelledAt,
+        variables: {
+          order_name: extracted.orderName,
+          order_number: extracted.orderNumber,
+          order_total: extracted.orderTotal,
+          currency: extracted.currency,
+          item_count: String(extracted.itemCount),
+          customer_email: extracted.customerEmail ?? '',
+          financial_status: extracted.financialStatus ?? '',
+          payment_gateway: extracted.paymentGateway ?? '',
+          source_name: extracted.sourceName ?? '',
+          shipping_city: extracted.shippingCity ?? '',
+          shipping_province: extracted.shippingProvince ?? '',
+          note: extracted.note,
+          total_discount: extracted.totalDiscount,
+          subtotal_price: extracted.subtotalPrice,
+          discount_codes: extracted.discountCodes.join(', '),
+          tags: extracted.tags.join(', '),
+          cancel_reason: cancelReason ?? '',
+          cancelled_at: cancelledAt ?? '',
         },
         rawPayload: input.payload,
       },

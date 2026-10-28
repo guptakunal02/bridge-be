@@ -30,6 +30,13 @@ export const AUTOMATION_EVENT = {
   SHOPIFY_ORDER_FULFILLED: 'shopify.order.fulfilled',
   SHOPIFY_FULFILLMENT_UPDATED: 'shopify.fulfillment.updated',
   /**
+   * Shopify `orders/cancelled` webhook. Fires on both merchant-
+   * initiated cancellations (from Shopify Admin) + customer-initiated
+   * ones (via post-purchase cancel apps). Common usage: send a
+   * "sorry it was cancelled — here's a code for next time" template.
+   */
+  SHOPIFY_ORDER_CANCELLED: 'shopify.order.cancelled',
+  /**
    * Lens-forwarded Clickpost delivery exception events — surma-ops
    * classifies the scan then fires the typed event to Bridge AND to
    * LimeChat in parallel. NDR = Non-Delivery Report (consignee
@@ -271,6 +278,48 @@ export interface ShopifyOrderConfirmedEventPayload {
  * is fulfilled — typical consumer: "your entire order is on its
  * way" / review-request after a wait.
  */
+/**
+ * `orders/cancelled` carries the same order payload shape as
+ * orders/create — the full order object as it existed at cancel time
+ * (with cancelled_at + cancel_reason filled in). Reuses the order
+ * field extractor; only the two cancel-specific fields are added on
+ * top so rules can filter on `cancel_reason` without JSON-path dives.
+ */
+export interface ShopifyOrderCancelledEventPayload {
+  name: 'shopify.order.cancelled';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  orderName: string;
+  orderNumber: string;
+  orderTotal: string;
+  currency: string;
+  itemCount: number;
+  shopDomain: string;
+  tags: string[];
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  paymentGateway: string | null;
+  discountCodes: string[];
+  note: string;
+  sourceName: string | null;
+  shippingCity: string | null;
+  shippingProvince: string | null;
+  shippingCountry: string | null;
+  customerTags: string[];
+  totalDiscount: string;
+  subtotalPrice: string;
+  totalTax: string;
+  /** customer / fraud / inventory / declined / other / staff — the
+   *  enum Shopify sends. Null if the cancelling actor didn't pick one. */
+  cancelReason: string | null;
+  /** ISO timestamp of the cancel event. Null on refunds that drop the
+   *  flag off before the webhook fires (rare). */
+  cancelledAt: string | null;
+  rawPayload?: Record<string, unknown>;
+}
+
 export interface ShopifyOrderFulfilledEventPayload {
   name: 'shopify.order.fulfilled';
   variables: Record<string, string | number | boolean>;
@@ -455,6 +504,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED;
       ticket: TicketSnapshot;
       payload: ShopifyFulfillmentEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED;
+      ticket: TicketSnapshot;
+      payload: ShopifyOrderCancelledEventPayload;
     }
   | {
       event: typeof AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY;
