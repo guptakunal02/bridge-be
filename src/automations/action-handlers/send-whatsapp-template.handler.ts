@@ -260,6 +260,30 @@ export class SendWhatsappTemplateHandler
       }
     }
 
+    // Dynamic URL button params. For each URL button whose template-
+    // authoring step detected a {{var}}, pick the already-resolved
+    // variable value (same `variables[]` array that goes into the
+    // body) and pass it as a Meta `button` component. Static-URL
+    // buttons stay parameter-less. Button index is the button's
+    // position in the template's BUTTONS list.
+    const buttonUrlParams: Array<{ index: number; value: string }> = [];
+    if (template.buttons) {
+      template.buttons.forEach((b, idx) => {
+        if (
+          b.type === 'URL' &&
+          typeof b.url_variable_name === 'string' &&
+          b.url_variable_name.length > 0
+        ) {
+          const mapIdx = mapping?.findIndex(
+            (m) => m.name === b.url_variable_name,
+          );
+          if (mapIdx !== undefined && mapIdx >= 0 && variables[mapIdx]) {
+            buttonUrlParams.push({ index: idx, value: variables[mapIdx] });
+          }
+        }
+      });
+    }
+
     try {
       await this.sender.sendTemplate(
         recipientPhone,
@@ -270,9 +294,10 @@ export class SendWhatsappTemplateHandler
         {
           useMarketingEndpoint: template.maxPriceAmount !== null,
         },
+        buttonUrlParams,
       );
       this.logger.log(
-        `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${recipientPhone}${useBindings ? ' (bindings)' : ''}`,
+        `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${recipientPhone}${useBindings ? ' (bindings)' : ''}${buttonUrlParams.length > 0 ? ` (${buttonUrlParams.length} button param${buttonUrlParams.length === 1 ? '' : 's'})` : ''}`,
       );
     } catch (err) {
       this.logger.warn(

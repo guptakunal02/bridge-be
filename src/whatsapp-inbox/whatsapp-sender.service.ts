@@ -713,6 +713,7 @@ export class WhatsappSenderService {
       useMarketingEndpoint: boolean;
       perMessageBidMultiplier?: number | null;
     },
+    buttonUrlParams?: Array<{ index: number; value: string }>,
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -757,6 +758,21 @@ export class WhatsappSenderService {
           text: v,
         })),
       });
+    }
+    // Dynamic-URL button parameters. Meta: one parameter per button
+    // sub_type=url, index = that button's position in the template's
+    // BUTTONS component. We only emit params for buttons the caller
+    // flagged as having a URL variable; static URL buttons stay
+    // parameter-less.
+    if (buttonUrlParams && buttonUrlParams.length > 0) {
+      for (const bp of buttonUrlParams) {
+        components.push({
+          type: 'button',
+          sub_type: 'url',
+          index: bp.index,
+          parameters: [{ type: 'text', text: bp.value }],
+        });
+      }
     }
 
     const payload: Record<string, unknown> = {

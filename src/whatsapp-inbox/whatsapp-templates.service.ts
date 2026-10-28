@@ -17,7 +17,10 @@ import {
   WhatsappTemplateStatus,
 } from '../database/enums';
 import { WhatsappTemplate } from './entities/whatsapp-template.entity';
-import type { WhatsappTemplateButton } from './template-buttons';
+import {
+  extractUrlVariableName,
+  type WhatsappTemplateButton,
+} from './template-buttons';
 import {
   convertNamedBodyToPositional,
   extractVariableReferences,
@@ -367,7 +370,26 @@ export class WhatsappTemplatesService {
     // placeholders ("Hi {{1}}, order #{{2}} shipped."). The conversion
     // happens here so Meta sees the shape it expects and the local
     // row keeps the human-readable version + an ordered mapping.
-    const refs = extractVariableReferences(dto.body);
+    const bodyRefs = extractVariableReferences(dto.body);
+    // URL buttons may also carry one variable each (Meta cap). Pull
+    // the names so they land in variableMapping alongside body
+    // variables — the admin's automation rule binds all of them the
+    // same way (variable_bindings[name] = JSON path).
+    const buttonUrlVarNames: string[] = [];
+    for (const b of dto.buttons ?? []) {
+      if (b.type === 'URL' && typeof b.url === 'string') {
+        const v = extractUrlVariableName(b.url);
+        if (v) buttonUrlVarNames.push(v);
+      }
+    }
+    const refs: string[] = [];
+    const seenRef = new Set<string>();
+    for (const n of [...bodyRefs, ...buttonUrlVarNames]) {
+      if (!seenRef.has(n)) {
+        seenRef.add(n);
+        refs.push(n);
+      }
+    }
     // Marketing templates have NO ticket context when sent — they go
     // out through broadcasts targeting segments, and the only data a
     // segment carries is the 5 Customer fields mapped at upload time.
@@ -505,7 +527,18 @@ export class WhatsappTemplatesService {
             `URL button "${b.text}" is missing a url`,
           );
         }
-        return { type: 'URL', text: b.text, url: b.url };
+        // Keep the admin's named form in storage ("...?awb={{awb}}")
+        // for round-tripping to the authoring UI. The Meta payload
+        // builder converts to {{1}} + example separately; the send-
+        // time handler uses url_variable_name to look up the resolved
+        // variable value and pass it as a Meta button parameter.
+        const urlVariableName = extractUrlVariableName(b.url);
+        return {
+          type: 'URL',
+          text: b.text,
+          url: b.url,
+          url_variable_name: urlVariableName,
+        };
       }
       if (b.type === 'PHONE_NUMBER') {
         if (!b.phone_number) {
@@ -570,6 +603,29 @@ export class WhatsappTemplatesService {
         // which stays uppercase. Not consistent, but documented.
         buttons: buttons.map((b) => {
           if (b.type === 'URL') {
+            const varName = extractUrlVariableName(b.url);
+            if (varName) {
+              // Meta: dynamic URL buttons are declared with a {{1}}
+              // placeholder (not the admin's named form) and MUST
+              // include an `example` showing the fully-substituted
+              // URL. Reviewers use the example to approve the shape;
+              // at send time we pass the resolved value as a button
+              // parameter (see sender.sendTemplate).
+              const positionalUrl = b.url.replace(
+                /\{\{[a-z_][a-z0-9_]*\}\}/g,
+                '{{1}}',
+              );
+              const mapEntry = orderedMapping.find((m) => m.name === varName);
+              const exampleValue =
+                mapEntry?.example ?? mapEntry?.fallback ?? 'sample';
+              const exampleUrl = positionalUrl.replace('{{1}}', exampleValue);
+              return {
+                type: 'URL',
+                text: b.text,
+                url: positionalUrl,
+                example: [exampleUrl],
+              };
+            }
             return { type: 'URL', text: b.text, url: b.url };
           }
           if (b.type === 'PHONE_NUMBER') {

@@ -18,9 +18,37 @@
  * admin experience vs. a clean "too long" at save time.
  */
 export type WhatsappTemplateButton =
-  | { type: 'URL'; text: string; url: string }
+  | {
+      type: 'URL';
+      text: string;
+      url: string;
+      /**
+       * When the admin wrote `{{var}}` in the URL (e.g.
+       * `https://ops.teev.shop/ndr/reattempt?awb={{awb}}`), we store
+       * the variable name here. Meta's template API caps dynamic URL
+       * variables at one per button, so this is a single-string field
+       * not an array. The service also adds the variable to the
+       * template's variableMapping so the automation rule can bind it
+       * the same way as body variables (recipient_phone_path,
+       * variable_bindings on action.ts). Null for static-URL buttons.
+       */
+      url_variable_name?: string | null;
+    }
   | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
   | { type: 'QUICK_REPLY'; text: string };
+
+/**
+ * Extracts the single `{{varname}}` from a dynamic URL. Returns null
+ * if the URL has no placeholder or has more than one (Meta rejects
+ * multi-variable URL buttons on submission). Shared between service
+ * create() and send-time handler so both see the same name.
+ */
+export function extractUrlVariableName(url: string): string | null {
+  const matches = [...url.matchAll(/\{\{([a-z_][a-z0-9_]*)\}\}/g)];
+  if (matches.length !== 1) return null;
+  const name = matches[0]?.[1];
+  return name ?? null;
+}
 
 export const WHATSAPP_BUTTON_TEXT_MAX = 25;
 export const WHATSAPP_BUTTONS_MAX_COUNT = 3;
