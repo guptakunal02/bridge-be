@@ -567,7 +567,7 @@ export class WhatsappTemplatesService {
       });
     }
     components.push(
-      orderedMapping.length > 0
+      bodyRefs.length > 0
         ? {
             type: 'BODY',
             text: positionalBody,
@@ -581,11 +581,20 @@ export class WhatsappTemplatesService {
             // fall back to the admin's fallback string; finally to
             // "sample". body_text is a 2D array: one example set,
             // N values matching N positional slots.
+            //
+            // Only body-referenced variables go here — URL button
+            // variables also live in orderedMapping (for persistence
+            // + send-time binding) but Meta validates the example
+            // count against the body placeholder count. Including the
+            // URL variable would make the array longer than
+            // positionalBody's {{n}} count and Meta rejects with a
+            // confusing "missing expected field(s) (example)".
             example: {
               body_text: [
-                orderedMapping.map(
-                  (m) => m.example ?? m.fallback ?? 'sample',
-                ),
+                bodyRefs.map((name) => {
+                  const m = orderedMapping.find((e) => e.name === name);
+                  return m?.example ?? m?.fallback ?? 'sample';
+                }),
               ],
             },
           }
