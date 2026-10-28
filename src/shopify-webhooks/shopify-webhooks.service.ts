@@ -176,6 +176,20 @@ export class ShopifyWebhooksService {
         currency: extracted.currency,
         itemCount: extracted.itemCount,
         shopDomain: input.shopDomain,
+        tags: extracted.tags,
+        financialStatus: extracted.financialStatus,
+        fulfillmentStatus: extracted.fulfillmentStatus,
+        paymentGateway: extracted.paymentGateway,
+        discountCodes: extracted.discountCodes,
+        note: extracted.note,
+        sourceName: extracted.sourceName,
+        shippingCity: extracted.shippingCity,
+        shippingProvince: extracted.shippingProvince,
+        shippingCountry: extracted.shippingCountry,
+        customerTags: extracted.customerTags,
+        totalDiscount: extracted.totalDiscount,
+        subtotalPrice: extracted.subtotalPrice,
+        totalTax: extracted.totalTax,
         // Named variables available to template variableMapping.
         // Admin binds `{{1}}` to e.g. `order_name` on the template
         // authoring UI; the resolver reads from this map.
@@ -186,6 +200,16 @@ export class ShopifyWebhooksService {
           currency: extracted.currency,
           item_count: String(extracted.itemCount),
           customer_email: extracted.customerEmail ?? '',
+          financial_status: extracted.financialStatus ?? '',
+          payment_gateway: extracted.paymentGateway ?? '',
+          source_name: extracted.sourceName ?? '',
+          shipping_city: extracted.shippingCity ?? '',
+          shipping_province: extracted.shippingProvince ?? '',
+          note: extracted.note,
+          total_discount: extracted.totalDiscount,
+          subtotal_price: extracted.subtotalPrice,
+          discount_codes: extracted.discountCodes.join(', '),
+          tags: extracted.tags.join(', '),
         },
         // Phase 4 — raw Shopify payload for rule-level variable_bindings
         // (admin picks arbitrary JSON paths in the automation editor).
@@ -255,6 +279,19 @@ export class ShopifyWebhooksService {
         itemCount: extracted.itemCount,
         fulfillmentStatus,
         shopDomain: input.shopDomain,
+        tags: extracted.tags,
+        financialStatus: extracted.financialStatus,
+        paymentGateway: extracted.paymentGateway,
+        discountCodes: extracted.discountCodes,
+        note: extracted.note,
+        sourceName: extracted.sourceName,
+        shippingCity: extracted.shippingCity,
+        shippingProvince: extracted.shippingProvince,
+        shippingCountry: extracted.shippingCountry,
+        customerTags: extracted.customerTags,
+        totalDiscount: extracted.totalDiscount,
+        subtotalPrice: extracted.subtotalPrice,
+        totalTax: extracted.totalTax,
         variables: {
           order_name: extracted.orderName,
           order_number: extracted.orderNumber,
@@ -263,6 +300,16 @@ export class ShopifyWebhooksService {
           item_count: String(extracted.itemCount),
           fulfillment_status: fulfillmentStatus,
           customer_email: extracted.customerEmail ?? '',
+          financial_status: extracted.financialStatus ?? '',
+          payment_gateway: extracted.paymentGateway ?? '',
+          source_name: extracted.sourceName ?? '',
+          shipping_city: extracted.shippingCity ?? '',
+          shipping_province: extracted.shippingProvince ?? '',
+          note: extracted.note,
+          total_discount: extracted.totalDiscount,
+          subtotal_price: extracted.subtotalPrice,
+          discount_codes: extracted.discountCodes.join(', '),
+          tags: extracted.tags.join(', '),
         },
         rawPayload: input.payload,
       },
@@ -483,6 +530,41 @@ interface ExtractedOrderFields {
   itemCount: number;
   customerPhone: string;
   customerEmail: string | null;
+  /**
+   * Shopify stores tags as a single comma-separated string on the
+   * order ("vip, repeat, rewind_exchange"). We split + trim + drop
+   * empties here so predicates can match on exact tag strings via
+   * the `in` / `contains` operators on an array. Mirrors the shape
+   * the ticket's own tags[] field uses so rule authoring stays
+   * consistent across event sources.
+   */
+  tags: string[];
+  /** paid / pending / partially_refunded / refunded / voided / authorized. */
+  financialStatus: string | null;
+  /** null / partial / fulfilled / restocked. Null = unfulfilled. */
+  fulfillmentStatus: string | null;
+  /**
+   * Admin-facing payment gateway name. Shopify exposes two shapes —
+   * `gateway` (single string, legacy) and `payment_gateway_names` (array,
+   * newer). We pick array[0] falling back to the string so a predicate
+   * "gateway equals cash_on_delivery" works for COD flows.
+   */
+  paymentGateway: string | null;
+  /** Comma-joined list of applied discount codes ("SALE10, STUDENT"). */
+  discountCodes: string[];
+  /** Customer-entered note at checkout. "" when absent. */
+  note: string;
+  /** web / pos / mobile_app / instagram / shop_app — admins route on this. */
+  sourceName: string | null;
+  shippingCity: string | null;
+  shippingProvince: string | null;
+  shippingCountry: string | null;
+  /** Customer-level tags (loyalty / VIP flags). Comma-split like order tags. */
+  customerTags: string[];
+  /** Total discount amount (string to preserve precision — Shopify's shape). */
+  totalDiscount: string;
+  subtotalPrice: string;
+  totalTax: string;
 }
 
 /**
@@ -533,6 +615,43 @@ function extractOrderFields(
   const customerEmail =
     asString(customer?.['email']) ?? asString(payload['email']) ?? null;
 
+  const splitCsv = (raw: string | null): string[] =>
+    raw
+      ? raw
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+      : [];
+  const tags = splitCsv(asString(payload['tags']));
+  const customerTags = splitCsv(asString(customer?.['tags']));
+
+  const financialStatus = asString(payload['financial_status']);
+  const fulfillmentStatus = asString(payload['fulfillment_status']);
+  const sourceName = asString(payload['source_name']);
+  const note = asString(payload['note']) ?? '';
+  const totalDiscount = asString(payload['total_discounts']) ?? '0';
+  const subtotalPrice = asString(payload['subtotal_price']) ?? '0';
+  const totalTax = asString(payload['total_tax']) ?? '0';
+
+  const gatewayNames = Array.isArray(payload['payment_gateway_names'])
+    ? (payload['payment_gateway_names'] as unknown[])
+        .map((g) => (typeof g === 'string' ? g : null))
+        .filter((g): g is string => !!g)
+    : [];
+  const paymentGateway =
+    gatewayNames[0] ?? asString(payload['gateway']) ?? null;
+
+  const discountEntries = Array.isArray(payload['discount_codes'])
+    ? (payload['discount_codes'] as Array<Record<string, unknown>>)
+    : [];
+  const discountCodes = discountEntries
+    .map((d) => asString(d['code']))
+    .filter((d): d is string => !!d);
+
+  const shippingCity = asString(shipping?.['city']) ?? null;
+  const shippingProvince = asString(shipping?.['province']) ?? null;
+  const shippingCountry = asString(shipping?.['country']) ?? null;
+
   return {
     orderName,
     orderNumber,
@@ -541,6 +660,20 @@ function extractOrderFields(
     itemCount,
     customerPhone,
     customerEmail,
+    tags,
+    financialStatus,
+    fulfillmentStatus,
+    paymentGateway,
+    discountCodes,
+    note,
+    sourceName,
+    shippingCity,
+    shippingProvince,
+    shippingCountry,
+    customerTags,
+    totalDiscount,
+    subtotalPrice,
+    totalTax,
   };
 }
 

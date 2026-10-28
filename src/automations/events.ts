@@ -239,6 +239,26 @@ export interface ShopifyOrderConfirmedEventPayload {
   currency: string;
   itemCount: number;
   shopDomain: string;
+  /** Order-level tags (split from Shopify's comma-separated string). */
+  tags: string[];
+  /** paid / pending / partially_refunded / refunded / voided / authorized. */
+  financialStatus: string | null;
+  /** null / partial / fulfilled / restocked. Null = unfulfilled. */
+  fulfillmentStatus: string | null;
+  /** First payment gateway name — "cash_on_delivery", "razorpay", … */
+  paymentGateway: string | null;
+  discountCodes: string[];
+  note: string;
+  /** web / pos / mobile_app / instagram / shop_app */
+  sourceName: string | null;
+  shippingCity: string | null;
+  shippingProvince: string | null;
+  shippingCountry: string | null;
+  /** Customer-level tags (loyalty / VIP flags). */
+  customerTags: string[];
+  totalDiscount: string;
+  subtotalPrice: string;
+  totalTax: string;
   /** Phase 4 — the raw Shopify order JSON. See WebhookCustomEventPayload.rawPayload. */
   rawPayload?: Record<string, unknown>;
 }
@@ -264,6 +284,19 @@ export interface ShopifyOrderFulfilledEventPayload {
   itemCount: number;
   fulfillmentStatus: string;
   shopDomain: string;
+  tags: string[];
+  financialStatus: string | null;
+  paymentGateway: string | null;
+  discountCodes: string[];
+  note: string;
+  sourceName: string | null;
+  shippingCity: string | null;
+  shippingProvince: string | null;
+  shippingCountry: string | null;
+  customerTags: string[];
+  totalDiscount: string;
+  subtotalPrice: string;
+  totalTax: string;
   /** Phase 4 — the raw Shopify order JSON. See WebhookCustomEventPayload.rawPayload. */
   rawPayload?: Record<string, unknown>;
 }
