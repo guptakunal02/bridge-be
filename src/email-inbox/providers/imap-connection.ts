@@ -290,6 +290,20 @@ export class ImapConnection {
           }
           ingested++;
           if (uid) this.lastUid = Math.max(this.lastUid, uid);
+          // Release off-heap buffers so V8 doesn't have to wait for the
+          // iterator to free them. Confirmed root cause of the Oct 28
+          // OOM cascade: msg.source + parsed.attachments[].content are
+          // Node Buffers (external memory, not V8 heap). The iterator
+          // and mailparser can hold these alive beyond the iteration
+          // scope. Explicit null-out drops the reference so GC can
+          // reclaim the external memory on the next sweep.
+          (msg as { source?: Buffer | null }).source = null;
+          if (parsed.attachments) {
+            for (const a of parsed.attachments) {
+              (a as { content?: Buffer | null }).content = null;
+            }
+          }
+          parsedForLog = null;
         } catch (parseOrIngestErr) {
           // Fail-forward: skip the message, log with enough detail
           // for a manual re-ingest from Gmail, and keep the cursor

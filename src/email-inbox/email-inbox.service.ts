@@ -1043,6 +1043,17 @@ export class EmailInboxService {
             err instanceof Error ? err.message : String(err)
           }`,
         );
+      } finally {
+        // Release the off-heap Buffer the moment this attachment is
+        // either safely uploaded or dropped. The caller's loop iterates
+        // the attachments array; without this, each attachment's
+        // backing-store Buffer stays pinned for the duration of every
+        // subsequent attachment's S3 upload. Running a batch with 10
+        // attachments of 5 MB each then held ~50 MB until the whole
+        // batch finished. The Oct 28 heap snapshots showed this bucket
+        // (JSArrayBufferData) growing 90 MB over 9 hours — matches an
+        // occasional large email left in-flight long enough to miss GC.
+        (a as { body?: Buffer | null }).body = null;
       }
     }
   }
