@@ -237,6 +237,24 @@ export class EnvVars {
   @IsString()
   @MinLength(16)
   CLICKPOST_WEBHOOK_API_KEY?: string;
+
+  /**
+   * Shared secret for calling surma-ops internal endpoints on the same
+   * EC2 box (currently: GET /api/products/image?sku=X for enriching
+   * Shopify order webhooks with the first product's CDN image URL).
+   *
+   * Same shared-secret value lives on surma-ops as
+   * SHOPIFY_WEBHOOK_INTERNAL_SECRET; we send it as
+   * `X-Internal-Secret: <value>`. Optional so a dev Bridge without
+   * surma-ops reachable still boots — the Shopify enrichment hop
+   * silently skips when this isn't set and the webhook controller
+   * emits the automation event with no `enrichments.*` field (admin's
+   * rule then falls back to the template's static sample image).
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  LENS_INTERNAL_SECRET?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {

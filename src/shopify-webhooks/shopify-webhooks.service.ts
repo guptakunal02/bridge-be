@@ -1,10 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { AutomationEngine } from '../automations/automation-engine.service';
 import { AUTOMATION_EVENT } from '../automations/events';
+import type { EnvVars } from '../config/env.validation';
 import { TicketStatus } from '../database/enums';
 import { ShopifyWebhookEvent } from './entities/shopify-webhook-event.entity';
+
+/** Loopback endpoint on the same EC2 box exposed by surma-ops. */
+const LENS_PRODUCT_IMAGE_URL = 'http://127.0.0.1:3000/api/products/image';
+/** Cap on how long the enrichment hop can delay webhook storage.
+ *  Cache-hit: ~5ms. Shopify-live fetch: ~380ms worst case. 2s leaves
+ *  headroom; we'd rather drop enrichment than block the webhook ACK. */
+const LENS_FETCH_TIMEOUT_MS = 2000;
 
 /**
  * Processes one Shopify webhook end-to-end.
@@ -32,6 +41,7 @@ export class ShopifyWebhooksService {
     @InjectRepository(ShopifyWebhookEvent)
     private readonly events: Repository<ShopifyWebhookEvent>,
     private readonly automations: AutomationEngine,
+    private readonly config: ConfigService<EnvVars, true>,
   ) {}
 
   async handle(input: {
@@ -40,6 +50,16 @@ export class ShopifyWebhooksService {
     shopDomain: string;
     payload: Record<string, unknown>;
   }): Promise<{ deduped: boolean }> {
+    // Enrich the raw payload BEFORE persistence so the stored row (and
+    // the FE's event-sample JSON tree + the emitted automation event
+    // payload) all see the same enriched shape. Mutates input.payload
+    // in-place to add `enrichments.first_product_image_url` when the
+    // product-image lookup succeeds. Silent no-op on failure — the
+    // admin's rule's `header_image_fallback` kicks in at send time.
+    if (input.topic === 'orders/create') {
+      await this.enrichOrdersCreate(input);
+    }
+
     // Insert first; dedup falls out of the UNIQUE constraint on
     // webhook_id. Catching 23505 ("unique_violation") → short-circuit.
     try {
@@ -340,6 +360,91 @@ export class ShopifyWebhooksService {
     }
     return qb.getMany();
   }
+
+  /**
+   * Resolve the first line item's product image via surma-ops's
+   * cache endpoint (loopback, same box). Mutates input.payload in
+   * place to add `enrichments.first_product_image_url` on success.
+   *
+   * Fully best-effort: on any failure (secret unset, SKU 404,
+   * surma-ops down, 2s timeout) we log at `log` level and move on
+   * without touching the payload. The admin's automation rule's
+   * `header_image_fallback` URL kicks in at send time so the
+   * template still fires with a sensible default image.
+   *
+   * See the surma-ops contract committed on 2026-10-28:
+   *   GET http://127.0.0.1:3000/api/products/image?sku=<SKU>
+   *   Header X-Internal-Secret: <same value as surma-ops env>
+   *   200 { sku, image_url, fetched_at, source: "cache" | "shopify_live" }
+   *   404 (unknown SKU) / 502 (missing product_id or Shopify failure)
+   */
+  private async enrichOrdersCreate(input: {
+    webhookId: string;
+    payload: Record<string, unknown>;
+  }): Promise<void> {
+    const secret = this.config.get('LENS_INTERNAL_SECRET', { infer: true });
+    if (!secret) {
+      // Dev-mode Bridge without surma-ops wired up. Expected; just skip.
+      return;
+    }
+    const sku = extractFirstLineItemSku(input.payload);
+    if (!sku) {
+      this.logger.log(
+        `shopify order confirmed: webhook_id=${input.webhookId} no first-line-item SKU — skipping image enrichment`,
+      );
+      return;
+    }
+    const url = `${LENS_PRODUCT_IMAGE_URL}?sku=${encodeURIComponent(sku)}`;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), LENS_FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        headers: { 'X-Internal-Secret': secret },
+        signal: ac.signal,
+      });
+      if (!res.ok) {
+        // 404 = unknown SKU, 502 = missing product_id or Shopify fail.
+        // Both are known fallback cases per the contract.
+        this.logger.log(
+          `shopify order confirmed: webhook_id=${input.webhookId} sku=${sku} image lookup returned ${res.status} — falling back`,
+        );
+        return;
+      }
+      const body = (await res.json()) as {
+        image_url?: string;
+        source?: string;
+      };
+      if (!body.image_url) return;
+      const existing =
+        (input.payload['enrichments'] as Record<string, unknown> | undefined) ??
+        {};
+      existing['first_product_image_url'] = body.image_url;
+      existing['first_product_image_source'] = body.source ?? 'unknown';
+      input.payload['enrichments'] = existing;
+    } catch (err) {
+      // Timeout, network error, or body parse failure. Log + continue —
+      // webhook ACK is never blocked by the enrichment hop.
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.log(
+        `shopify order confirmed: webhook_id=${input.webhookId} sku=${sku} image lookup failed: ${msg} — falling back`,
+      );
+    } finally {
+      clearTimeout(t);
+    }
+  }
+}
+
+/** First SKU in line_items[], or null if none. */
+function extractFirstLineItemSku(
+  payload: Record<string, unknown>,
+): string | null {
+  const items = payload['line_items'];
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const first = items[0] as Record<string, unknown> | undefined;
+  if (!first) return null;
+  const sku = first['sku'];
+  if (typeof sku !== 'string' || sku.trim().length === 0) return null;
+  return sku.trim();
 }
 
 interface ExtractedOrderFields {
