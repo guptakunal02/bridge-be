@@ -9,6 +9,7 @@ import { WhatsappTemplate } from '../whatsapp-inbox/entities/whatsapp-template.e
 import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { ActionDispatcher } from './action-dispatcher.service';
 import { AddTagHandler } from './action-handlers/add-tag.handler';
+import { CallWebhookHandler } from './action-handlers/call-webhook.handler';
 import { OptOutCustomerHandler } from './action-handlers/opt-out-customer.handler';
 import { RemoveTagHandler } from './action-handlers/remove-tag.handler';
 import { SendEmailTemplateHandler } from './action-handlers/send-email-template.handler';
@@ -58,6 +59,7 @@ import { RuleEvaluator } from './rule-evaluator.service';
     SendWhatsappTemplateHandler,
     SendEmailTemplateHandler,
     OptOutCustomerHandler,
+    CallWebhookHandler,
   ],
   exports: [AutomationEngine],
 })

@@ -37,6 +37,15 @@ export const AUTOMATION_EVENT = {
    */
   LENS_NDR: 'lens.ndr',
   LENS_NPR: 'lens.npr',
+  /**
+   * Customer tapped a QUICK_REPLY button on an outbound template.
+   * Meta webhooks the button-reply back; the ingest side parses the
+   * stamped payload JSON ({button_id, ctx}) and emits this event
+   * with the resolved context flattened to the payload root. Admin
+   * rules filter on `button_id` + bind `call_webhook` params to the
+   * context fields the original send carried.
+   */
+  WHATSAPP_BUTTON_REPLY: 'whatsapp.button_reply',
 } as const;
 
 export type AutomationEventName =
@@ -317,6 +326,37 @@ export interface LensExceptionEventPayload {
   rawPayload?: Record<string, unknown>;
 }
 
+/**
+ * Fires when a customer taps a QUICK_REPLY button on an outbound
+ * template. Carries the admin-defined `button_id` (so rules can
+ * filter on it) + the context that was stamped at send time (the
+ * variables resolved from the triggering event — e.g. awb,
+ * request_id, order_id). The context lives both inside
+ * `rawPayload.ctx` for JSON-path binding AND flattened on the top
+ * level for ergonomic predicate access.
+ *
+ * No ticket snapshot — the button tap doesn't mint a ticket (it's a
+ * side-effect of a prior send). TicketSnapshot stays as a sentinel
+ * so the discriminated union shape is consistent across events.
+ */
+export interface WhatsappButtonReplyEventPayload {
+  name: 'whatsapp.button_reply';
+  /** Admin-defined slug on the template button (e.g. "cancel_pickup"). */
+  button_id: string;
+  /** Visible button text as the customer saw it (e.g. "Cancel Pickup"). */
+  button_text: string;
+  /** wa_id of the customer who tapped. */
+  customerPhone: string;
+  /** Bridge channel that sent the original template. */
+  channelId: string;
+  /**
+   * Resolved variables stamped at send time. Flattened onto the top
+   * level of rawPayload (so JSON paths like `$.awb` work) alongside
+   * the structural fields (`button_id`, `button_text`, phone, …).
+   */
+  rawPayload?: Record<string, unknown>;
+}
+
 export type AutomationEventPayload =
   | {
       event: typeof AUTOMATION_EVENT.TICKET_CREATED;
@@ -382,6 +422,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED;
       ticket: TicketSnapshot;
       payload: ShopifyFulfillmentEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY;
+      ticket: TicketSnapshot;
+      payload: WhatsappButtonReplyEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */

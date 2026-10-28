@@ -5,6 +5,7 @@ import { TicketsService } from '../../tickets/tickets.service';
 import { WhatsappTemplate } from '../../whatsapp-inbox/entities/whatsapp-template.entity';
 import { WhatsappSenderService } from '../../whatsapp-inbox/whatsapp-sender.service';
 import { WhatsappTemplateStatus } from '../../database/enums';
+import { resolveButtonId } from '../../whatsapp-inbox/template-buttons';
 import type { Action, ActionHandler } from '../action';
 import { AutomationSystemActor } from '../automation-system-actor';
 import { AUTOMATION_EVENT, type AutomationEventPayload } from '../events';
@@ -284,6 +285,34 @@ export class SendWhatsappTemplateHandler
       });
     }
 
+    // QUICK_REPLY button payloads — one per QUICK_REPLY button on the
+    // template. Encodes a tiny JSON doc {button_id, ctx} where ctx is
+    // a flat map of resolved variables (name → value) from the same
+    // resolution pass that built `variables[]`. The ingest side JSON-
+    // parses this on the customer's inbound button tap and emits
+    // whatsapp.button_reply with ctx flattened to the event payload
+    // root. Meta imposes a ~1024-char limit on the payload string, so
+    // we keep ctx compact — only the vars actually mapped on the
+    // template, not the full event raw JSON.
+    const buttonQuickReplyParams: Array<{ index: number; payload: string }> =
+      [];
+    if (template.buttons) {
+      const ctx: Record<string, string> = {};
+      if (mapping) {
+        mapping.forEach((entry, i) => {
+          const v = variables[i];
+          if (typeof v === 'string') ctx[entry.name] = v;
+        });
+      }
+      template.buttons.forEach((b, idx) => {
+        if (b.type === 'QUICK_REPLY') {
+          const buttonId = resolveButtonId(b);
+          const payloadStr = JSON.stringify({ button_id: buttonId, ctx });
+          buttonQuickReplyParams.push({ index: idx, payload: payloadStr });
+        }
+      });
+    }
+
     try {
       await this.sender.sendTemplate(
         recipientPhone,
@@ -295,9 +324,10 @@ export class SendWhatsappTemplateHandler
           useMarketingEndpoint: template.maxPriceAmount !== null,
         },
         buttonUrlParams,
+        buttonQuickReplyParams,
       );
       this.logger.log(
-        `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${recipientPhone}${useBindings ? ' (bindings)' : ''}${buttonUrlParams.length > 0 ? ` (${buttonUrlParams.length} button param${buttonUrlParams.length === 1 ? '' : 's'})` : ''}`,
+        `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${recipientPhone}${useBindings ? ' (bindings)' : ''}${buttonUrlParams.length > 0 ? ` (${buttonUrlParams.length} url param${buttonUrlParams.length === 1 ? '' : 's'})` : ''}${buttonQuickReplyParams.length > 0 ? ` (${buttonQuickReplyParams.length} qr payload${buttonQuickReplyParams.length === 1 ? '' : 's'})` : ''}`,
       );
     } catch (err) {
       this.logger.warn(

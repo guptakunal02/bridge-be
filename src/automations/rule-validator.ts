@@ -38,6 +38,15 @@ const VALID_ACTION_TYPES: ReadonlySet<Action['type']> = new Set<Action['type']>(
   'send_whatsapp_template',
   'send_email_template',
   'opt_out_customer',
+  'call_webhook',
+]);
+
+const VALID_WEBHOOK_METHODS: ReadonlySet<string> = new Set([
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
 ]);
 
 const V1_SETTABLE_STATUSES: ReadonlySet<TicketStatus> = new Set<TicketStatus>([
@@ -270,6 +279,59 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
           `${path}.reasonLabel: must be a non-empty string when provided`,
         );
       }
+      break;
+    case 'call_webhook':
+      if (
+        typeof obj.method !== 'string' ||
+        !VALID_WEBHOOK_METHODS.has(obj.method)
+      ) {
+        errors.push(
+          `${path}.method: must be one of ${[...VALID_WEBHOOK_METHODS].join(', ')}`,
+        );
+      }
+      if (typeof obj.url !== 'string' || obj.url.trim().length === 0) {
+        errors.push(`${path}.url: must be a non-empty URL`);
+      } else if (!/^https?:\/\//i.test(obj.url)) {
+        errors.push(
+          `${path}.url: must start with http:// or https:// (got "${obj.url.slice(0, 40)}")`,
+        );
+      }
+      if (obj.headers !== undefined) {
+        const h: unknown = obj.headers;
+        if (h === null || typeof h !== 'object' || Array.isArray(h)) {
+          errors.push(
+            `${path}.headers: must be an object of {headerName: value}`,
+          );
+        } else {
+          for (const [k, v] of Object.entries(h as Record<string, unknown>)) {
+            if (typeof v !== 'string') {
+              errors.push(
+                `${path}.headers.${k}: must be a string (got ${typeof v})`,
+              );
+            }
+          }
+        }
+      }
+      if (obj.variable_bindings !== undefined) {
+        const vb: unknown = obj.variable_bindings;
+        if (vb === null || typeof vb !== 'object' || Array.isArray(vb)) {
+          errors.push(
+            `${path}.variable_bindings: must be an object of {variableName: jsonPath}`,
+          );
+        } else {
+          for (const [k, v] of Object.entries(vb as Record<string, unknown>)) {
+            if (typeof v !== 'string' || v.length === 0) {
+              errors.push(
+                `${path}.variable_bindings.${k}: must be a non-empty JSON path`,
+              );
+            }
+          }
+        }
+      }
+      // body_template can be any JSON-ish value (object / array /
+      // primitive) — the substitution walker handles all shapes. No
+      // structural rejection here; a stray body on a GET just gets
+      // ignored by the handler.
       break;
   }
 }

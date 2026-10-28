@@ -714,6 +714,18 @@ export class WhatsappSenderService {
       perMessageBidMultiplier?: number | null;
     },
     buttonUrlParams?: Array<{ index: number; value: string }>,
+    /**
+     * Per-QUICK_REPLY-button opaque payload stamped at send time.
+     * Meta echoes this verbatim on the inbound `button` message when
+     * the customer taps, which is how we round-trip the resolved
+     * event context (awb, request_id, button_id, …) back to the
+     * automation engine's `whatsapp.button_reply` event. The payload
+     * string IS our contract — the ingest side JSON.parses it.
+     *
+     * `index` matches the button's position in the template's BUTTONS
+     * component (admin-authored order).
+     */
+    buttonQuickReplyParams?: Array<{ index: number; payload: string }>,
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -771,6 +783,25 @@ export class WhatsappSenderService {
           sub_type: 'url',
           index: bp.index,
           parameters: [{ type: 'text', text: bp.value }],
+        });
+      }
+    }
+    // Per-QUICK_REPLY-button payload stamp. Meta: sub_type `quick_reply`,
+    // single parameter { type: 'payload', payload: <string> }. The
+    // template definition only carries the button's text at approval
+    // time; the payload here is the per-send opaque that comes back on
+    // the customer's inbound button-tap webhook (field
+    // `interactive.button_reply.payload`). We encode a tiny JSON doc
+    // {button_id, ctx: resolvedVars} — the ingest side parses it and
+    // emits whatsapp.button_reply with ctx flattened to the event
+    // payload root.
+    if (buttonQuickReplyParams && buttonQuickReplyParams.length > 0) {
+      for (const bp of buttonQuickReplyParams) {
+        components.push({
+          type: 'button',
+          sub_type: 'quick_reply',
+          index: bp.index,
+          parameters: [{ type: 'payload', payload: bp.payload }],
         });
       }
     }

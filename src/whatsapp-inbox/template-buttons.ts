@@ -35,7 +35,52 @@ export type WhatsappTemplateButton =
       url_variable_name?: string | null;
     }
   | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
-  | { type: 'QUICK_REPLY'; text: string };
+  | {
+      type: 'QUICK_REPLY';
+      text: string;
+      /**
+       * Admin-defined slug (e.g. "cancel_pickup") that automation
+       * rules filter on when the customer taps the button. At send
+       * time the handler encodes `{button_id, ctx}` as JSON into
+       * Meta's per-button `payload` parameter — then on inbound we
+       * parse it back and emit `whatsapp.button_reply` with
+       * `button_id` + the resolved context as the event payload.
+       *
+       * Defaults to slugified `text` (lowercase, spaces → underscores)
+       * when the admin leaves it blank. Kept URL-safe so admins can
+       * also match it in predicates without quoting.
+       */
+      button_id?: string;
+    };
+
+/**
+ * Lowercased, underscore-joined, [a-z0-9_]-only slug derived from a
+ * button's visible text. Fallback for `button_id` when the admin
+ * leaves it blank. Trims leading/trailing underscores; collapses runs
+ * so "  Cancel  Pickup! " → "cancel_pickup".
+ */
+export function slugifyButtonId(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Returns the effective button_id for a QUICK_REPLY button — the
+ * admin-set slug if present + non-empty, else a slugified `text`.
+ * Keeping this in one place so send-time (payload encoding) and
+ * ingest-time (filter matching) agree on the same string.
+ */
+export function resolveButtonId(button: {
+  type: 'QUICK_REPLY';
+  text: string;
+  button_id?: string;
+}): string {
+  const explicit = button.button_id?.trim();
+  if (explicit && explicit.length > 0) return explicit;
+  return slugifyButtonId(button.text);
+}
 
 /**
  * Extracts the single `{{varname}}` from a dynamic URL. Returns null

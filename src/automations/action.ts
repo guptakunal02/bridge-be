@@ -17,7 +17,8 @@ export type ActionType =
   | 'set_team'
   | 'send_whatsapp_template'
   | 'send_email_template'
-  | 'opt_out_customer';
+  | 'opt_out_customer'
+  | 'call_webhook';
 
 export type Action =
   | { type: 'add_tag'; tagName: string }
@@ -110,6 +111,52 @@ export type Action =
        * stitching as a human-authored reply).
        */
       templateId: string;
+    }
+  | {
+      type: 'call_webhook';
+      /**
+       * HTTP verb. GET / DELETE ignore `body_template`; the rest
+       * send it as a JSON body with Content-Type: application/json
+       * (unless the admin overrides via `headers`).
+       */
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+      /**
+       * Target endpoint. Admin-authored string with no path-
+       * variable interpolation — if the admin needs a dynamic
+       * path segment they put it in a query param and let the
+       * receiver route on that. Keeps the config shape simple.
+       */
+      url: string;
+      /**
+       * Optional static headers. Key/value map; both strings.
+       * Content-Type defaults to application/json when a body is
+       * present and the admin didn't set it explicitly.
+       */
+      headers?: Record<string, string>;
+      /**
+       * Request body skeleton as a JS value — object, array, or
+       * primitive. String leaves containing `{{var}}` resolve
+       * against the event payload (via `variable_bindings` paths)
+       * before serialization; non-string leaves pass through as-is.
+       *
+       * Example (NPR cancel-pickup):
+       *   {
+       *     requestType: "{{type}}",
+       *     requestId:   "{{request_id}}",
+       *     awb:         "{{awb}}"
+       *   }
+       * with variable_bindings { type: "$.type", request_id: "$.request_id", awb: "$.awb" }
+       */
+      body_template?: unknown;
+      /**
+       * Same binding mechanic as send_whatsapp_template:
+       * variable name → JSON path against the event's rawPayload.
+       * Resolved values substitute every `{{name}}` placeholder in
+       * `body_template` string leaves AND in query-string params
+       * of `url`. Null-resolving paths yield empty strings in the
+       * output.
+       */
+      variable_bindings?: Record<string, string>;
     };
 
 /**

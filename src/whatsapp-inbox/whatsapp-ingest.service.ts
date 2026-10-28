@@ -79,6 +79,17 @@ interface WhatsappInboundMessage {
     button_reply?: { id?: string; title?: string };
     list_reply?: { id?: string; title?: string };
   };
+  // Template QUICK_REPLY button tap. Distinct from `interactive`:
+  // Meta uses `type: "button"` with `button.payload` + `button.text`
+  // when the customer taps a reply button that was defined on a
+  // TEMPLATE (as opposed to an interactive-reply message sent by the
+  // bot). The `payload` carries whatever string we stamped at send
+  // time via sendTemplate's buttonQuickReplyParams — we JSON.parse it
+  // to recover `{button_id, ctx}` and emit whatsapp.button_reply.
+  button?: {
+    payload?: string;
+    text?: string;
+  };
 }
 interface WhatsappWebhookPayload {
   object?: string;
@@ -267,6 +278,7 @@ export class WhatsappIngestService {
             msg.text?.body ??
             msg.interactive?.button_reply?.title ??
             msg.interactive?.list_reply?.title ??
+            msg.button?.text ??
             media?.content ??
             null,
           external_message_id: msg.id!,
@@ -343,6 +355,60 @@ export class WhatsappIngestService {
           dayOfWeekIst,
         },
       });
+    }
+
+    // Template QUICK_REPLY button tap. Meta sends `type: "button"` with
+    // `button.payload` set to whatever string we stamped at send time
+    // via sendTemplate's buttonQuickReplyParams — a JSON string of
+    // {button_id, ctx: resolvedVars}. We parse it, flatten ctx onto
+    // the event payload root (so JSON paths like "$.awb" work), and
+    // emit whatsapp.button_reply. Rules filter on `button_id` and
+    // typically fire a call_webhook action with variable_bindings
+    // reading those ctx values back.
+    //
+    // Parse failures are expected (the admin may send a reply-button
+    // template authored outside Bridge — no payload stamp): we skip
+    // the event emission in that case and keep MESSAGE_RECEIVED as
+    // the only side-effect. Malformed JSON logs at debug, not warn —
+    // this is a routine condition, not an error.
+    if (msg.type === 'button' && msg.button?.payload) {
+      let parsed: { button_id?: unknown; ctx?: unknown } | null = null;
+      try {
+        parsed = JSON.parse(msg.button.payload);
+      } catch {
+        this.logger.debug(
+          `Button payload not JSON (external template or legacy stamp): ${msg.button.payload.slice(0, 100)}`,
+        );
+      }
+      if (parsed && typeof parsed.button_id === 'string') {
+        const ctx =
+          parsed.ctx && typeof parsed.ctx === 'object' && !Array.isArray(parsed.ctx)
+            ? (parsed.ctx as Record<string, unknown>)
+            : {};
+        this.automations.emit({
+          event: AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY,
+          ticket: ticketSnapshot,
+          payload: {
+            name: 'whatsapp.button_reply',
+            button_id: parsed.button_id,
+            button_text: msg.button?.text ?? '',
+            customerPhone: msg.from ?? '',
+            channelId: channel.id,
+            // ctx fields hoisted to the root so admin JSON paths like
+            // "$.awb" / "$.request_id" resolve as expected. Structural
+            // keys (button_id, button_text, customerPhone, channelId)
+            // also appear in rawPayload so predicates can filter on
+            // them without threading them through variable_bindings.
+            rawPayload: {
+              button_id: parsed.button_id,
+              button_text: msg.button?.text ?? '',
+              customerPhone: msg.from ?? '',
+              channelId: channel.id,
+              ...ctx,
+            },
+          },
+        });
+      }
     }
 
     // Bot runtime wiring — parallel to what EmailInboxService does.
