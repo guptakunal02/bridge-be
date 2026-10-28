@@ -77,7 +77,9 @@ export class SendWhatsappTemplateHandler
       ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED ||
       ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED ||
       ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED ||
-      ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED ||
+      ctx.event === AUTOMATION_EVENT.LENS_NDR ||
+      ctx.event === AUTOMATION_EVENT.LENS_NPR
     ) {
       await this.executeWebhookPath(action, ctx);
       return;
@@ -120,7 +122,9 @@ export class SendWhatsappTemplateHandler
       ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED &&
       ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_FULFILLED &&
       ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED &&
-      ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED &&
+      ctx.event !== AUTOMATION_EVENT.LENS_NDR &&
+      ctx.event !== AUTOMATION_EVENT.LENS_NPR
     ) {
       return;
     }

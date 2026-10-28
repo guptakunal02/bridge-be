@@ -1,6 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClickpostWebhooksModule } from '../clickpost-webhooks/clickpost-webhooks.module';
+import { LensWebhooksModule } from '../lens-webhooks/lens-webhooks.module';
 import { ReturnPrimeWebhooksModule } from '../return-prime-webhooks/return-prime-webhooks.module';
 import { ShopifyWebhooksModule } from '../shopify-webhooks/shopify-webhooks.module';
 import { AppSettingsService } from './app-settings.service';
@@ -15,6 +16,7 @@ import { SettingsController } from './settings.controller';
     forwardRef(() => ShopifyWebhooksModule),
     forwardRef(() => ReturnPrimeWebhooksModule),
     forwardRef(() => ClickpostWebhooksModule),
+    forwardRef(() => LensWebhooksModule),
   ],
   controllers: [SettingsController],
   providers: [AppSettingsService],

@@ -11,6 +11,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import type { EnvVars } from '../config/env.validation';
 import { UserRole } from '../database/enums';
 import { ClickpostWebhooksService } from '../clickpost-webhooks/clickpost-webhooks.service';
+import { LensWebhooksService } from '../lens-webhooks/lens-webhooks.service';
 import { ReturnPrimeWebhooksService } from '../return-prime-webhooks/return-prime-webhooks.service';
 import { ShopifyWebhooksService } from '../shopify-webhooks/shopify-webhooks.service';
 import { AppSettingsService } from './app-settings.service';
@@ -40,9 +41,19 @@ export interface IntegrationsResponse {
     /** ISO timestamp of the most recent Clickpost webhook, null when none seen. */
     lastEventAt: string | null;
   };
+  lens: {
+    /** True when LENS_FORWARD_SECRET is set (same secret as RP forward). */
+    configured: boolean;
+    /** ISO timestamp of the most recent Lens-forwarded event (NDR / NPR). */
+    lastEventAt: string | null;
+  };
 }
 
-export type IntegrationPlatform = 'shopify' | 'returnprime' | 'clickpost';
+export type IntegrationPlatform =
+  | 'shopify'
+  | 'returnprime'
+  | 'clickpost'
+  | 'lens';
 
 export interface IntegrationEventRow {
   id: string;
@@ -74,6 +85,7 @@ export class SettingsController {
     private readonly shopify: ShopifyWebhooksService,
     private readonly returnPrime: ReturnPrimeWebhooksService,
     private readonly clickpost: ClickpostWebhooksService,
+    private readonly lens: LensWebhooksService,
   ) {}
 
   /**
@@ -105,6 +117,10 @@ export class SettingsController {
       infer: true,
     });
     const clickpostLastEventAt = await this.clickpost.lastEventAt();
+    const lensSecret = this.config.get('LENS_FORWARD_SECRET', {
+      infer: true,
+    });
+    const lensLastEventAt = await this.lens.lastEventAt();
     return {
       shopify: {
         configured,
@@ -120,6 +136,10 @@ export class SettingsController {
         lastEventAt: clickpostLastEventAt
           ? clickpostLastEventAt.toISOString()
           : null,
+      },
+      lens: {
+        configured: Boolean(lensSecret),
+        lastEventAt: lensLastEventAt ? lensLastEventAt.toISOString() : null,
       },
     };
   }
@@ -150,7 +170,8 @@ export class SettingsController {
     const wantShopify = !platform || platform === 'shopify';
     const wantReturnPrime = !platform || platform === 'returnprime';
     const wantClickpost = !platform || platform === 'clickpost';
-    const [shopifyRows, rpRows, clickpostRows] = await Promise.all([
+    const wantLens = !platform || platform === 'lens';
+    const [shopifyRows, rpRows, clickpostRows, lensRows] = await Promise.all([
       wantShopify
         ? this.shopify.listRecent({ before: safeBefore, limit: limit + 1 })
         : Promise.resolve([]),
@@ -159,6 +180,9 @@ export class SettingsController {
         : Promise.resolve([]),
       wantClickpost
         ? this.clickpost.listRecent({ before: safeBefore, limit: limit + 1 })
+        : Promise.resolve([]),
+      wantLens
+        ? this.lens.listRecent({ before: safeBefore, limit: limit + 1 })
         : Promise.resolve([]),
     ]);
     const merged: IntegrationEventRow[] = [
@@ -191,6 +215,18 @@ export class SettingsController {
           // event-type analogue.
           platform: 'clickpost',
           topic: r.status,
+          shopDomain: null,
+          receivedAt: r.received_at.toISOString(),
+          payload: r.payload ?? {},
+        }),
+      ),
+      ...lensRows.map(
+        (r): IntegrationEventRow => ({
+          id: r.id,
+          platform: 'lens',
+          // Lens's forwarder carries an explicit `topic` field (ndr / npr);
+          // we store it on the row directly, no derivation needed.
+          topic: r.topic,
           shopDomain: null,
           receivedAt: r.received_at.toISOString(),
           payload: r.payload ?? {},

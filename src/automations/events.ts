@@ -29,6 +29,14 @@ export const AUTOMATION_EVENT = {
   SHOPIFY_FULFILLMENT_CREATED: 'shopify.fulfillment.created',
   SHOPIFY_ORDER_FULFILLED: 'shopify.order.fulfilled',
   SHOPIFY_FULFILLMENT_UPDATED: 'shopify.fulfillment.updated',
+  /**
+   * Lens-forwarded Clickpost delivery exception events — surma-ops
+   * classifies the scan then fires the typed event to Bridge AND to
+   * LimeChat in parallel. NDR = Non-Delivery Report (consignee
+   * unavailable, address wrong, etc). NPR = Non-Pickup Report.
+   */
+  LENS_NDR: 'lens.ndr',
+  LENS_NPR: 'lens.npr',
 } as const;
 
 export type AutomationEventName =
@@ -293,11 +301,37 @@ export interface ShopifyFulfillmentEventPayload {
   rawPayload?: Record<string, unknown>;
 }
 
+/**
+ * Lens-forwarded delivery exception events (NDR / NPR). The payload
+ * carries the raw Clickpost scan as Lens received it — admin binds
+ * phone + variables to arbitrary JSON paths at automation-rule time
+ * via action.variable_bindings + action.recipient_phone_path. There
+ * is NO pre-extraction here: Lens's payload shape is Clickpost's,
+ * and the admin's binding rules handle the mapping.
+ */
+export interface LensExceptionEventPayload {
+  name: 'lens.ndr' | 'lens.npr';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  channelId: string;
+  rawPayload?: Record<string, unknown>;
+}
+
 export type AutomationEventPayload =
   | {
       event: typeof AUTOMATION_EVENT.TICKET_CREATED;
       ticket: TicketSnapshot;
       payload: TicketCreatedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.LENS_NDR;
+      ticket: TicketSnapshot;
+      payload: LensExceptionEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.LENS_NPR;
+      ticket: TicketSnapshot;
+      payload: LensExceptionEventPayload;
     }
   | {
       event: typeof AUTOMATION_EVENT.MESSAGE_RECEIVED;
