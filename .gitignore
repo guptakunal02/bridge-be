@@ -31,5 +31,7 @@ coverage
 # temp
 *.tsbuildinfo
 
-# one-off recovery / diagnostic scripts — local only, deleted after use
-scripts/
+# one-off recovery / diagnostic scripts — local only, deleted after use.
+# Anchor the pattern to the repo root; `src/scripts/` holds committed
+# admin tools (backfills, one-off migrations) that need to ship.
+/scripts/
