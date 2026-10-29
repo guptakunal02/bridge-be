@@ -158,7 +158,13 @@ export class SettingsController {
     @Query('before') before?: string,
     @Query('limit') limitRaw?: string,
   ): Promise<IntegrationEventsResponse> {
-    const limit = Math.min(100, Math.max(1, Number(limitRaw) || 50));
+    // Cap at 1000 so the authoring UI's "pick a recent sample" dropdown
+    // surfaces rarer topics (orders/fulfilled fires 6k/wk vs
+    // fulfillments/update 33k/wk — at cap=100 the entire window was
+    // dominated by fulfillments/update + orders/create and admins
+    // couldn't author against orders/fulfilled). Four jsonb cols × 1000
+    // rows is still a cheap keyset scan with the (received_at) index.
+    const limit = Math.min(1000, Math.max(1, Number(limitRaw) || 50));
     const beforeDate = before ? new Date(before) : null;
     const safeBefore =
       beforeDate && !Number.isNaN(beforeDate.getTime()) ? beforeDate : null;
