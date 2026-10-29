@@ -83,22 +83,33 @@ export class ReturnPrimeWebhooksService {
       teamId: '',
       subject: null,
     };
-    const customer = payload['customer'] as
+    // RP's REAL webhook body is wrapped in a top-level `request`
+    // object — the samples surma-ops shared on 2026-10-29 had the
+    // wrapper stripped for brevity, and we read the actual shape only
+    // when the first production refund event landed in the Events
+    // inspector. Detect + use the wrapped data for hoisting while
+    // keeping rawPayload as the original (so admin JSON-paths like
+    // `request.customer.phone` on their rule's variable_bindings
+    // match what the sample helper shows them).
+    //
+    // Also handles a flat shape in case RP changes format later OR a
+    // different forwarder sends unwrapped — belt-and-braces.
+    const data =
+      payload['request'] &&
+      typeof payload['request'] === 'object' &&
+      !Array.isArray(payload['request'])
+        ? (payload['request'] as Record<string, unknown>)
+        : payload;
+    const customer = data['customer'] as
       | Record<string, unknown>
       | undefined;
-    const order = payload['order'] as Record<string, unknown> | undefined;
+    const order = data['order'] as Record<string, unknown> | undefined;
     const customerPhone = normalisePhone(asString(customer?.['phone']));
     const customerEmail = asString(customer?.['email']);
-    // orderName comes from the nested `order.name` ("#12345" style),
-    // confirmed with surma-ops's 2026-10-29 redacted sample. Earlier
-    // guesses at top-level order_name / orderName never resolve.
     const orderName = asString(order?.['name']);
-    const returnRequestId = asString(payload['id']) ?? '';
-    // request_number is RET54895 / EXC54384 — human-readable id the
-    // admin sees in RP's UI. Includes it as a hoisted field so
-    // templates can reference it without a JSON-path dive.
-    const requestNumber = asString(payload['request_number']);
-    const requestType = asString(payload['request_type']);
+    const returnRequestId = asString(data['id']) ?? '';
+    const requestNumber = asString(data['request_number']);
+    const requestType = asString(data['request_type']);
 
     if (topic === 'request/created') {
       if (!customerPhone) {
@@ -130,7 +141,7 @@ export class ReturnPrimeWebhooksService {
       return;
     }
     if (topic === 'request/refunded') {
-      const refunded = extractFirstRefundedLineItem(payload);
+      const refunded = extractFirstRefundedLineItem(data);
       const refundAmount = refunded?.amount ?? null;
       const refundMode = refunded?.mode ?? null;
       if (!customerPhone) {
@@ -216,19 +227,23 @@ export class ReturnPrimeWebhooksService {
     topic: string,
     payload: Record<string, unknown>,
   ): string {
+    // Unwrap the `request` envelope first so the id + updated_at
+    // lookups hit the real fields regardless of whether the forwarder
+    // sent us wrapped or flat.
+    const data =
+      payload['request'] &&
+      typeof payload['request'] === 'object' &&
+      !Array.isArray(payload['request'])
+        ? (payload['request'] as Record<string, unknown>)
+        : payload;
     const requestId =
-      asString(payload['id']) ??
-      asString(payload['_id']) ??
-      asString(payload['request_id']) ??
-      asString((payload['request'] as Record<string, unknown>)?.['_id']) ??
-      asString((payload['request'] as Record<string, unknown>)?.['id']) ??
+      asString(data['id']) ??
+      asString(data['_id']) ??
+      asString(data['request_id']) ??
       null;
     const updatedAt =
-      asString(payload['updated_at']) ??
-      asString(payload['updatedAt']) ??
-      asString(
-        (payload['request'] as Record<string, unknown>)?.['updatedAt'],
-      ) ??
+      asString(data['updated_at']) ??
+      asString(data['updatedAt']) ??
       null;
     if (requestId) {
       return `${topic}:${requestId}:${updatedAt ?? ''}`;
