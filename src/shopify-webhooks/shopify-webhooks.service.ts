@@ -107,6 +107,10 @@ export class ShopifyWebhooksService {
       this.emitOrderCancelled(input);
       return;
     }
+    if (input.topic === 'fulfillment_orders/split') {
+      this.emitFulfillmentOrderSplit(input);
+      return;
+    }
     if (input.topic === 'fulfillments/create') {
       this.emitFulfillment(
         input,
@@ -405,6 +409,101 @@ export class ShopifyWebhooksService {
           tags: extracted.tags.join(', '),
           cancel_reason: cancelReason ?? '',
           cancelled_at: cancelledAt ?? '',
+        },
+        rawPayload: input.payload,
+      },
+    });
+  }
+
+  /**
+   * `fulfillment_orders/split` — a pre-shipping signal. Shopify (or
+   * the merchant via Admin) decided one planned fulfillment will go
+   * out in multiple shipments. No AWB yet. Payload references
+   * FulfillmentOrder ids + line items that moved; the customer phone
+   * is NOT in this payload, so the automation rule's recipient_phone
+   * binding has to come from the Shopify order sync table or an
+   * enrichment hop.
+   */
+  private emitFulfillmentOrderSplit(input: {
+    webhookId: string;
+    topic: string;
+    shopDomain: string;
+    payload: Record<string, unknown>;
+  }): void {
+    const fo = input.payload['fulfillment_order'] as
+      | Record<string, unknown>
+      | undefined;
+    const remaining = input.payload['remaining_fulfillment_order'] as
+      | Record<string, unknown>
+      | undefined;
+    const replacement = input.payload['replacement_fulfillment_order'] as
+      | Record<string, unknown>
+      | undefined;
+    const splitItems = Array.isArray(input.payload['split_line_items'])
+      ? (input.payload['split_line_items'] as Array<Record<string, unknown>>)
+      : [];
+    const orderIdRaw = fo?.['order_id'];
+    const orderId =
+      typeof orderIdRaw === 'number'
+        ? String(orderIdRaw)
+        : (asString(orderIdRaw) ?? '');
+    if (!orderId) {
+      this.logger.warn(
+        `shopify fulfillment_orders/split: webhook_id=${input.webhookId} missing fulfillment_order.order_id; emitting skipped`,
+      );
+      return;
+    }
+    const idOf = (v: Record<string, unknown> | undefined): string =>
+      typeof v?.['id'] === 'number'
+        ? String(v['id'])
+        : (asString(v?.['id']) ?? '');
+    const locationIdOf = (
+      v: Record<string, unknown> | undefined,
+    ): string | null => {
+      const raw = v?.['assigned_location_id'];
+      if (typeof raw === 'number') return String(raw);
+      return asString(raw) ?? null;
+    };
+    const splitQuantity = splitItems.reduce((sum, it) => {
+      const q = Number(it['quantity']);
+      return sum + (Number.isFinite(q) ? q : 0);
+    }, 0);
+    this.automations.emit({
+      event: AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_ORDER_SPLIT,
+      ticket: {
+        id: '',
+        channelId: '',
+        channelType: null,
+        status: TicketStatus.OPEN,
+        tags: [],
+        assigneeId: null,
+        teamId: '',
+        subject: null,
+      },
+      payload: {
+        name: 'shopify.fulfillment_order.split',
+        channelId: '',
+        // No customerPhone in the payload — automation rule binds it
+        // via variable_bindings pulling from a Shopify order sync
+        // table (surma-ops) or an enrichment step. Handler skips the
+        // send with a warn log if recipient resolution yields empty.
+        customerPhone: '',
+        customerEmail: null,
+        shopDomain: input.shopDomain,
+        orderId,
+        originalFulfillmentOrderId: idOf(fo),
+        remainingFulfillmentOrderId: idOf(remaining),
+        replacementFulfillmentOrderId: idOf(replacement),
+        originalLocationId: locationIdOf(fo),
+        replacementLocationId: locationIdOf(replacement),
+        splitItemCount: splitItems.length,
+        splitQuantity,
+        variables: {
+          order_id: orderId,
+          split_item_count: String(splitItems.length),
+          split_quantity: String(splitQuantity),
+          original_fulfillment_order_id: idOf(fo),
+          replacement_fulfillment_order_id: idOf(replacement),
         },
         rawPayload: input.payload,
       },

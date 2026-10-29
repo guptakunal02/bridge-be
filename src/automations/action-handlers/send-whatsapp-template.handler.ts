@@ -80,6 +80,7 @@ export class SendWhatsappTemplateHandler
       ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED ||
       ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED ||
       ctx.event === AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED ||
+      ctx.event === AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_ORDER_SPLIT ||
       ctx.event === AUTOMATION_EVENT.LENS_NDR ||
       ctx.event === AUTOMATION_EVENT.LENS_NPR ||
       ctx.event === AUTOMATION_EVENT.LENS_RTO
@@ -127,6 +128,7 @@ export class SendWhatsappTemplateHandler
       ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED &&
       ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_UPDATED &&
       ctx.event !== AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED &&
+      ctx.event !== AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_ORDER_SPLIT &&
       ctx.event !== AUTOMATION_EVENT.LENS_NDR &&
       ctx.event !== AUTOMATION_EVENT.LENS_NPR &&
       ctx.event !== AUTOMATION_EVENT.LENS_RTO

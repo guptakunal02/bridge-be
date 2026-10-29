@@ -37,6 +37,22 @@ export const AUTOMATION_EVENT = {
    */
   SHOPIFY_ORDER_CANCELLED: 'shopify.order.cancelled',
   /**
+   * Shopify `fulfillment_orders/split` webhook. Fires when the merchant
+   * (or an app) splits a planned fulfillment into pieces — typically
+   * because different warehouses will ship different items. Carries
+   * NO tracking info; this is a pre-shipping signal. Common usage:
+   * send a "FYI we're splitting your order into multiple shipments —
+   * tracking coming shortly" heads-up before the per-box `fulfillments/
+   * create` events fire with actual AWBs.
+   *
+   * Payload shape (REST webhook, production):
+   *   fulfillment_order: {id, order_id, assigned_location_id, line_items}
+   *   remaining_fulfillment_order: {same shape, items that stay}
+   *   replacement_fulfillment_order: {same shape, new FO for split items}
+   *   split_line_items: [{id, quantity}, …]
+   */
+  SHOPIFY_FULFILLMENT_ORDER_SPLIT: 'shopify.fulfillment_order.split',
+  /**
    * Lens-forwarded Clickpost delivery exception events — surma-ops
    * classifies the scan then fires the typed event to Bridge AND to
    * LimeChat in parallel. NDR = Non-Delivery Report (consignee
@@ -328,6 +344,43 @@ export interface ShopifyOrderCancelledEventPayload {
   rawPayload?: Record<string, unknown>;
 }
 
+/**
+ * Fires when Shopify splits a fulfillment order (merchant decides to
+ * ship items from multiple locations). Pre-shipping signal — no AWB
+ * yet. Hoisted top-level fields are what admins typically filter on:
+ * which order, which locations are involved, how many items split.
+ *
+ * No customerPhone top-level: the webhook payload doesn't carry it.
+ * Admin binds the recipient via a Shopify-order-table JSON path or an
+ * enrichment step on the automation rule's variable_bindings. Handler
+ * will skip the send with a warn log if the resolved phone is empty.
+ */
+export interface ShopifyFulfillmentOrderSplitEventPayload {
+  name: 'shopify.fulfillment_order.split';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  shopDomain: string;
+  /** Parent order id as a string (bigint in Shopify, kept lossless). */
+  orderId: string;
+  /** FulfillmentOrder id that was split (keeps remaining items). */
+  originalFulfillmentOrderId: string;
+  /** New FO id for items that stayed with the original location. */
+  remainingFulfillmentOrderId: string;
+  /** New FO id for items that moved to a different location. */
+  replacementFulfillmentOrderId: string;
+  /** Location id of the original FO. */
+  originalLocationId: string | null;
+  /** Location id of the replacement FO (where items were moved to). */
+  replacementLocationId: string | null;
+  /** Count of distinct line items that moved. */
+  splitItemCount: number;
+  /** Total quantity across all split line items. */
+  splitQuantity: number;
+  rawPayload?: Record<string, unknown>;
+}
+
 export interface ShopifyOrderFulfilledEventPayload {
   name: 'shopify.order.fulfilled';
   variables: Record<string, string | number | boolean>;
@@ -522,6 +575,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED;
       ticket: TicketSnapshot;
       payload: ShopifyOrderCancelledEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_ORDER_SPLIT;
+      ticket: TicketSnapshot;
+      payload: ShopifyFulfillmentOrderSplitEventPayload;
     }
   | {
       event: typeof AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY;
