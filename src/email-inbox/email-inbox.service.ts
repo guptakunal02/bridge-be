@@ -8,6 +8,10 @@ import { isMutedSender } from '../channels/channel-muted-senders';
 import { Channel } from '../channels/entities/channel.entity';
 import { S3StorageService } from '../common/storage/s3-storage.service';
 import {
+  hasInlineBase64Image,
+  rewriteInlineBase64Images,
+} from './inline-images';
+import {
   BotTrigger,
   ChannelType,
   MessageDirection,
@@ -429,7 +433,34 @@ export class EmailInboxService {
         // from S3 doesn't lose the whole email — the message row
         // still commits, and the affected attachment is logged.
         if (req.attachments && req.attachments.length > 0) {
-          await this.persistAttachments(saved.id, req.attachments, mgr);
+          const uploadedAttachments = await this.persistAttachments(
+            saved.id,
+            req.attachments,
+            mgr,
+          );
+          // Rewrite base64 `data:image/*` tags in content_html to
+          // point at the S3 URLs we just uploaded. Prevents the DB
+          // from storing megabyte-sized duplicate copies of inline
+          // images (same bytes already live in S3 via the attachment
+          // row). Historical incident 2026-10-29: a 24 MB thread
+          // ballooned the serializer and OOM-killed pm2.
+          if (
+            saved.content_html &&
+            hasInlineBase64Image(saved.content_html) &&
+            uploadedAttachments.length > 0
+          ) {
+            const rewritten = rewriteInlineBase64Images(
+              saved.content_html,
+              uploadedAttachments,
+            );
+            if (rewritten !== saved.content_html) {
+              await messageRepo.update(
+                { id: saved.id },
+                { content_html: rewritten },
+              );
+              saved.content_html = rewritten;
+            }
+          }
         }
 
         // Reroute-on-message. Only fires when this inbound landed on
@@ -766,7 +797,31 @@ export class EmailInboxService {
       );
 
       if (req.attachments && req.attachments.length > 0) {
-        await this.persistAttachments(saved.id, req.attachments, mgr);
+        const uploadedAttachments = await this.persistAttachments(
+          saved.id,
+          req.attachments,
+          mgr,
+        );
+        // Same inline-base64 rewrite as the inbound path (see
+        // ingestReceived). Outbound replies composed in Gmail by an
+        // agent pasting a screenshot hit the same shape.
+        if (
+          saved.content_html &&
+          hasInlineBase64Image(saved.content_html) &&
+          uploadedAttachments.length > 0
+        ) {
+          const rewritten = rewriteInlineBase64Images(
+            saved.content_html,
+            uploadedAttachments,
+          );
+          if (rewritten !== saved.content_html) {
+            await messageRepo.update(
+              { id: saved.id },
+              { content_html: rewritten },
+            );
+            saved.content_html = rewritten;
+          }
+        }
       }
 
       await logRepo.save({
@@ -1018,11 +1073,12 @@ export class EmailInboxService {
     messageId: string,
     attachments: IngestEmailAttachment[],
     mgr: import('typeorm').EntityManager,
-  ): Promise<void> {
+  ): Promise<Array<{ content_type: string; storage_url: string }>> {
     const repo = mgr.getRepository(EmailMessageAttachment);
+    const uploaded: Array<{ content_type: string; storage_url: string }> = [];
     for (const a of attachments) {
       try {
-        const uploaded = await this.storage.upload({
+        const up = await this.storage.upload({
           filename: a.filename,
           contentType: a.contentType,
           body: a.body,
@@ -1033,10 +1089,14 @@ export class EmailInboxService {
             filename: a.filename,
             content_type: a.contentType,
             size_bytes: String(a.size),
-            storage_key: uploaded.key,
-            storage_url: uploaded.url,
+            storage_key: up.key,
+            storage_url: up.url,
           }),
         );
+        uploaded.push({
+          content_type: a.contentType,
+          storage_url: up.url,
+        });
       } catch (err) {
         this.logger.warn(
           `Failed to persist attachment "${a.filename}" on message=${messageId}: ${
@@ -1056,6 +1116,7 @@ export class EmailInboxService {
         (a as { body?: Buffer | null }).body = null;
       }
     }
+    return uploaded;
   }
 }
 

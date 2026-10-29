@@ -29,6 +29,10 @@ import {
 import { normalizeBodyHtml } from '../email-inbox/email-templates.service';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
+import {
+  hasInlineBase64Image,
+  rewriteInlineBase64Images,
+} from '../email-inbox/inline-images';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import {
   resolveMediaKind,
@@ -696,41 +700,28 @@ export class TicketsService {
       take: MAX_MESSAGES,
     });
     rows.reverse();
+    // Phase 2: ingest now rewrites inline base64 images to S3 URLs at
+    // persist time (see EmailInboxService.persistAttachments + the two
+    // callers of it + inline-images.ts for the shared helper). This
+    // serve-time pass stays as a defence-in-depth for:
+    //   - historical rows that still carry the base64 (backfilled
+    //     separately by scripts/backfill-email-html.ts, but we don't
+    //     gate anything on that having completed)
+    //   - any future ingest path that forgets to call the helper
+    //
+    // Both paths are cheap: hasInlineBase64Image is a plain string
+    // includes check, so the common case (no inline images) costs
+    // ~nothing.
     for (const r of rows) {
       if (!r.content_html) continue;
-      // Inline base64 images (customer snapped a photo + pasted into
-      // Gmail → sent as `data:image/*;base64,<N MB of chars>` right
-      // inside the message HTML) are 99% of what makes an email's
-      // content_html huge. BUT we already have the same bytes in S3
-      // as attachment rows — the mailparser extracts both the inline
-      // tag AND the attached file. So pair them by order of
-      // appearance and rewrite the `<img src="data:...">` to point
-      // at the S3 URL instead. Agent sees the exact same image
-      // inline where it was in the original email; payload shrinks
-      // from megabytes of base64 chars to a ~100-char https URL.
-      const imageAttachments = (r.attachments ?? []).filter((a) =>
-        (a.content_type ?? '').startsWith('image/'),
-      );
-      let attachIdx = 0;
-      let html = r.content_html.replace(
-        /<img[^>]*src\s*=\s*["']data:image\/[^"']+["'][^>]*>/gi,
-        () => {
-          const att = imageAttachments[attachIdx++];
-          if (att) {
-            // Preserve inline rendering with a sensible max-width so
-            // phone screenshots don't blow past the thread column.
-            return `<img src="${att.storage_url}" style="max-width:100%;height:auto;border-radius:4px" />`;
-          }
-          // No attachment available for this inline image (very rare —
-          // happens when the sender embedded via `data:` only, no
-          // separate attachment part). Minimal footprint fallback.
-          return '<span style="color:#999;font-size:12px">[inline image unavailable]</span>';
-        },
-      );
-      // Hard cap even after stripping. A real-world legitimate HTML
-      // email tops out well under 500 KB; anything past this is a
-      // pathological signature / embedded tracking blob / nested
-      // forward chain, and truncating the tail saves the serializer.
+      let html = r.content_html;
+      if (hasInlineBase64Image(html)) {
+        html = rewriteInlineBase64Images(html, r.attachments ?? []);
+      }
+      // Hard cap. Real-world legitimate HTML emails top out well
+      // under 500 KB; anything past this is a pathological signature
+      // / embedded tracking blob / nested forward chain, and
+      // truncating the tail saves the serializer.
       if (html.length > MAX_HTML_CHARS) {
         html = html.slice(0, MAX_HTML_CHARS) + truncationMarker;
       }

@@ -23,7 +23,8 @@
     "migration:revert": "pnpm build && pnpm typeorm migration:revert",
     "migration:show": "pnpm build && pnpm typeorm migration:show",
     "migration:generate": "pnpm build && pnpm typeorm migration:generate src/database/migrations/Auto",
-    "backfill:email-html": "pnpm build && node dist/scripts/backfill-email-html.js"
+    "backfill:email-html": "pnpm build && node dist/scripts/backfill-email-html.js",
+    "backfill:inline-images": "pnpm build && node dist/scripts/backfill-inline-images.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",
