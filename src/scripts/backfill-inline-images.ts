@@ -43,7 +43,10 @@ interface AttachmentRow {
 
 async function run(apply: boolean, ds: DataSource): Promise<void> {
   const scanned = { total: 0, matched: 0, rewritten: 0, bytesSaved: 0 };
-  let lastId = '';
+  // email_message.id is a uuid column, so the keyset cursor needs a
+  // valid uuid at start-of-table. The nil uuid sorts before every
+  // real one and keeps the `id > $1` predicate type-correct.
+  let lastId = '00000000-0000-0000-0000-000000000000';
 
   // Keyset pagination over email_message so we don't load the whole
   // table into memory. Only columns we need; content_html can be huge
