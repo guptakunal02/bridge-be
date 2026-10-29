@@ -77,6 +77,23 @@ export const AUTOMATION_EVENT = {
    * context fields the original send carried.
    */
   WHATSAPP_BUTTON_REPLY: 'whatsapp.button_reply',
+  /**
+   * Return Prime `request/created` — forwarded by Lens's RP forwarder
+   * (surma-ops) to /webhooks/return-prime. Fires when a customer
+   * submits a new return / exchange request. Payload shape confirmed
+   * from the 2026-10-24 live sample. Admin typically sends a
+   * "received, we're reviewing" acknowledgement template.
+   */
+  RETURN_PRIME_REQUEST_CREATED: 'return_prime.request.created',
+  /**
+   * Return Prime `request/refunded` — fires when any
+   * line_items[].refund.status flips to "refunded". Admin typically
+   * sends a "refund processed" template with amount + mode (razorpay_x
+   * / pay_to_source etc.). Does NOT fire for refunds the ops team marks
+   * manually outside RP (notes-only refunds); those stay invisible to
+   * this flow — surma-ops confirmed, agreed trade-off at integration time.
+   */
+  RETURN_PRIME_REQUEST_REFUNDED: 'return_prime.request.refunded',
 } as const;
 
 export type AutomationEventName =
@@ -470,6 +487,51 @@ export interface LensExceptionEventPayload {
 }
 
 /**
+ * Lens-forwarded Return Prime request events — created + refunded
+ * split out as distinct typed events so the automation dropdown shows
+ * them as first-class triggers (not under webhook.custom). Hoisted
+ * fields are what admins typically branch on; everything else lives
+ * on rawPayload for JSON-path binding at rule-authoring time.
+ *
+ * customerPhone comes from the top-level `customer.phone` key RP
+ * sends in E.164 format (98.6% coverage per surma-ops's DB check).
+ * refundMode is the first-line-item `refund.actual_mode` — real-world
+ * distribution: pay_to_source 69%, razorpay_x 30%, remainder tiny.
+ */
+export interface ReturnPrimeRequestCreatedEventPayload {
+  name: 'return_prime.request.created';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  /** `order_name` from RP — the Shopify order number ("#12345" style). */
+  orderName: string | null;
+  /** RP's internal return request id. */
+  returnRequestId: string;
+  rawPayload?: Record<string, unknown>;
+}
+
+export interface ReturnPrimeRequestRefundedEventPayload {
+  name: 'return_prime.request.refunded';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  orderName: string | null;
+  returnRequestId: string;
+  /** Refund amount in INR (string to preserve precision; RP sends decimal). */
+  refundAmount: string | null;
+  /**
+   * `actual_mode` from the first refunded line item. Real values seen:
+   *   pay_to_source | razorpay_x | shopflo | bank_transfer | others | store_credit
+   * Null when RP's payload omits it. Admin's rule typically branches
+   * razorpay_x (wallet refund) vs pay_to_source (back to original card).
+   */
+  refundMode: string | null;
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
  * Fires when a customer taps a QUICK_REPLY button on an outbound
  * template. Carries the admin-defined `button_id` (so rules can
  * filter on it) + the context that was stamped at send time (the
@@ -585,6 +647,16 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY;
       ticket: TicketSnapshot;
       payload: WhatsappButtonReplyEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.RETURN_PRIME_REQUEST_CREATED;
+      ticket: TicketSnapshot;
+      payload: ReturnPrimeRequestCreatedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED;
+      ticket: TicketSnapshot;
+      payload: ReturnPrimeRequestRefundedEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */

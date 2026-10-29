@@ -1,7 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { QueryFailedError, Repository } from 'typeorm';
+import { AutomationEngine } from '../automations/automation-engine.service';
+import { AUTOMATION_EVENT } from '../automations/events';
+import { TicketStatus } from '../database/enums';
 import { ReturnPrimeWebhookEvent } from './entities/return-prime-webhook-event.entity';
 
 /**
@@ -23,6 +26,8 @@ export class ReturnPrimeWebhooksService {
   constructor(
     @InjectRepository(ReturnPrimeWebhookEvent)
     private readonly events: Repository<ReturnPrimeWebhookEvent>,
+    @Inject(forwardRef(() => AutomationEngine))
+    private readonly automations: AutomationEngine,
   ) {}
 
   async handle(input: {
@@ -54,7 +59,106 @@ export class ReturnPrimeWebhooksService {
     this.logger.log(
       `return prime webhook received: topic="${input.topic}" webhook_id=${webhookId}`,
     );
+    this.emit(input.topic, input.payload);
     return { deduped: false };
+  }
+
+  /**
+   * Fan the stored webhook out as a typed automation event, if the
+   * topic maps to one. Dispatch runs ONLY after the dedup insert
+   * succeeds, so a retried fire never re-emits. Unknown topics
+   * (anything surma-ops's forwarder expands to beyond created/
+   * refunded, or future RP topics) land in the audit table but don't
+   * emit — admins can see them in the Events inspector + file a
+   * request to typify.
+   */
+  private emit(topic: string, payload: Record<string, unknown>): void {
+    const sentinelTicket = {
+      id: '',
+      channelId: '',
+      channelType: null,
+      status: TicketStatus.OPEN,
+      tags: [],
+      assigneeId: null,
+      teamId: '',
+      subject: null,
+    };
+    const customer = payload['customer'] as
+      | Record<string, unknown>
+      | undefined;
+    const customerPhone = normalisePhone(asString(customer?.['phone']));
+    const customerEmail = asString(customer?.['email']);
+    const orderName =
+      asString(payload['order_name']) ??
+      asString(payload['orderName']) ??
+      null;
+    const returnRequestId =
+      asString(payload['id']) ??
+      asString(payload['_id']) ??
+      asString(payload['request_id']) ??
+      '';
+
+    if (topic === 'request/created') {
+      if (!customerPhone) {
+        this.logger.warn(
+          `return_prime.request.created: no customer.phone in payload for return=${returnRequestId}; emitting anyway, admin's rule will skip`,
+        );
+      }
+      this.automations.emit({
+        event: AUTOMATION_EVENT.RETURN_PRIME_REQUEST_CREATED,
+        ticket: sentinelTicket,
+        payload: {
+          name: 'return_prime.request.created',
+          channelId: '',
+          customerPhone: customerPhone ?? '',
+          customerEmail,
+          orderName,
+          returnRequestId,
+          variables: {
+            order_name: orderName ?? '',
+            return_request_id: returnRequestId,
+          },
+          rawPayload: payload,
+        },
+      });
+      return;
+    }
+    if (topic === 'request/refunded') {
+      const refunded = extractFirstRefundedLineItem(payload);
+      const refundAmount = refunded?.amount ?? null;
+      const refundMode = refunded?.mode ?? null;
+      if (!customerPhone) {
+        this.logger.warn(
+          `return_prime.request.refunded: no customer.phone in payload for return=${returnRequestId}; emitting anyway, admin's rule will skip`,
+        );
+      }
+      this.automations.emit({
+        event: AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED,
+        ticket: sentinelTicket,
+        payload: {
+          name: 'return_prime.request.refunded',
+          channelId: '',
+          customerPhone: customerPhone ?? '',
+          customerEmail,
+          orderName,
+          returnRequestId,
+          refundAmount,
+          refundMode,
+          variables: {
+            order_name: orderName ?? '',
+            return_request_id: returnRequestId,
+            refund_amount: refundAmount ?? '',
+            refund_mode: refundMode ?? '',
+          },
+          rawPayload: payload,
+        },
+      });
+      return;
+    }
+    // Unknown topics (request/approved, request/received, etc.) land
+    // in the audit table but don't emit yet. If surma-ops adds them
+    // to the forwarder whitelist later, we'd handle each here in the
+    // same shape.
   }
 
   /** Most-recent received_at for the Integrations page's "last event". */
@@ -131,5 +235,51 @@ export class ReturnPrimeWebhooksService {
 function asString(v: unknown): string | null {
   if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  return null;
+}
+
+/**
+ * Normalise RP's `customer.phone` to a plain-digit wa_id. RP sends
+ * E.164 with the leading `+` (confirmed by surma-ops's 2026-10-29 DB
+ * check — 98.6% coverage, every row is `+<country><digits>`). The
+ * Meta send API accepts both forms, but keeping normalisation here
+ * means the handler log line + any downstream dedup sees the same
+ * canonical shape.
+ */
+function normalisePhone(v: string | null): string | null {
+  if (!v) return null;
+  const digits = v.replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
+/**
+ * Pulls refund amount + mode from the FIRST line item that's been
+ * marked refunded. Multi-item refunds in one webhook (same request,
+ * all items refunded at once) have identical refund.actual_mode
+ * across items in practice — surma-ops's 25k-row DB check didn't
+ * surface a split-mode case. We hoist the first value as the rule's
+ * discriminator; admins who care about per-item precision can bind
+ * `rawPayload.line_items[0].refund.*` directly.
+ */
+function extractFirstRefundedLineItem(
+  payload: Record<string, unknown>,
+): { amount: string | null; mode: string | null } | null {
+  const lineItems = Array.isArray(payload['line_items'])
+    ? (payload['line_items'] as Array<Record<string, unknown>>)
+    : [];
+  for (const li of lineItems) {
+    const refund = li['refund'] as Record<string, unknown> | undefined;
+    if (!refund) continue;
+    if (asString(refund['status']) !== 'refunded') continue;
+    const amountNode = refund['refunded_amount'] as
+      | Record<string, unknown>
+      | undefined;
+    const shopMoney = amountNode?.['shop_money'] as
+      | Record<string, unknown>
+      | undefined;
+    const amount = asString(shopMoney?.['amount']);
+    const mode = asString(refund['actual_mode']);
+    return { amount, mode };
+  }
   return null;
 }
