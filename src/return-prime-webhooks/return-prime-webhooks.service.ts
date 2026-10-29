@@ -86,17 +86,19 @@ export class ReturnPrimeWebhooksService {
     const customer = payload['customer'] as
       | Record<string, unknown>
       | undefined;
+    const order = payload['order'] as Record<string, unknown> | undefined;
     const customerPhone = normalisePhone(asString(customer?.['phone']));
     const customerEmail = asString(customer?.['email']);
-    const orderName =
-      asString(payload['order_name']) ??
-      asString(payload['orderName']) ??
-      null;
-    const returnRequestId =
-      asString(payload['id']) ??
-      asString(payload['_id']) ??
-      asString(payload['request_id']) ??
-      '';
+    // orderName comes from the nested `order.name` ("#12345" style),
+    // confirmed with surma-ops's 2026-10-29 redacted sample. Earlier
+    // guesses at top-level order_name / orderName never resolve.
+    const orderName = asString(order?.['name']);
+    const returnRequestId = asString(payload['id']) ?? '';
+    // request_number is RET54895 / EXC54384 — human-readable id the
+    // admin sees in RP's UI. Includes it as a hoisted field so
+    // templates can reference it without a JSON-path dive.
+    const requestNumber = asString(payload['request_number']);
+    const requestType = asString(payload['request_type']);
 
     if (topic === 'request/created') {
       if (!customerPhone) {
@@ -114,9 +116,13 @@ export class ReturnPrimeWebhooksService {
           customerEmail,
           orderName,
           returnRequestId,
+          requestNumber,
+          requestType,
           variables: {
             order_name: orderName ?? '',
             return_request_id: returnRequestId,
+            request_number: requestNumber ?? '',
+            request_type: requestType ?? '',
           },
           rawPayload: payload,
         },
@@ -142,11 +148,15 @@ export class ReturnPrimeWebhooksService {
           customerEmail,
           orderName,
           returnRequestId,
+          requestNumber,
+          requestType,
           refundAmount,
           refundMode,
           variables: {
             order_name: orderName ?? '',
             return_request_id: returnRequestId,
+            request_number: requestNumber ?? '',
+            request_type: requestType ?? '',
             refund_amount: refundAmount ?? '',
             refund_mode: refundMode ?? '',
           },

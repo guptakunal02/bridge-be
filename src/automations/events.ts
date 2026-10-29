@@ -504,10 +504,14 @@ export interface ReturnPrimeRequestCreatedEventPayload {
   customerPhone: string;
   customerEmail: string | null;
   channelId: string;
-  /** `order_name` from RP — the Shopify order number ("#12345" style). */
+  /** `order.name` from RP — the Shopify order number ("#12345" style). */
   orderName: string | null;
-  /** RP's internal return request id. */
+  /** RP's internal return request id (Mongo ObjectId). */
   returnRequestId: string;
+  /** Human-readable request number ("RET54895" / "EXC54384"), useful in templates. */
+  requestNumber: string | null;
+  /** "return" or "exchange" — RP uses one webhook topic for both. */
+  requestType: string | null;
   rawPayload?: Record<string, unknown>;
 }
 
@@ -519,6 +523,8 @@ export interface ReturnPrimeRequestRefundedEventPayload {
   channelId: string;
   orderName: string | null;
   returnRequestId: string;
+  requestNumber: string | null;
+  requestType: string | null;
   /** Refund amount in INR (string to preserve precision; RP sends decimal). */
   refundAmount: string | null;
   /**
