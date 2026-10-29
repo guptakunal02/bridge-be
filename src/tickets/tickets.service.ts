@@ -697,10 +697,26 @@ export class TicketsService {
     });
     rows.reverse();
     for (const r of rows) {
-      if (r.content_html && r.content_html.length > MAX_HTML_CHARS) {
-        r.content_html =
-          r.content_html.slice(0, MAX_HTML_CHARS) + truncationMarker;
+      if (!r.content_html) continue;
+      // Inline base64 images (customer snapped a photo + pasted into
+      // Gmail → sent as `data:image/*;base64,<N MB of chars>` right
+      // inside the message HTML) are 99% of what makes an email's
+      // content_html huge. Strip them to a lightweight placeholder
+      // the FE can render — the actual bytes are also sitting in S3
+      // via the attachments relation, which the FE shows as a chip
+      // under the message, so no data is lost.
+      let html = r.content_html.replace(
+        /<img[^>]*src\s*=\s*["']data:image\/[^"']+["'][^>]*>/gi,
+        '<span style="display:inline-block;padding:4px 8px;background:#f5f5f5;border:1px dashed #ccc;border-radius:4px;color:#999;font-size:12px">[inline image — see attachment below]</span>',
+      );
+      // Hard cap even after stripping. A real-world legitimate HTML
+      // email tops out well under 500 KB; anything past this is a
+      // pathological signature / embedded tracking blob / nested
+      // forward chain, and truncating the tail saves the serializer.
+      if (html.length > MAX_HTML_CHARS) {
+        html = html.slice(0, MAX_HTML_CHARS) + truncationMarker;
       }
+      r.content_html = html;
     }
     return rows;
   }
