@@ -659,18 +659,50 @@ export class TicketsService {
     channel: ChannelType,
     chainIds: string[],
   ): Promise<EmailMessage[]> {
+    // Hotfix caps — root cause of the Oct 29 OOM-kill cluster. A single
+    // email ticket thread returned 24 MB of JSON (ticket 1956); at
+    // NestJS serialisation time V8 allocates ~3-4× the output size for
+    // intermediates, which ballooned RSS past the 2 GB cgroup ceiling
+    // and systemd pulled the whole pm2 service.
+    //
+    // Two caps, both intentionally generous for 99% of threads:
+    //   1. MAX_MESSAGES: fetch at most the last 500 messages across the
+    //      ancestor chain. Threads with more than that are extreme
+    //      outliers; proper pagination is a Phase-X follow-up.
+    //   2. MAX_HTML_CHARS: truncate any single message's content_html
+    //      at 500 KB. Marketing-email HTML with inline-data-URI images
+    //      is the usual culprit. The truncation marker is HTML the FE
+    //      renders inline, so the agent sees "...(truncated — view
+    //      source for full message)" at the cut point.
+    const MAX_MESSAGES = 500;
+    const MAX_HTML_CHARS = 500_000;
+    const truncationMarker =
+      '<p style="color:#999;font-style:italic">…(message truncated — ask engineering to raise the cap if you need the rest)</p>';
     if (channel === ChannelType.WHATSAPP) {
       const rows = await this.whatsapps.find({
         where: { ticket_id: In(chainIds) },
-        order: { createdAt: 'ASC' },
+        order: { createdAt: 'DESC' },
+        take: MAX_MESSAGES,
       });
+      // DESC fetch gives us the newest-first slice; reverse so the
+      // mapper sees the familiar chronological order it expects.
+      rows.reverse();
       return rows.map(adaptWhatsappMessage);
     }
-    return this.emails.find({
+    const rows = await this.emails.find({
       where: { ticket_id: In(chainIds) },
       relations: { attachments: true },
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'DESC' },
+      take: MAX_MESSAGES,
     });
+    rows.reverse();
+    for (const r of rows) {
+      if (r.content_html && r.content_html.length > MAX_HTML_CHARS) {
+        r.content_html =
+          r.content_html.slice(0, MAX_HTML_CHARS) + truncationMarker;
+      }
+    }
+    return rows;
   }
 
   /**

@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import { Logger } from 'nestjs-pino';
@@ -19,6 +20,15 @@ async function bootstrap(): Promise<void> {
 
   app.use(cookieParser());
   app.set('trust proxy', 1);
+
+  // gzip responses >= 1 KB. Big wins on /tickets/:id (24 MB email
+  // threads compress to ~1-2 MB) and on template list / inbox endpoints.
+  // compression() streams, so the server doesn't materialise the full
+  // compressed body before sending — the uncompressed JSON Buffer is
+  // the only transient allocation, which the response-end hook below
+  // already releases. Nothing to tune — defaults (gzip level 6,
+  // threshold 1 KB) are the right balance of CPU vs bytes.
+  app.use(compression());
 
   // Capture the raw request body on JSON POSTs so webhook signature
   // guards (WhatsApp, Shopify) can HMAC-verify against the exact bytes

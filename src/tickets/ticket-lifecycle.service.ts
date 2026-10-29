@@ -206,7 +206,7 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
       .createQueryBuilder('u')
       .where('u.status = :status', { status: UserStatus.ONLINE })
       .andWhere('u.role = :role', { role: UserRole.MEMBER })
-      .andWhere('u.deactivated_at IS NULL')
+      .andWhere('u."deactivatedAt" IS NULL')
       .select(['u.id'])
       .getMany();
     if (online.length === 0) return;
