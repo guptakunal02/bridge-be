@@ -1123,7 +1123,17 @@ function extractFulfillmentFields(
       : asString(orderIdRaw);
   if (!fulfillmentId || !orderId) return null;
 
-  const orderName = asString(payload['name']); // Shopify stamps order name here on fulfillments
+  // Shopify stamps the FULFILLMENT name here (`#251802.1`, `#251802.2`,
+  // etc), not the pure order name. Every first shipment is `.1`
+  // regardless of whether more will follow — the suffix is a
+  // chronological fulfillment counter, not a split-order indicator.
+  // Strip the `.N` suffix so admins binding to `event.orderName` get
+  // the customer-facing `#251802` instead of `#251802.1`. The raw
+  // fulfillment name stays in `rawPayload.name` if debugging needs it.
+  const rawFulfillmentName = asString(payload['name']);
+  const orderName = rawFulfillmentName
+    ? rawFulfillmentName.replace(/\.\d+$/, '')
+    : null;
   const status = asString(payload['status']) ?? 'unknown';
   const shipmentStatus = asString(payload['shipment_status']);
   const trackingCompany = asString(payload['tracking_company']);
