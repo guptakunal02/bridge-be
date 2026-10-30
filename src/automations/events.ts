@@ -30,6 +30,27 @@ export const AUTOMATION_EVENT = {
   SHOPIFY_ORDER_FULFILLED: 'shopify.order.fulfilled',
   SHOPIFY_FULFILLMENT_UPDATED: 'shopify.fulfillment.updated',
   /**
+   * Fires on `fulfillments/create` ONLY when surma-ops's context lookup
+   * reports `is_split_order && !is_final_fulfillment` — i.e. this is a
+   * mid-flight shipment of a split order (more boxes still to come).
+   * The LAST shipment of a split order and single-shipment orders do
+   * NOT fire this event (orders/fulfilled covers them).
+   *
+   * Why we need a separate event vs reusing fulfillment.created with a
+   * tag predicate: Shopify's webhook payload doesn't carry the
+   * `Split_shipment` tag at the time the first fulfillment fires
+   * (verified 2026-10-30 — tag applied 0.5% at orders/create, 100% at
+   * orders/fulfilled). Surma-ops has the authoritative current state
+   * via its Shopify sync; Bridge calls their
+   * /api/orders/:name/fulfillment-context endpoint at emit time.
+   *
+   * Payload shape mirrors SHOPIFY_FULFILLMENT_CREATED's fulfillment
+   * fields + adds surma-ops-sourced extras (orderTags with the
+   * Split_shipment tag, fulfillmentNumber, totalFulfillmentsSoFar) so
+   * templates can say "shipment 1 of N" without a second lookup.
+   */
+  SHOPIFY_ORDER_PARTIALLY_FULFILLED: 'shopify.order.partially_fulfilled',
+  /**
    * Shopify `orders/cancelled` webhook. Fires on both merchant-
    * initiated cancellations (from Shopify Admin) + customer-initiated
    * ones (via post-purchase cancel apps). Common usage: send a
@@ -471,6 +492,36 @@ export interface ShopifyFulfillmentEventPayload {
 }
 
 /**
+ * Shopify partially-fulfilled event — synthetic, derived at emit time
+ * by calling surma-ops's /api/orders/:name/fulfillment-context endpoint
+ * on each `fulfillments/create`. See the `SHOPIFY_ORDER_PARTIALLY_FULFILLED`
+ * constant doc for why we need a separate event.
+ */
+export interface ShopifyOrderPartiallyFulfilledEventPayload {
+  name: 'shopify.order.partially_fulfilled';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  customerEmail: string | null;
+  channelId: string;
+  orderId: string;
+  orderName: string | null;
+  fulfillmentId: string;
+  status: string;
+  shipmentStatus: string | null;
+  trackingCompany: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shopDomain: string;
+  /** 1-indexed position of THIS fulfillment in the order's shipment series. */
+  fulfillmentNumber: number;
+  /** Count of fulfillments on the order right now, including this one. */
+  totalFulfillmentsSoFar: number;
+  /** Current order-level tags from surma-ops's Shopify sync (includes Split_shipment). */
+  orderTags: string[];
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
  * Lens-forwarded delivery exception events (NDR / NPR). The payload
  * carries the raw Clickpost scan as Lens received it — admin binds
  * phone + variables to arbitrary JSON paths at automation-rule time
@@ -648,6 +699,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_ORDER_SPLIT;
       ticket: TicketSnapshot;
       payload: ShopifyFulfillmentOrderSplitEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.SHOPIFY_ORDER_PARTIALLY_FULFILLED;
+      ticket: TicketSnapshot;
+      payload: ShopifyOrderPartiallyFulfilledEventPayload;
     }
   | {
       event: typeof AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY;

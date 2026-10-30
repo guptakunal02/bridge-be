@@ -8,11 +8,10 @@ import type { EnvVars } from '../config/env.validation';
 import { TicketStatus } from '../database/enums';
 import { ShopifyWebhookEvent } from './entities/shopify-webhook-event.entity';
 
-/** Loopback endpoint on the same EC2 box exposed by surma-ops. */
-const LENS_PRODUCT_IMAGE_URL = 'http://127.0.0.1:3000/api/products/image';
-/** Cap on how long the enrichment hop can delay webhook storage.
- *  Cache-hit: ~5ms. Shopify-live fetch: ~380ms worst case. 2s leaves
- *  headroom; we'd rather drop enrichment than block the webhook ACK. */
+/** Cap on how long any surma-ops enrichment hop can delay webhook
+ *  processing. Cache-hit: ~5ms. Shopify-live fetch: ~380-700ms worst
+ *  case. 2s leaves headroom; we'd rather drop enrichment than block
+ *  the webhook ACK or stall the handler. */
 const LENS_FETCH_TIMEOUT_MS = 2000;
 
 /**
@@ -117,6 +116,17 @@ export class ShopifyWebhooksService {
         AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_CREATED,
         'shopify.fulfillment.created',
       );
+      // Fire-and-forget: the partial check calls surma-ops synchronously
+      // then emits a second typed event IFF this is a mid-flight shipment
+      // of a split order. Decoupled from the generic emit above so
+      // admins can rely on fulfillment.created firing uniformly while
+      // partially_fulfilled is a strict subset (split + not final).
+      void this.maybeEmitPartiallyFulfilled(input).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `shopify partially_fulfilled check failed: webhook_id=${input.webhookId} err=${msg}`,
+        );
+      });
       return;
     }
     if (input.topic === 'fulfillments/update') {
@@ -603,6 +613,148 @@ export class ShopifyWebhooksService {
   }
 
   /**
+   * On `fulfillments/create`, ask surma-ops whether this shipment is
+   * a mid-flight piece of a split order and (iff so) emit the typed
+   * SHOPIFY_ORDER_PARTIALLY_FULFILLED event. Surma-ops is the oracle
+   * because the `Split_shipment` tag isn't on the order at
+   * orders/create time (0.5% coverage) and the fulfillment payload
+   * itself carries no order-level fields.
+   *
+   * Fully best-effort: on any failure (secret unset, 404 from
+   * surma-ops meaning order not yet synced OR fulfillment not yet
+   * visible, 5xx, timeout) we log at `warn` and skip the emit. The
+   * generic shopify.fulfillment.created event has already fired by
+   * the time this runs, so admins who want "any shipment" rules
+   * aren't blocked by surma-ops downtime.
+   */
+  private async maybeEmitPartiallyFulfilled(input: {
+    webhookId: string;
+    topic: string;
+    shopDomain: string;
+    payload: Record<string, unknown>;
+  }): Promise<void> {
+    const secret = this.config.get('LENS_INTERNAL_SECRET', { infer: true });
+    if (!secret) return;
+    const extracted = extractFulfillmentFields(input.payload);
+    if (!extracted) return;
+    // Fulfillment `name` is "#251229.1" / "#251229.2" / etc. The order
+    // name is everything before the ".<n>" suffix, stripped of the
+    // leading "#" (surma-ops indexes by bare number, per contract).
+    const orderName = extractOrderNameFromFulfillmentName(extracted.orderName);
+    if (!orderName) {
+      this.logger.log(
+        `shopify partially_fulfilled: webhook_id=${input.webhookId} could not derive order name from fulfillment name=${extracted.orderName ?? 'null'} — skipping`,
+      );
+      return;
+    }
+    if (!extracted.customerPhone && !extracted.customerEmail) {
+      // Same guard as the generic emit — nothing to deliver to.
+      return;
+    }
+    const baseUrl = this.config.get('LENS_FULFILLMENT_CONTEXT_URL', {
+      infer: true,
+    });
+    if (!baseUrl) {
+      // Env var not set in this deployment — feature off. Admins can
+      // still rely on shopify.fulfillment.created / shopify.order.fulfilled.
+      return;
+    }
+    const url =
+      `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(orderName)}` +
+      `/fulfillment-context?fulfillment_id=${encodeURIComponent(extracted.fulfillmentId)}`;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), LENS_FETCH_TIMEOUT_MS);
+    let context: FulfillmentContext | null = null;
+    try {
+      const res = await fetch(url, {
+        headers: { 'X-Internal-Secret': secret },
+        signal: ac.signal,
+      });
+      if (res.status === 404) {
+        this.logger.log(
+          `shopify partially_fulfilled: webhook_id=${input.webhookId} order=${orderName} fulfillment=${extracted.fulfillmentId} not yet visible in surma-ops — skipping`,
+        );
+        return;
+      }
+      if (!res.ok) {
+        this.logger.warn(
+          `shopify partially_fulfilled: webhook_id=${input.webhookId} order=${orderName} context lookup returned ${res.status} — skipping`,
+        );
+        return;
+      }
+      context = (await res.json()) as FulfillmentContext;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `shopify partially_fulfilled: webhook_id=${input.webhookId} order=${orderName} context lookup failed: ${msg} — skipping`,
+      );
+      return;
+    } finally {
+      clearTimeout(t);
+    }
+    if (!context) return;
+    // Gate: only emit when this is a MID-FLIGHT shipment of a split
+    // order. Single-shipment orders and the final shipment of a split
+    // order are covered by shopify.order.fulfilled.
+    if (!context.is_split_order || context.is_final_fulfillment) {
+      this.logger.log(
+        `shopify partially_fulfilled: webhook_id=${input.webhookId} order=${orderName} is_split=${context.is_split_order} is_final=${context.is_final_fulfillment} — skipping emit`,
+      );
+      return;
+    }
+    this.logger.log(
+      `shopify partially_fulfilled: webhook_id=${input.webhookId} order=${orderName} shipment ${context.fulfillment_number} of split order (so-far=${context.total_fulfillments_so_far}) — emitting`,
+    );
+    this.automations.emit({
+      event: AUTOMATION_EVENT.SHOPIFY_ORDER_PARTIALLY_FULFILLED,
+      ticket: {
+        id: '',
+        channelId: '',
+        channelType: null,
+        status: TicketStatus.OPEN,
+        tags: [],
+        assigneeId: null,
+        teamId: '',
+        subject: null,
+      },
+      payload: {
+        name: 'shopify.order.partially_fulfilled',
+        channelId: '',
+        customerPhone: extracted.customerPhone,
+        customerEmail: extracted.customerEmail,
+        orderId: extracted.orderId,
+        orderName: extracted.orderName,
+        fulfillmentId: extracted.fulfillmentId,
+        status: extracted.status,
+        shipmentStatus: extracted.shipmentStatus,
+        trackingCompany: extracted.trackingCompany,
+        trackingNumber: extracted.trackingNumber,
+        trackingUrl: extracted.trackingUrl,
+        shopDomain: input.shopDomain,
+        fulfillmentNumber: context.fulfillment_number,
+        totalFulfillmentsSoFar: context.total_fulfillments_so_far,
+        orderTags: Array.isArray(context.order_tags)
+          ? context.order_tags
+          : [],
+        variables: {
+          order_id: extracted.orderId,
+          order_name: extracted.orderName ?? '',
+          fulfillment_id: extracted.fulfillmentId,
+          fulfillment_number: String(context.fulfillment_number),
+          total_fulfillments_so_far: String(context.total_fulfillments_so_far),
+          status: extracted.status,
+          shipment_status: extracted.shipmentStatus ?? '',
+          tracking_company: extracted.trackingCompany ?? '',
+          tracking_number: extracted.trackingNumber ?? '',
+          tracking_url: extracted.trackingUrl ?? '',
+          customer_email: extracted.customerEmail ?? '',
+        },
+        rawPayload: input.payload,
+      },
+    });
+  }
+
+  /**
    * Resolve the first line item's product image via surma-ops's
    * cache endpoint (loopback, same box). Mutates input.payload in
    * place to add `enrichments.first_product_image_url` on success.
@@ -659,7 +811,8 @@ export class ShopifyWebhooksService {
     // kicks in at send time. See 2026-10-28 contract committed in
     // bridge-be #8408a4f + surma-ops side.
     const secret = this.config.get('LENS_INTERNAL_SECRET', { infer: true });
-    if (!secret) return;
+    const baseUrl = this.config.get('LENS_PRODUCT_IMAGE_URL', { infer: true });
+    if (!secret || !baseUrl) return;
     const sku = extractFirstLineItemSku(input.payload);
     if (!sku) {
       this.logger.log(
@@ -667,7 +820,7 @@ export class ShopifyWebhooksService {
       );
       return;
     }
-    const url = `${LENS_PRODUCT_IMAGE_URL}?sku=${encodeURIComponent(sku)}`;
+    const url = `${baseUrl.replace(/\/$/, '')}?sku=${encodeURIComponent(sku)}`;
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), LENS_FETCH_TIMEOUT_MS);
     try {
@@ -947,4 +1100,32 @@ function asString(v: unknown): string | null {
   if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   return null;
+}
+
+/**
+ * surma-ops's fulfillment-context endpoint response shape. Contract
+ * committed 2026-10-30 — see LENS_FULFILLMENT_CONTEXT_URL_BASE doc.
+ */
+interface FulfillmentContext {
+  is_split_order: boolean;
+  is_final_fulfillment: boolean;
+  fulfillment_number: number;
+  total_fulfillments_so_far: number;
+  order_tags: string[];
+  order_name: string;
+}
+
+/**
+ * Fulfillment `name` is "#251229.1" / "#251229.2" / etc. Strip the
+ * trailing ".<digits>" suffix and the leading "#" to recover the
+ * bare order name surma-ops indexes by (per contract).
+ */
+function extractOrderNameFromFulfillmentName(
+  fulfillmentName: string | null,
+): string | null {
+  if (!fulfillmentName) return null;
+  const trimmed = fulfillmentName.trim();
+  const noSuffix = trimmed.replace(/\.\d+$/, '');
+  const bare = noSuffix.replace(/^#/, '').trim();
+  return bare.length > 0 ? bare : null;
 }

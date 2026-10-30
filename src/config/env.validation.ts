@@ -255,6 +255,37 @@ export class EnvVars {
   @IsString()
   @MinLength(8)
   LENS_INTERNAL_SECRET?: string;
+
+  /**
+   * Base URL for surma-ops's product-image cache endpoint. Bridge
+   * calls `${LENS_PRODUCT_IMAGE_URL}?sku=<SKU>` on `orders/create` to
+   * enrich the stored payload with the first line-item's CDN image URL.
+   * Same box in prod (loopback) but kept configurable so a staging
+   * Bridge can point at a staging surma-ops without a code change.
+   *
+   * Optional — when unset, Bridge skips the enrichment hop and the
+   * admin's automation rule falls back to the template's static
+   * header_image_fallback.
+   */
+  @IsOptional()
+  @IsUrl({ require_tld: false, require_protocol: true })
+  LENS_PRODUCT_IMAGE_URL?: string;
+
+  /**
+   * Base URL for surma-ops's fulfillment-context endpoint. Bridge
+   * calls `${LENS_FULFILLMENT_CONTEXT_URL}/<order-name>/fulfillment-context?fulfillment_id=<id>`
+   * on `fulfillments/create` to detect split-shipment partials
+   * (surma-ops has the authoritative current order state including
+   * the `Split_shipment` tag that isn't present at orders/create
+   * webhook time).
+   *
+   * Optional — when unset, Bridge still emits the generic
+   * shopify.fulfillment.created event; only the derived
+   * shopify.order.partially_fulfilled event is skipped.
+   */
+  @IsOptional()
+  @IsUrl({ require_tld: false, require_protocol: true })
+  LENS_FULFILLMENT_CONTEXT_URL?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {
