@@ -286,6 +286,23 @@ export class EnvVars {
   @IsOptional()
   @IsUrl({ require_tld: false, require_protocol: true })
   LENS_FULFILLMENT_CONTEXT_URL?: string;
+
+  /**
+   * Base URL for surma-ops's customer-contact endpoint. Bridge calls
+   * `${LENS_CUSTOMER_CONTACT_URL}/<order-name>/customer-contact` to
+   * un-mask inbound Clickpost webhooks — Clickpost's enterprise plan
+   * redacts customer name / email / phone to "**********" in every
+   * payload with no toggle to pass PII through, so we look the real
+   * values up from surma-ops's Shopify sync by the order id Clickpost
+   * does include (payload.additional.order_id).
+   *
+   * Optional — when unset, Bridge persists Clickpost webhooks with the
+   * masks in place and automation rules on inbound phone will see an
+   * empty value.
+   */
+  @IsOptional()
+  @IsUrl({ require_tld: false, require_protocol: true })
+  LENS_CUSTOMER_CONTACT_URL?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {
