@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ClickpostWebhookEvent } from './entities/clickpost-webhook-event.entity';
+import type { TopicStatRow } from '../shopify-webhooks/shopify-webhooks.service';
 
 /**
  * Receives + persists Clickpost tracking webhooks. No field extraction
@@ -73,6 +74,35 @@ export class ClickpostWebhooksService {
       select: { received_at: true },
     });
     return row?.received_at ?? null;
+  }
+
+  /**
+   * Per-status stats within a sliding window. Clickpost uses `status`
+   * as the natural event-type (OFD / Delivered / etc.) — same role as
+   * `topic` on other platforms.
+   */
+  async topicStats(input: { since: Date }): Promise<TopicStatRow[]> {
+    const rows = (await this.events
+      .createQueryBuilder('e')
+      .select('e.status', 'topic')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect('MIN(e.received_at)', 'first_at')
+      .addSelect('MAX(e.received_at)', 'last_at')
+      .where('e.received_at >= :since', { since: input.since })
+      .groupBy('e.status')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany()) as Array<{
+      topic: string;
+      count: number;
+      first_at: Date;
+      last_at: Date;
+    }>;
+    return rows.map((r) => ({
+      topic: r.topic,
+      count: r.count,
+      firstAt: r.first_at.toISOString(),
+      lastAt: r.last_at.toISOString(),
+    }));
   }
 
   async listRecent(input: {

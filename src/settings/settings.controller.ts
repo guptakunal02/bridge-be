@@ -2,23 +2,35 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
+  Param,
   Patch,
   Post,
   Query,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { EnvVars } from '../config/env.validation';
 import { UserRole } from '../database/enums';
 import { ClickpostWebhooksService } from '../clickpost-webhooks/clickpost-webhooks.service';
 import { LensWebhooksService } from '../lens-webhooks/lens-webhooks.service';
 import { ReturnPrimeWebhooksService } from '../return-prime-webhooks/return-prime-webhooks.service';
+import type { TopicStatRow } from '../shopify-webhooks/shopify-webhooks.service';
 import { ShopifyWebhooksService } from '../shopify-webhooks/shopify-webhooks.service';
+import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { AppSettingsService } from './app-settings.service';
 import {
   GeneralSettingsResponse,
   UpdateGeneralSettingsDto,
 } from './dto/general-settings.dto';
+import {
+  INTEGRATION_API_CALLS,
+  INTEGRATION_WEBHOOK_TOPICS,
+  type ApiCallCatalogEntry,
+  type WebhookTopicCatalogEntry,
+} from './integration-catalog';
 
 export interface IntegrationsResponse {
   shopify: {
@@ -47,13 +59,47 @@ export interface IntegrationsResponse {
     /** ISO timestamp of the most recent Lens-forwarded event (NDR / NPR). */
     lastEventAt: string | null;
   };
+  whatsapp: {
+    /** True when every required WHATSAPP_* env var is present. */
+    configured: boolean;
+    /** Phone number id displayed non-secret for grep-ability. */
+    phoneNumberId: string | null;
+    /** ISO timestamp of the most recent whatsapp_message row (any direction). */
+    lastEventAt: string | null;
+  };
 }
 
 export type IntegrationPlatform =
   | 'shopify'
   | 'returnprime'
   | 'clickpost'
-  | 'lens';
+  | 'lens'
+  | 'whatsapp';
+
+/**
+ * Window shorthand accepted by the details endpoint. Kept small so the
+ * UI's toggle maps 1:1 to the query param; no arbitrary ranges.
+ */
+export type IntegrationStatsWindow = '24h' | '7d' | '30d';
+
+export interface IntegrationDetailsResponse {
+  platform: IntegrationPlatform;
+  window: IntegrationStatsWindow;
+  /** Start of the lookback window as ISO. */
+  since: string;
+  /**
+   * Observed webhook events for the window. For audited platforms
+   * (shopify / returnprime / clickpost / lens) this comes from the
+   * dedicated event tables. For whatsapp, where there's no dedicated
+   * audit table, the array is empty — the FE renders the static
+   * `webhookTopicsCatalog` instead.
+   */
+  webhookEvents: TopicStatRow[];
+  /** Fallback catalog shown when webhookEvents is empty (whatsapp). */
+  webhookTopicsCatalog: WebhookTopicCatalogEntry[];
+  /** Static catalog of outbound HTTP calls Bridge makes to this platform. */
+  apiCalls: ApiCallCatalogEntry[];
+}
 
 export interface IntegrationEventRow {
   id: string;
@@ -86,6 +132,8 @@ export class SettingsController {
     private readonly returnPrime: ReturnPrimeWebhooksService,
     private readonly clickpost: ClickpostWebhooksService,
     private readonly lens: LensWebhooksService,
+    @InjectRepository(WhatsappMessage)
+    private readonly whatsappMessages: Repository<WhatsappMessage>,
   ) {}
 
   /**
@@ -121,6 +169,24 @@ export class SettingsController {
       infer: true,
     });
     const lensLastEventAt = await this.lens.lastEventAt();
+    // WhatsApp configured = every required WA env var present. We only
+    // check the three that are REQUIRED (per EnvVars validators); the
+    // others are either optional or already covered.
+    const waPhoneNumberId = this.config.get('WHATSAPP_PHONE_NUMBER_ID', {
+      infer: true,
+    });
+    const waAccessToken = this.config.get('WHATSAPP_ACCESS_TOKEN', {
+      infer: true,
+    });
+    const waWabaId = this.config.get('WHATSAPP_BUSINESS_ACCOUNT_ID', {
+      infer: true,
+    });
+    const waConfigured = Boolean(waPhoneNumberId && waAccessToken && waWabaId);
+    const waLastRow = await this.whatsappMessages.findOne({
+      where: {},
+      order: { createdAt: 'DESC' },
+      select: { createdAt: true },
+    });
     return {
       shopify: {
         configured,
@@ -141,6 +207,76 @@ export class SettingsController {
         configured: Boolean(lensSecret),
         lastEventAt: lensLastEventAt ? lensLastEventAt.toISOString() : null,
       },
+      whatsapp: {
+        configured: waConfigured,
+        phoneNumberId: waPhoneNumberId ?? null,
+        lastEventAt: waLastRow?.createdAt
+          ? waLastRow.createdAt.toISOString()
+          : null,
+      },
+    };
+  }
+
+  /**
+   * Per-platform detail view — the data behind the expand-inline card
+   * on the Integrations page. Returns observed webhook topic stats for
+   * the chosen window (24h / 7d / 30d) plus the static catalog of
+   * outbound API calls Bridge makes to this platform.
+   *
+   * For platforms without a dedicated webhook audit table (whatsapp),
+   * `webhookEvents` is empty and the FE renders `webhookTopicsCatalog`
+   * instead — the static list of topics Bridge handles.
+   */
+  @Get('integrations/:platform/details')
+  @Roles(UserRole.ADMIN)
+  async getIntegrationDetails(
+    @Param('platform') platform: string,
+    @Query('window') windowRaw?: string,
+  ): Promise<IntegrationDetailsResponse> {
+    const platforms: IntegrationPlatform[] = [
+      'shopify',
+      'returnprime',
+      'clickpost',
+      'lens',
+      'whatsapp',
+    ];
+    if (!platforms.includes(platform as IntegrationPlatform)) {
+      throw new NotFoundException(`Unknown platform "${platform}"`);
+    }
+    const windows: IntegrationStatsWindow[] = ['24h', '7d', '30d'];
+    const window: IntegrationStatsWindow = windows.includes(
+      windowRaw as IntegrationStatsWindow,
+    )
+      ? (windowRaw as IntegrationStatsWindow)
+      : '7d';
+    const hours = window === '24h' ? 24 : window === '7d' ? 24 * 7 : 24 * 30;
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const platformTyped = platform as IntegrationPlatform;
+
+    const webhookEvents: TopicStatRow[] = await (async () => {
+      switch (platformTyped) {
+        case 'shopify':
+          return this.shopify.topicStats({ since });
+        case 'returnprime':
+          return this.returnPrime.topicStats({ since });
+        case 'clickpost':
+          return this.clickpost.topicStats({ since });
+        case 'lens':
+          return this.lens.topicStats({ since });
+        case 'whatsapp':
+          // Meta webhooks aren't audited to a dedicated table — the
+          // FE renders the static catalog as a fallback.
+          return [];
+      }
+    })();
+
+    return {
+      platform: platformTyped,
+      window,
+      since: since.toISOString(),
+      webhookEvents,
+      webhookTopicsCatalog: INTEGRATION_WEBHOOK_TOPICS[platformTyped],
+      apiCalls: INTEGRATION_API_CALLS[platformTyped],
     };
   }
 

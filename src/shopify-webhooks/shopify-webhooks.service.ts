@@ -8,6 +8,14 @@ import type { EnvVars } from '../config/env.validation';
 import { TicketStatus } from '../database/enums';
 import { ShopifyWebhookEvent } from './entities/shopify-webhook-event.entity';
 
+/** Row shape returned by every webhook service's `topicStats()`. */
+export interface TopicStatRow {
+  topic: string;
+  count: number;
+  firstAt: string;
+  lastAt: string;
+}
+
 /** Cap on how long any surma-ops enrichment hop can delay webhook
  *  processing. Cache-hit: ~5ms. Shopify-live fetch: ~380-700ms worst
  *  case. 2s leaves headroom; we'd rather drop enrichment than block
@@ -590,6 +598,36 @@ export class ShopifyWebhooksService {
         rawPayload: input.payload,
       },
     });
+  }
+
+  /**
+   * Per-topic stats within a sliding window. Powers the Integrations
+   * page's expanded card so admins can see "we received N events of
+   * topic X in the last K days". Ordered by count descending so the
+   * noisiest topic surfaces first.
+   */
+  async topicStats(input: { since: Date }): Promise<TopicStatRow[]> {
+    const rows = (await this.events
+      .createQueryBuilder('e')
+      .select('e.topic', 'topic')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect('MIN(e.received_at)', 'first_at')
+      .addSelect('MAX(e.received_at)', 'last_at')
+      .where('e.received_at >= :since', { since: input.since })
+      .groupBy('e.topic')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany()) as Array<{
+      topic: string;
+      count: number;
+      first_at: Date;
+      last_at: Date;
+    }>;
+    return rows.map((r) => ({
+      topic: r.topic,
+      count: r.count,
+      firstAt: r.first_at.toISOString(),
+      lastAt: r.last_at.toISOString(),
+    }));
   }
 
   /**

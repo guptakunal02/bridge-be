@@ -6,6 +6,7 @@ import { AutomationEngine } from '../automations/automation-engine.service';
 import { AUTOMATION_EVENT } from '../automations/events';
 import { TicketStatus } from '../database/enums';
 import { ReturnPrimeWebhookEvent } from './entities/return-prime-webhook-event.entity';
+import type { TopicStatRow } from '../shopify-webhooks/shopify-webhooks.service';
 
 /**
  * Receives + persists Return Prime webhooks. No field extraction or
@@ -190,6 +191,31 @@ export class ReturnPrimeWebhooksService {
       select: { received_at: true },
     });
     return row?.received_at ?? null;
+  }
+
+  /** Per-topic stats within a sliding window — see shopify.topicStats. */
+  async topicStats(input: { since: Date }): Promise<TopicStatRow[]> {
+    const rows = (await this.events
+      .createQueryBuilder('e')
+      .select('e.topic', 'topic')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect('MIN(e.received_at)', 'first_at')
+      .addSelect('MAX(e.received_at)', 'last_at')
+      .where('e.received_at >= :since', { since: input.since })
+      .groupBy('e.topic')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany()) as Array<{
+      topic: string;
+      count: number;
+      first_at: Date;
+      last_at: Date;
+    }>;
+    return rows.map((r) => ({
+      topic: r.topic,
+      count: r.count,
+      firstAt: r.first_at.toISOString(),
+      lastAt: r.last_at.toISOString(),
+    }));
   }
 
   /**
