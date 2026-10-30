@@ -28,6 +28,15 @@ export class ReturnPrimeWebhookEvent {
   @Column({ type: 'jsonb' })
   payload!: Record<string, unknown>;
 
+  /**
+   * Normalized customer phone (digits only, Meta wa_id format) lifted
+   * from request.customer.phone (or top-level customer.phone when RP
+   * sends unwrapped). Null when the payload lacks a phone. See
+   * migration 1726460000000.
+   */
+  @Column({ type: 'text', nullable: true, name: 'customer_phone' })
+  customer_phone!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'received_at' })
   received_at!: Date;
 }

@@ -35,6 +35,15 @@ export class ShopifyWebhookEvent {
   @Column({ type: 'jsonb' })
   payload!: Record<string, unknown>;
 
+  /**
+   * Normalized customer phone (digits only, Meta wa_id format) lifted
+   * at ingest time. Nullable because some topics don't carry phone
+   * (e.g. fulfillment_orders/split) and some orders ship without a
+   * captured phone. See migration 1726460000000.
+   */
+  @Column({ type: 'text', nullable: true, name: 'customer_phone' })
+  customer_phone!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'received_at' })
   received_at!: Date;
 }

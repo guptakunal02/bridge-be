@@ -36,12 +36,16 @@ export class ReturnPrimeWebhooksService {
     payload: Record<string, unknown>;
   }): Promise<{ deduped: boolean }> {
     const webhookId = this.deriveWebhookId(input.topic, input.payload);
+    const customerPhone = extractCustomerPhoneFromReturnPrimePayload(
+      input.payload,
+    );
     try {
       await this.events.save(
         this.events.create({
           webhook_id: webhookId,
           topic: input.topic,
           payload: input.payload,
+          customer_phone: customerPhone,
         }),
       );
     } catch (err) {
@@ -226,6 +230,8 @@ export class ReturnPrimeWebhooksService {
   async listRecent(input: {
     before: Date | null;
     limit: number;
+    phone?: string | null;
+    topic?: string | null;
   }): Promise<ReturnPrimeWebhookEvent[]> {
     const qb = this.events
       .createQueryBuilder('e')
@@ -233,6 +239,14 @@ export class ReturnPrimeWebhooksService {
       .limit(input.limit);
     if (input.before) {
       qb.andWhere('e.received_at < :before', { before: input.before });
+    }
+    if (input.phone && input.phone.trim().length > 0) {
+      qb.andWhere('e.customer_phone ILIKE :phone', {
+        phone: `%${input.phone.trim()}%`,
+      });
+    }
+    if (input.topic && input.topic.trim().length > 0) {
+      qb.andWhere('e.topic ILIKE :topic', { topic: `%${input.topic.trim()}%` });
     }
     return qb.getMany();
   }
@@ -312,6 +326,28 @@ function normalisePhone(v: string | null): string | null {
  * discriminator; admins who care about per-item precision can bind
  * `rawPayload.line_items[0].refund.*` directly.
  */
+/**
+ * Return Prime wraps the real payload in `{ request: {...} }` on live
+ * webhooks (the 2026-10-29 samples arrived without the wrapper, so we
+ * handle both). Customer phone lives at `customer.phone` in E.164
+ * with leading `+`.
+ */
+function extractCustomerPhoneFromReturnPrimePayload(
+  payload: Record<string, unknown>,
+): string | null {
+  const data =
+    payload['request'] &&
+    typeof payload['request'] === 'object' &&
+    !Array.isArray(payload['request'])
+      ? (payload['request'] as Record<string, unknown>)
+      : payload;
+  const customer = data['customer'] as Record<string, unknown> | undefined;
+  const raw = asString(customer?.['phone']);
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
 function extractFirstRefundedLineItem(
   payload: Record<string, unknown>,
 ): { amount: string | null; mode: string | null } | null {

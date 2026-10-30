@@ -37,6 +37,14 @@ export class LensWebhookEvent {
   @Column({ type: 'jsonb' })
   payload!: Record<string, unknown>;
 
+  /**
+   * Normalized customer phone (digits only, Meta wa_id format) lifted
+   * from payload.phone_number at ingest time. Nullable for forwarded
+   * payloads that lack a phone_number field. See migration 1726460000000.
+   */
+  @Column({ type: 'text', nullable: true, name: 'customer_phone' })
+  customer_phone!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'received_at' })
   received_at!: Date;
 }

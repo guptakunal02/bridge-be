@@ -40,12 +40,14 @@ export class LensWebhooksService {
     received_at?: string;
     payload: Record<string, unknown>;
   }): Promise<{ deduped: boolean }> {
+    const customerPhone = extractCustomerPhoneFromLensPayload(input.payload);
     try {
       await this.events.save(
         this.events.create({
           event_id: input.event_id,
           topic: input.topic,
           payload: input.payload,
+          customer_phone: customerPhone,
         }),
       );
     } catch (err) {
@@ -104,11 +106,12 @@ export class LensWebhooksService {
         name,
         // channelId empty = handler uses the template's bound channel.
         channelId: '',
-        // No pre-extracted customerPhone here — admin's rule binds
-        // the phone path at automation-rule time (variable_bindings +
-        // recipient_phone_path), same as the Clickpost / RP routes
-        // will adopt once we drop them off webhook.custom.
-        customerPhone: '',
+        // Hoist phone_number from the Lens payload so admin rules can
+        // bind recipient_phone_path to `event.customerPhone` uniformly
+        // across every typed event — same path works for Shopify / RP /
+        // Lens. Falls back to '' when the forwarded body lacks it;
+        // admin's rule skips sends with an empty phone.
+        customerPhone: extractCustomerPhoneFromLensPayload(input.payload) ?? '',
         variables: {},
         rawPayload: input.payload,
       },
@@ -161,6 +164,8 @@ export class LensWebhooksService {
   async listRecent(input: {
     before: Date | null;
     limit: number;
+    phone?: string | null;
+    topic?: string | null;
   }): Promise<LensWebhookEvent[]> {
     const qb = this.events
       .createQueryBuilder('e')
@@ -169,6 +174,28 @@ export class LensWebhooksService {
     if (input.before) {
       qb.andWhere('e.received_at < :before', { before: input.before });
     }
+    if (input.phone && input.phone.trim().length > 0) {
+      qb.andWhere('e.customer_phone ILIKE :phone', {
+        phone: `%${input.phone.trim()}%`,
+      });
+    }
+    if (input.topic && input.topic.trim().length > 0) {
+      qb.andWhere('e.topic ILIKE :topic', { topic: `%${input.topic.trim()}%` });
+    }
     return qb.getMany();
   }
+}
+
+/**
+ * Lens-forwarded Clickpost payloads carry the customer phone on
+ * top-level `phone_number`. Normalise to digits-only wa_id format so
+ * the Phone column + search behave consistently with other platforms.
+ */
+function extractCustomerPhoneFromLensPayload(
+  payload: Record<string, unknown>,
+): string | null {
+  const raw = payload['phone_number'];
+  if (typeof raw !== 'string') return null;
+  const digits = raw.replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
 }

@@ -35,6 +35,16 @@ export class ClickpostWebhookEvent {
   @Column({ type: 'jsonb' })
   payload!: Record<string, unknown>;
 
+  /**
+   * Normalized customer phone (digits only, Meta wa_id format) lifted
+   * from the surma-ops-enriched additional.phone at ingest time (the
+   * raw Clickpost value is always "**********" since Clickpost's
+   * enterprise plan redacts PII). Null when surma-ops lookup fails or
+   * no order_id is present. See migration 1726460000000.
+   */
+  @Column({ type: 'text', nullable: true, name: 'customer_phone' })
+  customer_phone!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'received_at' })
   received_at!: Date;
 }

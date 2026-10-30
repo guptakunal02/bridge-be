@@ -67,6 +67,16 @@ export class ShopifyWebhooksService {
       await this.enrichOrdersCreate(input);
     }
 
+    // Pull the customer phone out of the topic-specific location so
+    // the per-row Phone column + phone search on the Integrations →
+    // Events page works. Falls back to null for topics that don't
+    // carry a phone (fulfillment_orders/split) and payloads where
+    // every fallback is empty.
+    const customerPhone = extractCustomerPhoneFromShopifyPayload(
+      input.topic,
+      input.payload,
+    );
+
     // Insert first; dedup falls out of the UNIQUE constraint on
     // webhook_id. Catching 23505 ("unique_violation") → short-circuit.
     try {
@@ -76,6 +86,7 @@ export class ShopifyWebhooksService {
           topic: input.topic,
           shop_domain: input.shopDomain,
           payload: input.payload,
+          customer_phone: customerPhone,
         }),
       );
     } catch (err) {
@@ -639,6 +650,10 @@ export class ShopifyWebhooksService {
   async listRecent(input: {
     before: Date | null;
     limit: number;
+    /** ILIKE %input% on customer_phone when set. */
+    phone?: string | null;
+    /** ILIKE %input% on topic when set. */
+    topic?: string | null;
   }): Promise<ShopifyWebhookEvent[]> {
     const qb = this.events
       .createQueryBuilder('e')
@@ -646,6 +661,14 @@ export class ShopifyWebhooksService {
       .limit(input.limit);
     if (input.before) {
       qb.andWhere('e.received_at < :before', { before: input.before });
+    }
+    if (input.phone && input.phone.trim().length > 0) {
+      qb.andWhere('e.customer_phone ILIKE :phone', {
+        phone: `%${input.phone.trim()}%`,
+      });
+    }
+    if (input.topic && input.topic.trim().length > 0) {
+      qb.andWhere('e.topic ILIKE :topic', { topic: `%${input.topic.trim()}%` });
     }
     return qb.getMany();
   }
@@ -1138,6 +1161,35 @@ function asString(v: unknown): string | null {
   if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   return null;
+}
+
+/**
+ * Topic-agnostic customer phone extraction. Each Shopify topic puts
+ * the phone in a different place:
+ *   - orders/* and orders/fulfilled share the full order shape → use
+ *     the order field extractor's customer/shipping/billing fallback
+ *   - fulfillments/* carry the shipping phone on `destination.phone`
+ *   - fulfillment_orders/split is pre-shipping — no phone, returns null
+ * Returns digits-only wa_id format (strips +, spaces, dashes).
+ */
+function extractCustomerPhoneFromShopifyPayload(
+  topic: string,
+  payload: Record<string, unknown>,
+): string | null {
+  if (topic.startsWith('fulfillments/')) {
+    const destination = payload['destination'] as
+      | Record<string, unknown>
+      | undefined;
+    const raw = asString(destination?.['phone']);
+    return raw ? raw.replace(/\D/g, '') || null : null;
+  }
+  if (topic === 'fulfillment_orders/split') return null;
+  // orders/create, orders/fulfilled, orders/cancelled all share the
+  // full order shape — reuse the fallback chain the field extractor
+  // already applies (customer → shipping → billing → top-level).
+  const extracted = extractOrderFields(payload);
+  if (!extracted || !extracted.customerPhone) return null;
+  return extracted.customerPhone;
 }
 
 /**

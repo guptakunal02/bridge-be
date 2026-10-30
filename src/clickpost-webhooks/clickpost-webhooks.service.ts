@@ -52,6 +52,15 @@ export class ClickpostWebhooksService {
       | Record<string, unknown>
       | undefined;
     const orderId = asString(additional?.['order_id']);
+    // Read phone AFTER enrichMaskedContact — Clickpost's raw payload
+    // ships "**********" there; surma-ops's lookup overwrites with the
+    // real value when found. If the lookup failed (order not synced
+    // yet, 5xx, etc.), the mask stays and we persist null.
+    const rawPhone = asString(additional?.['phone']);
+    const customerPhone =
+      rawPhone && !rawPhone.includes('*')
+        ? rawPhone.replace(/\D/g, '') || null
+        : null;
     try {
       await this.events.save(
         this.events.create({
@@ -60,6 +69,7 @@ export class ClickpostWebhooksService {
           waybill,
           order_id: orderId,
           payload,
+          customer_phone: customerPhone,
         }),
       );
     } catch (err) {
@@ -123,6 +133,9 @@ export class ClickpostWebhooksService {
   async listRecent(input: {
     before: Date | null;
     limit: number;
+    phone?: string | null;
+    /** Clickpost uses `status` as its topic surface (OFD, Delivered, …). */
+    topic?: string | null;
   }): Promise<ClickpostWebhookEvent[]> {
     const qb = this.events
       .createQueryBuilder('e')
@@ -130,6 +143,16 @@ export class ClickpostWebhooksService {
       .limit(input.limit);
     if (input.before) {
       qb.andWhere('e.received_at < :before', { before: input.before });
+    }
+    if (input.phone && input.phone.trim().length > 0) {
+      qb.andWhere('e.customer_phone ILIKE :phone', {
+        phone: `%${input.phone.trim()}%`,
+      });
+    }
+    if (input.topic && input.topic.trim().length > 0) {
+      qb.andWhere('e.status ILIKE :topic', {
+        topic: `%${input.topic.trim()}%`,
+      });
     }
     return qb.getMany();
   }

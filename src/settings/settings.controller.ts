@@ -108,6 +108,14 @@ export interface IntegrationEventRow {
   /** Shopify ships `shop_domain` per event; others don't. Null elsewhere. */
   shopDomain: string | null;
   receivedAt: string;
+  /**
+   * Normalized customer phone (digits only, Meta wa_id format) lifted
+   * at ingest time from the topic-specific location on the raw payload.
+   * Null for topics that don't carry phone (e.g. shopify
+   * fulfillment_orders/split) or payloads where every fallback was
+   * empty. Rendered as "+<digits>" on the FE.
+   */
+  customerPhone: string | null;
   payload: Record<string, unknown>;
 }
 
@@ -293,6 +301,8 @@ export class SettingsController {
     @Query('platform') platform?: string,
     @Query('before') before?: string,
     @Query('limit') limitRaw?: string,
+    @Query('phone') phoneRaw?: string,
+    @Query('topic') topicRaw?: string,
   ): Promise<IntegrationEventsResponse> {
     // Cap at 1000 so the authoring UI's "pick a recent sample" dropdown
     // surfaces rarer topics (orders/fulfilled fires 6k/wk vs
@@ -304,6 +314,14 @@ export class SettingsController {
     const beforeDate = before ? new Date(before) : null;
     const safeBefore =
       beforeDate && !Number.isNaN(beforeDate.getTime()) ? beforeDate : null;
+    // Trim + normalise phone input: strip anything non-digit so a search
+    // for "+91 98216" matches a stored "919821697002" value cleanly.
+    const phone =
+      phoneRaw && phoneRaw.trim().length > 0
+        ? phoneRaw.replace(/\D/g, '')
+        : null;
+    const topic =
+      topicRaw && topicRaw.trim().length > 0 ? topicRaw.trim() : null;
 
     // Collect from every platform that matches the filter (or all if
     // the filter is unset). Each platform page-fetches limit + 1 so
@@ -315,16 +333,36 @@ export class SettingsController {
     const wantLens = !platform || platform === 'lens';
     const [shopifyRows, rpRows, clickpostRows, lensRows] = await Promise.all([
       wantShopify
-        ? this.shopify.listRecent({ before: safeBefore, limit: limit + 1 })
+        ? this.shopify.listRecent({
+            before: safeBefore,
+            limit: limit + 1,
+            phone,
+            topic,
+          })
         : Promise.resolve([]),
       wantReturnPrime
-        ? this.returnPrime.listRecent({ before: safeBefore, limit: limit + 1 })
+        ? this.returnPrime.listRecent({
+            before: safeBefore,
+            limit: limit + 1,
+            phone,
+            topic,
+          })
         : Promise.resolve([]),
       wantClickpost
-        ? this.clickpost.listRecent({ before: safeBefore, limit: limit + 1 })
+        ? this.clickpost.listRecent({
+            before: safeBefore,
+            limit: limit + 1,
+            phone,
+            topic,
+          })
         : Promise.resolve([]),
       wantLens
-        ? this.lens.listRecent({ before: safeBefore, limit: limit + 1 })
+        ? this.lens.listRecent({
+            before: safeBefore,
+            limit: limit + 1,
+            phone,
+            topic,
+          })
         : Promise.resolve([]),
     ]);
     const merged: IntegrationEventRow[] = [
@@ -335,6 +373,7 @@ export class SettingsController {
           topic: r.topic,
           shopDomain: r.shop_domain,
           receivedAt: r.received_at.toISOString(),
+          customerPhone: r.customer_phone ?? null,
           payload: r.payload ?? {},
         }),
       ),
@@ -345,6 +384,7 @@ export class SettingsController {
           topic: r.topic,
           shopDomain: null,
           receivedAt: r.received_at.toISOString(),
+          customerPhone: r.customer_phone ?? null,
           payload: r.payload ?? {},
         }),
       ),
@@ -359,6 +399,7 @@ export class SettingsController {
           topic: r.status,
           shopDomain: null,
           receivedAt: r.received_at.toISOString(),
+          customerPhone: r.customer_phone ?? null,
           payload: r.payload ?? {},
         }),
       ),
@@ -371,6 +412,7 @@ export class SettingsController {
           topic: r.topic,
           shopDomain: null,
           receivedAt: r.received_at.toISOString(),
+          customerPhone: r.customer_phone ?? null,
           payload: r.payload ?? {},
         }),
       ),
