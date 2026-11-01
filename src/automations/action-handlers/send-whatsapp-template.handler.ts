@@ -141,6 +141,14 @@ export class SendWhatsappTemplateHandler
     }
     const templateId = action.templateId;
     const payload = ctx.payload;
+    // TRACE: handler entered. Shows which event + template combo is
+    // about to run through resolution; lets us filter the full trace
+    // by (event, templateId) pair.
+    this.logger.log(
+      `TRACE_HANDLER_ENTRY event=${ctx.event} templateId=${templateId} ` +
+        `hoistedPhone=${payload.customerPhone || 'none'} ` +
+        `hasRawPayload=${payload.rawPayload ? 'yes' : 'no'}`,
+    );
     const template = await this.templates.findOne({
       where: { id: templateId },
     });
@@ -350,6 +358,21 @@ export class SendWhatsappTemplateHandler
         }
       });
     }
+
+    // TRACE: everything the handler resolved, right before dispatch
+    // to the sender. If this looks right but Meta still rejects, the
+    // bug is in the Meta payload construction (see TRACE_META_REQ in
+    // whatsapp-sender). If this looks wrong, the bug is in binding
+    // resolution (paths / rawPayload shape / etc).
+    this.logger.log(
+      `TRACE_HANDLER_RESOLVED event=${payload.name} template=${template.name} ` +
+        `recipient=${recipientPhone} recipientPath=${effectiveRecipientPath ?? 'default(payload.customerPhone)'} ` +
+        `useBindings=${useBindings} ` +
+        `effectiveBindings=${JSON.stringify(effectiveBindings)} ` +
+        `varsOut=${JSON.stringify(variables)} ` +
+        `headerType=${template.headerType} headerUrl=${headerUrl ?? 'none'} ` +
+        `headerPathUsed=${action.header_image_path ?? template.headerImagePath ?? 'none'}`,
+    );
 
     try {
       await this.sender.sendTemplate(

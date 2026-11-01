@@ -186,6 +186,15 @@ export class ShopifyWebhooksService {
       return;
     }
 
+    // TRACE: emit about to fire. Confirms engine received the event
+    // with the hoisted fields; useful if downstream handler trace is
+    // silent (= rule evaluator never picked up this emit).
+    this.logger.log(
+      `TRACE_SHOPIFY_EMIT event=shopify.order.confirmed order=${extracted.orderName} ` +
+        `phone=${extracted.customerPhone || 'none'} email=${extracted.customerEmail || 'none'} ` +
+        `tags=${JSON.stringify(extracted.tags)} itemCount=${extracted.itemCount}`,
+    );
+
     this.automations.emit({
       event: AUTOMATION_EVENT.SHOPIFY_ORDER_CONFIRMED,
       // Sentinel ticket — channel-less event, same convention as
@@ -380,6 +389,13 @@ export class ShopifyWebhooksService {
     }
     const cancelReason = asString(input.payload['cancel_reason']);
     const cancelledAt = asString(input.payload['cancelled_at']);
+    // TRACE: emit about to fire for cancellation.
+    this.logger.log(
+      `TRACE_SHOPIFY_EMIT event=shopify.order.cancelled order=${extracted.orderName} ` +
+        `phone=${extracted.customerPhone || 'none'} email=${extracted.customerEmail || 'none'} ` +
+        `cancelReason=${cancelReason ?? 'none'} cancelledAt=${cancelledAt ?? 'none'} ` +
+        `tags=${JSON.stringify(extracted.tags)}`,
+    );
     this.automations.emit({
       event: AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED,
       ticket: {

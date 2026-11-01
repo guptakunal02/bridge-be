@@ -54,6 +54,12 @@ export class RuleEvaluator {
     const rules = await this.rules.find({
       where: { event: ctx.event, enabled: true },
     });
+    // TRACE: how many enabled rules matched the event name. If 0 →
+    // either no rule exists OR the rule is disabled OR the event
+    // string doesn't match. Prefix TRACE_RULE_LOOKUP.
+    this.logger.log(
+      `TRACE_RULE_LOOKUP event=${ctx.event} enabledRules=${rules.length} ruleIds=${JSON.stringify(rules.map((r) => r.id))}`,
+    );
     for (const rule of rules) {
       // Channel scoping — strict opt-in for ticket-bearing events only.
       // Empty `channel_types` means the rule fires on no channel
@@ -84,11 +90,19 @@ export class RuleEvaluator {
     const elseActions = this.parseActions(rule.id, rule.else_actions);
 
     let anyMatched = false;
+    let caseIdx = 0;
     for (const c of cases) {
       const matched =
         c.match === 'any'
           ? evaluateAny(c.conditions, ctx)
           : evaluateAll(c.conditions, ctx);
+      // TRACE: per-case match result + the actions queued if matched.
+      this.logger.log(
+        `TRACE_RULE_CASE rule=${rule.id} caseIdx=${caseIdx} match=${c.match} ` +
+          `conditions=${c.conditions.length} matched=${matched} ` +
+          `actionsQueued=${matched ? c.actions.length : 0}`,
+      );
+      caseIdx++;
       if (matched) {
         anyMatched = true;
         for (const action of c.actions) {

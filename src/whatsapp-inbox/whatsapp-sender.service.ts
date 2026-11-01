@@ -834,6 +834,13 @@ export class WhatsappSenderService {
       };
     }
 
+    // TRACE: capture exactly what we're sending to Meta so a 131008
+    // "required parameter missing" rejection can be debugged from the
+    // request body alone. Logged at `log` level, prefix "TRACE_META_REQ".
+    this.logger.log(
+      `TRACE_META_REQ wa_id=${digits} template=${templateName} url=${url} body=${JSON.stringify(payload)}`,
+    );
+
     let res: Response;
     try {
       res = await fetch(url, {
@@ -854,6 +861,10 @@ export class WhatsappSenderService {
     }
 
     const text = await res.text();
+    // TRACE: full Meta response body for post-mortem on rejections.
+    this.logger.log(
+      `TRACE_META_RES wa_id=${digits} template=${templateName} status=${res.status} body=${text.slice(0, 2000)}`,
+    );
     let parsed: MetaSendResponse & MetaErrorEnvelope;
     try {
       parsed = text ? JSON.parse(text) : {};
