@@ -95,6 +95,63 @@ export class AutomationEngine {
     await this.safeEvaluate(payload);
   }
 
+  @OnEvent(qualify(AUTOMATION_EVENT.SHOPIFY_ORDER_CANCELLED))
+  async onShopifyOrderCancelled(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.SHOPIFY_FULFILLMENT_ORDER_SPLIT))
+  async onShopifyFulfillmentOrderSplit(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.SHOPIFY_ORDER_PARTIALLY_FULFILLED))
+  async onShopifyOrderPartiallyFulfilled(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.LENS_NDR))
+  async onLensNdr(payload: AutomationEventPayload): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.LENS_NPR))
+  async onLensNpr(payload: AutomationEventPayload): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.LENS_RTO))
+  async onLensRto(payload: AutomationEventPayload): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.RETURN_PRIME_REQUEST_CREATED))
+  async onReturnPrimeRequestCreated(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED))
+  async onReturnPrimeRequestRefunded(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY))
+  async onWhatsappButtonReply(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
   private async safeEvaluate(payload: AutomationEventPayload): Promise<void> {
     try {
       await this.evaluator.evaluate(payload);
