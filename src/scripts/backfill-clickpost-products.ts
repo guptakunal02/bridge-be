@@ -27,6 +27,15 @@ const DRY_RUN = !process.argv.includes('--apply');
 const LIMIT_IDX = process.argv.indexOf('--limit');
 const LIMIT =
   LIMIT_IDX >= 0 ? Number(process.argv[LIMIT_IDX + 1]) : null;
+/**
+ * Opt-in — also re-process rows where products was previously stamped
+ * as "" (surma-ops couldn't resolve the waybill on the earlier run).
+ * Useful when surma-ops's resolution logic has improved (e.g. the
+ * Clickpost reverse-waybill fallback shipped 2026-11-02), so previously
+ * empty rows may now resolve. Default off so routine re-runs stay cheap
+ * + don't hammer surma-ops for rows unlikely to have changed.
+ */
+const INCLUDE_EMPTY = process.argv.includes('--include-empty');
 
 const CONCURRENCY = 5;
 const FETCH_TIMEOUT_MS = 5000;
@@ -36,6 +45,7 @@ interface Row {
   id: string;
   order_id: string;
   waybill: string;
+  cp_id: string | null;
   payload: Record<string, unknown>;
 }
 
@@ -52,7 +62,8 @@ async function main(): Promise<void> {
 
   console.log(
     `${DRY_RUN ? '[DRY RUN]' : '[APPLY]'} backfill-clickpost-products ` +
-      `(concurrency=${CONCURRENCY}, limit=${LIMIT ?? 'none'})`,
+      `(concurrency=${CONCURRENCY}, limit=${LIMIT ?? 'none'}, ` +
+      `include-empty=${INCLUDE_EMPTY})`,
   );
 
   const client = new Client({
@@ -62,13 +73,26 @@ async function main(): Promise<void> {
   await client.connect();
 
   const limitClause = LIMIT ? `LIMIT ${LIMIT}` : '';
+  // When --include-empty is set, also re-process rows previously stamped
+  // with an empty string (surma-ops couldn't resolve earlier). Default:
+  // only truly missing rows.
+  const missingProductsFilter = INCLUDE_EMPTY
+    ? `(
+         NOT COALESCE(payload->'enrichments'->'order_info' ? 'products', false)
+         OR payload->'enrichments'->'order_info'->>'products' = ''
+       )`
+    : `NOT COALESCE(payload->'enrichments'->'order_info' ? 'products', false)`;
   const { rows } = await client.query<Row>(`
-    SELECT id::text, order_id, waybill, payload
+    SELECT id::text,
+           order_id,
+           waybill,
+           (payload->>'cp_id')::text AS cp_id,
+           payload
     FROM clickpost_webhook_event
     WHERE status LIKE 'Surma %'
       AND waybill IS NOT NULL
       AND order_id IS NOT NULL
-      AND NOT COALESCE(payload->'enrichments'->'order_info' ? 'products', false)
+      AND ${missingProductsFilter}
     ORDER BY received_at DESC
     ${limitClause}
   `);
@@ -87,9 +111,16 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
 
   async function processOne(row: Row): Promise<void> {
+    // Pass cp_id when available — surma-ops uses it for direct Clickpost
+    // /track-order calls on reverse waybills (bypassing the RP cache
+    // lookup). Also future-proofs for the Rewind migration where RP
+    // tables won't carry new reverse AWBs.
+    const query = new URLSearchParams();
+    query.set('waybill', row.waybill);
+    if (row.cp_id) query.set('cp_id', row.cp_id);
     const url =
       `${lensUrl!.replace(/\/$/, '')}/${encodeURIComponent(row.order_id)}` +
-      `/customer-contact?waybill=${encodeURIComponent(row.waybill)}`;
+      `/customer-contact?${query.toString()}`;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
     try {

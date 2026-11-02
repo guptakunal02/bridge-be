@@ -390,11 +390,23 @@ export class ClickpostWebhooksService {
     // THIS box. When waybill is absent (shouldn't happen on real
     // Clickpost webhooks but defensive), surma-ops falls back to all
     // order items — backward-compatible by design.
+    //
+    // cp_id (Clickpost's internal courier id, present on every webhook
+    // per their contract) hands surma-ops the exact param it needs for
+    // their reverse-waybill fallback — direct Clickpost /track-order
+    // call, bypassing the returns/exchanges DB lookup. Also future-
+    // proofs for the Rewind migration where returns/exchanges rows
+    // won't exist for new reverse waybills.
     const waybill = asString(payload['waybill']);
+    const cpId = asString(payload['cp_id']);
+    const query = new URLSearchParams();
+    if (waybill) query.set('waybill', waybill);
+    if (cpId) query.set('cp_id', cpId);
+    const qs = query.toString();
     const url =
       `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(orderId)}` +
       `/customer-contact` +
-      (waybill ? `?waybill=${encodeURIComponent(waybill)}` : '');
+      (qs ? `?${qs}` : '');
     const ac = new AbortController();
     const t = setTimeout(
       () => ac.abort(),
