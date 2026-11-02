@@ -46,12 +46,26 @@ export class ClickpostWebhooksService {
     // no toggle; surma-ops has the real contact on the parent Shopify
     // order. Mutates payload in-place; silent no-op on any failure.
     await this.enrichMaskedContact(payload, webhookId);
-    const status = asString(payload['status']) ?? 'unknown';
+    const rawStatus = asString(payload['status']) ?? 'unknown';
     const waybill = asString(payload['waybill']);
     const additional = payload['additional'] as
       | Record<string, unknown>
       | undefined;
     const orderId = asString(additional?.['order_id']);
+    // Normalise the status from the (latest_status.clickpost_status_code,
+    // latest_status.clickpost_status_bucket, additional.is_rvp) triple.
+    // The raw `status` field Clickpost ships is wildly inconsistent for
+    // the same semantic event — e.g. a real customer delivery
+    // (code=8 bucket=6 is_rvp=false) can arrive with raw strings like
+    // "Delivered", "SHIPMENT DELIVERED", "DTO", "Out For Delivery",
+    // "Received at Forward Hub", or random digits. Automation rules
+    // that key off the raw string break; normalising at ingest gives
+    // admins stable, meaningful event names to trigger on.
+    //
+    // Payload stays untouched (audit integrity) — only the DB `status`
+    // column reflects the normalised name. Any (code, bucket, is_rvp)
+    // triple not in the registry falls through to the raw status.
+    const normalisedStatus = normaliseClickpostStatus(payload) ?? rawStatus;
     // Read phone AFTER enrichMaskedContact — Clickpost's raw payload
     // ships "**********" there; surma-ops's lookup overwrites with the
     // real value when found. If the lookup failed (order not synced
@@ -65,7 +79,7 @@ export class ClickpostWebhooksService {
       await this.events.save(
         this.events.create({
           webhook_id: webhookId,
-          status,
+          status: normalisedStatus,
           waybill,
           order_id: orderId,
           payload,
@@ -86,7 +100,7 @@ export class ClickpostWebhooksService {
       throw err;
     }
     this.logger.log(
-      `clickpost webhook received: status="${status}" waybill=${waybill ?? 'null'} order=${orderId ?? 'null'}`,
+      `clickpost webhook received: status="${normalisedStatus}" (raw="${rawStatus}") waybill=${waybill ?? 'null'} order=${orderId ?? 'null'}`,
     );
     return { deduped: false };
   }
@@ -279,4 +293,55 @@ function asString(v: unknown): string | null {
   if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   return null;
+}
+
+/**
+ * Registry of Clickpost status normalisations, keyed by the triple
+ * `(latest_status.clickpost_status_code, latest_status.clickpost_status_bucket, additional.is_rvp)`.
+ *
+ * Confirmed from 7-day production data (2026-11-02):
+ *   - `(code, bucket)` cleanly discriminates lifecycle stage (Delivered,
+ *     OutForDelivery, InTransit, FailedDelivery, RTO, …)
+ *   - `is_rvp` additionally splits forward (customer-bound) from
+ *     reverse (customer-pickup bound for the warehouse) legs — important
+ *     because the same `(8, 6)` tuple means "customer got their order"
+ *     when forward and "warehouse got the return" when reverse. Those
+ *     drive very different automations.
+ *
+ * Any triple not in the registry falls through to the raw Clickpost
+ * `status` string — safe default, admin can still trigger automations
+ * on it (just the raw inconsistent string). Extend here as the admin
+ * discovers more statuses they want to automate on.
+ *
+ * Keys are formatted `code:bucket:is_rvp` for easy JSON-serialisable
+ * table lookups; `is_rvp` is encoded as 'true'/'false' strings since
+ * Clickpost ships it as a JSON boolean.
+ */
+const CLICKPOST_STATUS_NORMALISATION: Record<string, string> = {
+  '8:6:false': 'Surma Order Delivered To Customer',
+  '8:6:true': 'Surma Return Delivered To Warehouse',
+};
+
+function normaliseClickpostStatus(
+  payload: Record<string, unknown>,
+): string | null {
+  const additional = payload['additional'] as
+    | Record<string, unknown>
+    | undefined;
+  if (!additional) return null;
+  const latest = additional['latest_status'] as
+    | Record<string, unknown>
+    | undefined;
+  if (!latest) return null;
+  const code = asString(latest['clickpost_status_code']);
+  const bucket = asString(latest['clickpost_status_bucket']);
+  // Clickpost always sends is_rvp as a JSON boolean. Guard against
+  // the stray missing case by requiring an explicit true/false (so a
+  // misshapen payload falls through to raw-status rather than
+  // mis-labelling).
+  const isRvpRaw = additional['is_rvp'];
+  if (typeof isRvpRaw !== 'boolean') return null;
+  if (!code || !bucket) return null;
+  const key = `${code}:${bucket}:${isRvpRaw ? 'true' : 'false'}`;
+  return CLICKPOST_STATUS_NORMALISATION[key] ?? null;
 }
