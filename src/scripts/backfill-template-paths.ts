@@ -38,94 +38,89 @@ const DRY_RUN = !process.argv.includes('--apply');
  * sample payload BEFORE adding to the registry — a wrong path here will
  * stamp bogus bindings on existing templates.
  */
-const REGISTRY: Record<string, Record<string, string>> = {
-  // Clickpost events — all share the same payload shape
-  'clickpost.order_delivered': {
-    name: 'additional.name',
-    phone: 'additional.phone',
-    email: 'additional.email',
-    order_id: 'additional.order_id',
-    is_rvp: 'additional.is_rvp',
-    waybill: 'waybill',
-    awb: 'waybill',
-    products: 'enrichments.order_info.products',
-    courier_brand: 'enrichments.courier_brand',
-    tracking_url: 'enrichments.tracking_url',
-    cod_amount: 'enrichments.order_info.cod_amount',
-    payment_mode: 'enrichments.order_info.payment_mode',
-    order_total: 'enrichments.order_info.order_total',
-    order_tags: 'enrichments.order_info.order_tags',
-    financial_status: 'enrichments.order_info.financial_status',
-    currency: 'enrichments.order_info.currency',
-  },
-  // Lens events wrap Clickpost payloads → same paths
-  'lens.ndr': {
-    name: 'additional.name',
-    phone: 'additional.phone',
-    email: 'additional.email',
-    order_id: 'additional.order_id',
-    waybill: 'waybill',
-    awb: 'waybill',
-    products: 'enrichments.order_info.products',
-    courier_brand: 'enrichments.courier_brand',
-    tracking_url: 'enrichments.tracking_url',
-  },
-  // Shopify order events — different payload shape
-  'shopify.order.confirmed': {
-    first_name: 'customer.first_name',
-    last_name: 'customer.last_name',
-    name: 'customer.first_name',
-    phone: 'customer.phone',
-    email: 'customer.email',
-    order_number: 'order_number',
-    order_id: 'id',
-    order_name: 'name',
-    total_price: 'total_price',
-    currency: 'currency',
-    financial_status: 'financial_status',
-    fulfillment_status: 'fulfillment_status',
-  },
-  // Return Prime events — RP's envelope shape
-  'return_prime.request.created': {
-    name: 'customer.first_name',
-    first_name: 'customer.first_name',
-    phone: 'customer.phone',
-    email: 'customer.email',
-    order_name: 'order.name',
-    order_id: 'order.id',
-    request_number: 'request_number',
-  },
-  'return_prime.request.refunded': {
-    name: 'customer.first_name',
-    first_name: 'customer.first_name',
-    phone: 'customer.phone',
-    email: 'customer.email',
-    order_name: 'order.name',
-    order_id: 'order.id',
-    request_number: 'request_number',
-    refund_amount: 'refund_amount',
-  },
+// Clickpost events — all share the same payload shape
+const CLICKPOST_PATHS: Record<string, string> = {
+  name: 'additional.name',
+  phone: 'additional.phone',
+  email: 'additional.email',
+  order_id: 'additional.order_id',
+  is_rvp: 'additional.is_rvp',
+  waybill: 'waybill',
+  awb: 'waybill',
+  products: 'enrichments.order_info.products',
+  courier_brand: 'enrichments.courier_brand',
+  tracking_url: 'enrichments.tracking_url',
+  cod_amount: 'enrichments.order_info.cod_amount',
+  payment_mode: 'enrichments.order_info.payment_mode',
+  order_total: 'enrichments.order_info.order_total',
+  order_tags: 'enrichments.order_info.order_tags',
+  financial_status: 'enrichments.order_info.financial_status',
+  currency: 'enrichments.order_info.currency',
 };
 
-// Mirror related event names onto the same registry so templates
-// authored for other Clickpost / Lens / Shopify / RP events don't miss.
-REGISTRY['clickpost.return_delivered'] = REGISTRY['clickpost.order_delivered'];
-REGISTRY['clickpost.out_for_delivery_customer'] =
-  REGISTRY['clickpost.order_delivered'];
-REGISTRY['clickpost.out_for_delivery_warehouse'] =
-  REGISTRY['clickpost.order_delivered'];
-REGISTRY['clickpost.out_for_pickup_from_warehouse'] =
-  REGISTRY['clickpost.order_delivered'];
-REGISTRY['clickpost.out_for_pickup_from_customer'] =
-  REGISTRY['clickpost.order_delivered'];
-REGISTRY['clickpost.picked_up_from_warehouse'] =
-  REGISTRY['clickpost.order_delivered'];
-REGISTRY['clickpost.picked_up_from_customer'] =
-  REGISTRY['clickpost.order_delivered'];
-REGISTRY['lens.npr'] = REGISTRY['lens.ndr'];
-REGISTRY['lens.rto'] = REGISTRY['lens.ndr'];
-REGISTRY['shopify.order.cancelled'] = REGISTRY['shopify.order.confirmed'];
-REGISTRY['shopify.order.fulfilled'] = REGISTRY['shopify.order.confirmed'];
+// Lens events wrap Clickpost payloads → subset of the same paths
+const LENS_PATHS: Record<string, string> = {
+  name: 'additional.name',
+  phone: 'additional.phone',
+  email: 'additional.email',
+  order_id: 'additional.order_id',
+  waybill: 'waybill',
+  awb: 'waybill',
+  products: 'enrichments.order_info.products',
+  courier_brand: 'enrichments.courier_brand',
+  tracking_url: 'enrichments.tracking_url',
+};
+
+// Shopify order events — different payload shape
+const SHOPIFY_ORDER_PATHS: Record<string, string> = {
+  first_name: 'customer.first_name',
+  last_name: 'customer.last_name',
+  name: 'customer.first_name',
+  phone: 'customer.phone',
+  email: 'customer.email',
+  order_number: 'order_number',
+  order_id: 'id',
+  order_name: 'name',
+  total_price: 'total_price',
+  currency: 'currency',
+  financial_status: 'financial_status',
+  fulfillment_status: 'fulfillment_status',
+};
+
+// Return Prime created / refunded — RP's envelope shape
+const RP_CREATED_PATHS: Record<string, string> = {
+  name: 'customer.first_name',
+  first_name: 'customer.first_name',
+  phone: 'customer.phone',
+  email: 'customer.email',
+  order_name: 'order.name',
+  order_id: 'order.id',
+  request_number: 'request_number',
+};
+
+const RP_REFUNDED_PATHS: Record<string, string> = {
+  ...RP_CREATED_PATHS,
+  refund_amount: 'refund_amount',
+};
+
+const REGISTRY: Record<string, Record<string, string>> = {
+  'clickpost.order_delivered': CLICKPOST_PATHS,
+  'clickpost.return_delivered': CLICKPOST_PATHS,
+  'clickpost.out_for_delivery_customer': CLICKPOST_PATHS,
+  'clickpost.out_for_delivery_warehouse': CLICKPOST_PATHS,
+  'clickpost.out_for_pickup_from_warehouse': CLICKPOST_PATHS,
+  'clickpost.out_for_pickup_from_customer': CLICKPOST_PATHS,
+  'clickpost.picked_up_from_warehouse': CLICKPOST_PATHS,
+  'clickpost.picked_up_from_customer': CLICKPOST_PATHS,
+  'lens.ndr': LENS_PATHS,
+  'lens.npr': LENS_PATHS,
+  'lens.rto': LENS_PATHS,
+  'shopify.order.confirmed': SHOPIFY_ORDER_PATHS,
+  'shopify.order.cancelled': SHOPIFY_ORDER_PATHS,
+  'shopify.order.fulfilled': SHOPIFY_ORDER_PATHS,
+  'return_prime.request.created': RP_CREATED_PATHS,
+  'return_prime.request.refunded': RP_REFUNDED_PATHS,
+};
 
 interface VarEntry {
   name: string;
