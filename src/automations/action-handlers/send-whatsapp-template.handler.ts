@@ -85,7 +85,9 @@ export class SendWhatsappTemplateHandler
       ctx.event === AUTOMATION_EVENT.LENS_NPR ||
       ctx.event === AUTOMATION_EVENT.LENS_RTO ||
       ctx.event === AUTOMATION_EVENT.RETURN_PRIME_REQUEST_CREATED ||
-      ctx.event === AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED
+      ctx.event === AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED ||
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED ||
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED
     ) {
       await this.executeWebhookPath(action, ctx);
       return;
@@ -135,7 +137,9 @@ export class SendWhatsappTemplateHandler
       ctx.event !== AUTOMATION_EVENT.LENS_NPR &&
       ctx.event !== AUTOMATION_EVENT.LENS_RTO &&
       ctx.event !== AUTOMATION_EVENT.RETURN_PRIME_REQUEST_CREATED &&
-      ctx.event !== AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED
+      ctx.event !== AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED &&
+      ctx.event !== AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED &&
+      ctx.event !== AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED
     ) {
       return;
     }

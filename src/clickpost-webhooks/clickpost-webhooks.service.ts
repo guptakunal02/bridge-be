@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { QueryFailedError, Repository } from 'typeorm';
+import { AutomationEngine } from '../automations/automation-engine.service';
+import { AUTOMATION_EVENT } from '../automations/events';
 import type { EnvVars } from '../config/env.validation';
+import { TicketStatus } from '../database/enums';
 import { ClickpostWebhookEvent } from './entities/clickpost-webhook-event.entity';
 import type { TopicStatRow } from '../shopify-webhooks/shopify-webhooks.service';
 
@@ -35,6 +38,8 @@ export class ClickpostWebhooksService {
     @InjectRepository(ClickpostWebhookEvent)
     private readonly events: Repository<ClickpostWebhookEvent>,
     private readonly config: ConfigService<EnvVars, true>,
+    @Inject(forwardRef(() => AutomationEngine))
+    private readonly automations: AutomationEngine,
   ) {}
 
   async handle(payload: Record<string, unknown>): Promise<{ deduped: boolean }> {
@@ -102,7 +107,90 @@ export class ClickpostWebhooksService {
     this.logger.log(
       `clickpost webhook received: status="${normalisedStatus}" (raw="${rawStatus}") waybill=${waybill ?? 'null'} order=${orderId ?? 'null'}`,
     );
+    this.emit(normalisedStatus, payload, customerPhone, orderId, waybill);
     return { deduped: false };
+  }
+
+  /**
+   * Fan a persisted Clickpost webhook out as a typed automation event
+   * when the normalised status matches a known trigger. Admin's rule
+   * then triggers on `clickpost.order_delivered` or
+   * `clickpost.return_delivered` directly (no filtering on a raw
+   * status string). Unknown statuses stay inert — stored for audit,
+   * but no automation emit.
+   *
+   * Emission runs ONLY after the dedup insert succeeds, so a Clickpost
+   * retry (same webhook_id) never re-emits.
+   */
+  private emit(
+    normalisedStatus: string,
+    payload: Record<string, unknown>,
+    customerPhone: string | null,
+    orderId: string | null,
+    waybill: string | null,
+  ): void {
+    let event:
+      | typeof AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED
+      | typeof AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED;
+    let name: 'clickpost.order_delivered' | 'clickpost.return_delivered';
+    if (normalisedStatus === 'Surma Order Delivered To Customer') {
+      event = AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED;
+      name = 'clickpost.order_delivered';
+    } else if (normalisedStatus === 'Surma Return Delivered To Warehouse') {
+      event = AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED;
+      name = 'clickpost.return_delivered';
+    } else {
+      // Not a status we've chosen to emit as a typed event. Still
+      // stored + visible in the Events inspector; admin can trigger
+      // on it later once we add a typed emission here.
+      return;
+    }
+    if (!customerPhone) {
+      this.logger.warn(
+        `clickpost ${name}: no customer phone resolved; emitting with empty phone — admin's rule will skip the send`,
+      );
+    }
+    const additional = payload['additional'] as
+      | Record<string, unknown>
+      | undefined;
+    const trackingUrl =
+      additional &&
+      typeof additional['trackingUrl'] === 'object' &&
+      additional['trackingUrl'] !== null
+        ? asString(
+            (additional['trackingUrl'] as Record<string, unknown>)['url'],
+          )
+        : null;
+    const courierPartner = asString(payload['account_code']);
+    this.automations.emit({
+      event,
+      ticket: {
+        id: '',
+        channelId: '',
+        channelType: null,
+        status: TicketStatus.OPEN,
+        tags: [],
+        assigneeId: null,
+        teamId: '',
+        subject: null,
+      },
+      payload: {
+        name,
+        channelId: '',
+        customerPhone: customerPhone ?? '',
+        orderName: orderId,
+        waybill,
+        trackingUrl,
+        courierPartner,
+        variables: {
+          order_id: orderId ?? '',
+          waybill: waybill ?? '',
+          tracking_url: trackingUrl ?? '',
+          courier_partner: courierPartner ?? '',
+        },
+        rawPayload: payload,
+      },
+    });
   }
 
   /** Most-recent received_at for the Integrations page's "last event". */

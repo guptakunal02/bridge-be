@@ -115,6 +115,26 @@ export const AUTOMATION_EVENT = {
    * this flow — surma-ops confirmed, agreed trade-off at integration time.
    */
   RETURN_PRIME_REQUEST_REFUNDED: 'return_prime.request.refunded',
+  /**
+   * Clickpost tracking event — the forward shipment has reached the
+   * customer. Fires on inbound Clickpost webhooks that normalise to
+   * (code=8, bucket=6, is_rvp=false). See clickpost-webhooks.service's
+   * CLICKPOST_STATUS_NORMALISATION for the mapping rationale.
+   *
+   * Admin typically binds a "Thanks for shopping with us + review
+   * nudge" template to this trigger. For the normalisation reason, this
+   * is strictly a CUSTOMER-SIDE delivery — RVP (return) parcels landing
+   * at the warehouse come through CLICKPOST_RETURN_DELIVERED instead.
+   */
+  CLICKPOST_ORDER_DELIVERED: 'clickpost.order_delivered',
+  /**
+   * Clickpost tracking event — a Reverse Vendor Pickup (customer-
+   * initiated return / exchange from Return Prime) has reached the
+   * warehouse. Fires on (code=8, bucket=6, is_rvp=true). Admin
+   * typically binds a "We've received your return, refund processing
+   * next" template.
+   */
+  CLICKPOST_RETURN_DELIVERED: 'clickpost.return_delivered',
 } as const;
 
 export type AutomationEventName =
@@ -589,6 +609,33 @@ export interface ReturnPrimeRequestRefundedEventPayload {
 }
 
 /**
+ * Clickpost tracking lifecycle event. One payload shape covers both
+ * CLICKPOST_ORDER_DELIVERED (customer-bound forward shipment arrived)
+ * and CLICKPOST_RETURN_DELIVERED (reverse pickup landed at the
+ * warehouse); the `name` discriminator tells them apart.
+ *
+ * Hoisted top-level fields are the ones admins almost always want to
+ * read (phone, order number, waybill, tracking URL). Everything else
+ * stays on rawPayload for JSON-path binding via the automation rule
+ * editor.
+ */
+export interface ClickpostDeliveryEventPayload {
+  name: 'clickpost.order_delivered' | 'clickpost.return_delivered';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  channelId: string;
+  /** Shopify order_id lifted from `additional.order_id`. */
+  orderName: string | null;
+  /** AWB — Clickpost's `waybill` field. */
+  waybill: string | null;
+  /** Carrier tracking page URL from `additional.trackingUrl.url`. */
+  trackingUrl: string | null;
+  /** The courier that carried the shipment (Delhivery, etc). */
+  courierPartner: string | null;
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
  * Fires when a customer taps a QUICK_REPLY button on an outbound
  * template. Carries the admin-defined `button_id` (so rules can
  * filter on it) + the context that was stamped at send time (the
@@ -719,6 +766,16 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED;
       ticket: TicketSnapshot;
       payload: ReturnPrimeRequestRefundedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
     };
 
 /** EventEmitter2 wildcard target for the automation engine's listener. */
