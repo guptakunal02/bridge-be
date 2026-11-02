@@ -709,6 +709,17 @@ export interface ClickpostDeliveryEventPayload {
   financialStatus: string | null;
   orderTags: string[];
   currency: string | null;
+  /**
+   * Human-readable comma-joined product list, scoped to the specific
+   * SHIPMENT this Clickpost webhook belongs to (looked up via waybill →
+   * fulfillment.tracking_number on the surma-ops side). Shape:
+   *   "Front Draft Pants in Coral Orange - S, Masala Chai Co-Ord Set - M"
+   * Empty string "" when the waybill doesn't match any fulfillment on
+   * the order (Clickpost ↔ Shopify AWB drift). Null when surma-ops's
+   * enrichment hop failed entirely. Admin's template typically binds
+   * this directly as `{{products}}` for an "items in this shipment" line.
+   */
+  products: string | null;
   rawPayload?: Record<string, unknown>;
 }
 

@@ -211,6 +211,15 @@ export class ClickpostWebhooksService {
       ? (orderInfo?.['order_tags'] as string[])
       : [];
     const currency = asString(orderInfo?.['currency']);
+    // `products` arrives as a pre-formatted comma-joined string from
+    // surma-ops (scoped to this waybill's fulfillment). Empty string ""
+    // means waybill didn't match any fulfillment — kept as "" rather
+    // than coerced to null so templates can render it without a
+    // conditional (admin binding `{{products}}` just prints blank). Null
+    // only when the enrichment hop failed entirely.
+    const rawProducts = orderInfo?.['products'];
+    const products =
+      typeof rawProducts === 'string' ? rawProducts : null;
     this.automations.emit({
       event,
       ticket: {
@@ -237,6 +246,7 @@ export class ClickpostWebhooksService {
         financialStatus,
         orderTags,
         currency,
+        products,
         variables: {
           order_id: orderId ?? '',
           waybill: waybill ?? '',
@@ -248,6 +258,7 @@ export class ClickpostWebhooksService {
           financial_status: financialStatus ?? '',
           order_tags: orderTags.join(', '),
           currency: currency ?? '',
+          products: products ?? '',
         },
         rawPayload: payload,
       },
@@ -355,9 +366,18 @@ export class ClickpostWebhooksService {
       );
       return;
     }
+    // Pass the Clickpost waybill as a query param so surma-ops can scope
+    // `products` to THIS shipment's fulfillment (vs the full-order
+    // fallback). Split-order deliveries would otherwise send
+    // "Pants + Co-Ord Set out for delivery" when only the pants are in
+    // THIS box. When waybill is absent (shouldn't happen on real
+    // Clickpost webhooks but defensive), surma-ops falls back to all
+    // order items — backward-compatible by design.
+    const waybill = asString(payload['waybill']);
     const url =
       `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(orderId)}` +
-      `/customer-contact`;
+      `/customer-contact` +
+      (waybill ? `?waybill=${encodeURIComponent(waybill)}` : '');
     const ac = new AbortController();
     const t = setTimeout(
       () => ac.abort(),
@@ -391,6 +411,15 @@ export class ClickpostWebhooksService {
         financial_status?: string | null;
         order_tags?: string[] | null;
         currency?: string | null;
+        /**
+         * Comma-joined human-readable product list scoped to the
+         * waybill's fulfillment when waybill was passed. "" when the
+         * waybill didn't match any fulfillment (AWB drift between
+         * Clickpost + Shopify). Full-order items when waybill wasn't
+         * passed (not possible for Clickpost webhooks today — we always
+         * pass it).
+         */
+        products?: string | null;
       };
       // Overwrite ONLY the fields surma-ops actually returned a value
       // for — a null phone (COD-manual order without captured phone)
@@ -420,15 +449,18 @@ export class ClickpostWebhooksService {
         financial_status: body.financial_status ?? null,
         order_tags: Array.isArray(body.order_tags) ? body.order_tags : [],
         currency: body.currency ?? null,
+        products: typeof body.products === 'string' ? body.products : null,
       };
       payload['enrichments'] = existing;
       this.logger.log(
         `clickpost enrich: webhook_id=${webhookId} order=${orderId} ` +
+          `waybill=${waybill ?? 'null'} ` +
           `unmasked phone=${body.customer_phone ? 'yes' : 'no'} ` +
           `email=${body.customer_email ? 'yes' : 'no'} ` +
           `payment_mode=${body.payment_mode ?? 'null'} ` +
           `cod_amount=${body.cod_amount ?? 'null'} ` +
-          `order_total=${body.order_total ?? 'null'}`,
+          `order_total=${body.order_total ?? 'null'} ` +
+          `products=${typeof body.products === 'string' ? `"${body.products.slice(0, 60)}${body.products.length > 60 ? '…' : ''}"` : 'null'}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
