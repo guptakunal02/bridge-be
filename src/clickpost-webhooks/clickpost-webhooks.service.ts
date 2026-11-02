@@ -57,6 +57,11 @@ export class ClickpostWebhooksService {
     // emit() hoist below picks it up from the same spot. Separate from
     // enrichMaskedContact because this doesn't hit surma-ops.
     this.normaliseCourierPartner(payload);
+    // Construct the branded tracking URL from the waybill — Clickpost's
+    // native trackingUrl field is populated on <1% of forward events +
+    // only ships Delhivery URLs even then. Stamping our constructed URL
+    // on enrichments.tracking_url gives 100% coverage, carrier-agnostic.
+    this.stampTrackingUrl(payload);
     const rawStatus = asString(payload['status']) ?? 'unknown';
     const waybill = asString(payload['waybill']);
     const additional = payload['additional'] as
@@ -188,18 +193,16 @@ export class ClickpostWebhooksService {
         `clickpost ${name}: no customer phone resolved; emitting with empty phone — admin's rule will skip the send`,
       );
     }
-    const additional = payload['additional'] as
-      | Record<string, unknown>
-      | undefined;
-    const trackingUrl =
-      additional &&
-      typeof additional['trackingUrl'] === 'object' &&
-      additional['trackingUrl'] !== null
-        ? asString(
-            (additional['trackingUrl'] as Record<string, unknown>)['url'],
-          )
-        : null;
     const courierPartner = asString(payload['account_code']);
+    // trackingUrl now sourced from the constructed branded tracker URL
+    // (enrichments.tracking_url, stamped by stampTrackingUrl at ingest)
+    // instead of Clickpost's native field — which was null on 97%+ of
+    // forward events + only ever carried Delhivery URLs.
+    const trackingUrl = asString(
+      (payload['enrichments'] as Record<string, unknown> | undefined)?.[
+        'tracking_url'
+      ],
+    );
     // Normalised brand lives on enrichments.courier_brand (stamped at
     // ingest). Hoist to top-level so admin rules + template bindings
     // can read `event.normalisedCourierPartnerName` without diving into
@@ -528,6 +531,29 @@ export class ClickpostWebhooksService {
     const existing =
       (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
     existing['courier_brand'] = brand;
+    payload['enrichments'] = existing;
+  }
+
+  /**
+   * Construct the Clickpost-hosted branded tracking URL from the
+   * waybill + stamp on enrichments.tracking_url. Prefix comes from env
+   * (CLICKPOST_TRACKER_URL_PREFIX) with a Surma-live default; waybill
+   * is URI-encoded in case it ever contains unexpected characters.
+   *
+   * No-op when waybill is missing — a Clickpost webhook without one
+   * would be malformed, but we don't crash on it (dedup falls back to a
+   * body-hash in that case anyway).
+   */
+  private stampTrackingUrl(payload: Record<string, unknown>): void {
+    const waybill = asString(payload['waybill']);
+    if (!waybill) return;
+    const prefix =
+      this.config.get('CLICKPOST_TRACKER_URL_PREFIX', { infer: true }) ??
+      'https://surma.clickpost.ai/en?waybill=';
+    const trackingUrl = `${prefix}${encodeURIComponent(waybill)}`;
+    const existing =
+      (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
+    existing['tracking_url'] = trackingUrl;
     payload['enrichments'] = existing;
   }
 

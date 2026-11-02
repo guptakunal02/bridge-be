@@ -27,6 +27,7 @@
     "backfill:inline-images": "pnpm build && node dist/scripts/backfill-inline-images.js",
     "backfill:clickpost-products": "pnpm build && node dist/scripts/backfill-clickpost-products.js",
     "backfill:clickpost-courier-brand": "pnpm build && node dist/scripts/backfill-clickpost-courier-brand.js",
+    "backfill:clickpost-tracking-url": "pnpm build && node dist/scripts/backfill-clickpost-tracking-url.js",
     "import:shopify-products": "pnpm build && node dist/scripts/import-shopify-products.js"
   },
   "dependencies": {

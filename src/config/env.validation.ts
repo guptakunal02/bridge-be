@@ -303,6 +303,25 @@ export class EnvVars {
   @IsOptional()
   @IsUrl({ require_tld: false, require_protocol: true })
   LENS_CUSTOMER_CONTACT_URL?: string;
+
+  /**
+   * URL prefix for the Clickpost-hosted branded tracking page. Bridge
+   * constructs the customer-facing tracking URL as
+   *   `${CLICKPOST_TRACKER_URL_PREFIX}<waybill>`
+   * at Clickpost webhook ingest time + hoists to
+   * event.trackingUrl on all 8 typed Clickpost events, so admin
+   * templates can bind `{{tracking_url}}` with 100% coverage regardless
+   * of carrier. Clickpost's own trackingUrl payload field is unreliable
+   * (<1% populated on forward events) + Delhivery-only.
+   *
+   * Default: Surma's live Clickpost page
+   * (https://surma.clickpost.ai/en?waybill=). Config override exists so
+   * staging / future tenants can point at a different tracker without a
+   * code change.
+   */
+  @IsOptional()
+  @IsString()
+  CLICKPOST_TRACKER_URL_PREFIX?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): EnvVars {
