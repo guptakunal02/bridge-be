@@ -4,6 +4,10 @@ import { Repository } from 'typeorm';
 import { OpsReadService } from '../bot/ops/ops-read.service';
 import { MessageDirection } from '../database/enums';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
+import {
+  type LineItemHydration,
+  ProductsService,
+} from '../products/products.service';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { Ticket } from './entities/ticket.entity';
 
@@ -83,7 +87,31 @@ export class CustomerOrdersService {
     @InjectRepository(WhatsappMessage)
     private readonly whatsappMessages: Repository<WhatsappMessage>,
     private readonly opsRead: OpsReadService,
+    private readonly products: ProductsService,
   ) {}
+
+  /**
+   * Collect every SKU across every order's line_items, resolve them
+   * all in one batched variant-by-sku query, then zip the hydration
+   * onto each line item in `toCustomerOrder`. Shopify's webhook
+   * payloads frequently ship with `line_item.image` + `variant.image`
+   * both empty — this fallback lets us render the correct thumbnail
+   * from our local catalog + show the proper product title when
+   * Shopify sent "(unnamed)".
+   */
+  private async hydrateOrders(rows: OrdersRow[]): Promise<CustomerOrder[]> {
+    const skus: string[] = [];
+    for (const r of rows) {
+      const raw = (r.raw_shopify_response ?? {}) as ShopifyRaw;
+      const items = extractLineItemsRaw(raw);
+      for (const it of items) {
+        const sku = it.sku ?? it.variant?.sku;
+        if (sku && sku.trim().length > 0) skus.push(sku.trim());
+      }
+    }
+    const hydration = await this.products.hydrateLineItemsBySku(skus);
+    return rows.map((r) => toCustomerOrder(r, hydration));
+  }
 
   /**
    * Fetch a page of orders for the customer whose email opened this
@@ -213,7 +241,7 @@ export class CustomerOrdersService {
     const hasMore = rows.length > limit;
     const trimmed = hasMore ? rows.slice(0, limit) : rows;
     return {
-      orders: trimmed.map(toCustomerOrder),
+      orders: await this.hydrateOrders(trimmed),
       hasMore,
       customerEmail: email,
       customerPhone: null,
@@ -294,7 +322,7 @@ export class CustomerOrdersService {
     const hasMore = rows.length > limit;
     const trimmed = hasMore ? rows.slice(0, limit) : rows;
     return {
-      orders: trimmed.map(toCustomerOrder),
+      orders: await this.hydrateOrders(trimmed),
       hasMore,
       customerEmail: null,
       customerPhone: phone,
@@ -351,7 +379,7 @@ export class CustomerOrdersService {
     });
 
     if (rows.length === 0) return null;
-    return toCustomerOrder(rows[0]!);
+    return (await this.hydrateOrders([rows[0]!]))[0] ?? null;
   }
 
   /**
@@ -386,7 +414,7 @@ export class CustomerOrdersService {
       );
     });
     if (rows.length === 0) return null;
-    return toCustomerOrder(rows[0]!);
+    return (await this.hydrateOrders([rows[0]!]))[0] ?? null;
   }
 
   /**
@@ -441,6 +469,8 @@ type ShopifyLineItem = {
   name?: string;
   quantity?: number;
   price?: string;
+  /** Variant SKU — join key for the product catalog hydration. */
+  sku?: string;
   // GraphQL: variantTitle (camel) on the line item, OR variant.title
   // REST: variant_title (snake) on the line item
   variantTitle?: string;
@@ -451,6 +481,7 @@ type ShopifyLineItem = {
   image?: { url?: string; src?: string };
   variant?: {
     title?: string;
+    sku?: string;
     image?: { url?: string; src?: string };
   };
 };
@@ -568,7 +599,25 @@ function sumMoney(parts: Array<string | undefined>): string | null {
   return nums.reduce((a, b) => a + b, 0).toFixed(2);
 }
 
-function toCustomerOrder(row: OrdersRow): CustomerOrder {
+/**
+ * Pulls the raw Shopify line_items[] out of the ingested payload,
+ * normalizing across REST (line_items), GraphQL nodes, and GraphQL
+ * edges shapes. Shared by toCustomerOrder (shape mapping) and by
+ * CustomerOrdersService.hydrateOrders (SKU batching).
+ */
+function extractLineItemsRaw(s: ShopifyRaw): ShopifyLineItem[] {
+  return (
+    s.lineItems?.nodes ??
+    s.lineItems?.edges?.map((e) => e.node) ??
+    s.line_items ??
+    []
+  );
+}
+
+function toCustomerOrder(
+  row: OrdersRow,
+  hydration?: Map<string, LineItemHydration>,
+): CustomerOrder {
   const s = row.raw_shopify_response ?? {};
 
   const totalAmount = s.totalPriceSet?.shopMoney?.amount ?? null;
@@ -607,11 +656,7 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
   // was ingested with. REST rows carry `line_items[]`, GraphQL rows
   // put the array under `lineItems.nodes[]` or under
   // `lineItems.edges[].node` depending on the query flavour used.
-  const rawItems: ShopifyLineItem[] =
-    s.lineItems?.nodes ??
-    s.lineItems?.edges?.map((e) => e.node) ??
-    s.line_items ??
-    [];
+  const rawItems: ShopifyLineItem[] = extractLineItemsRaw(s);
   const lineItems = rawItems.map((n) => {
     const priceAmount =
       n.originalUnitPriceSet?.shopMoney?.amount ?? n.price ?? null;
@@ -631,8 +676,14 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
       rawVariant && rawVariant.trim() && rawVariant.trim() !== 'Default Title'
         ? rawVariant.trim()
         : null;
+    // Local-catalog hydration: when the Shopify payload is missing
+    // the image / title (common on raw REST webhooks), fall back to
+    // the Product + ProductVariant tables keyed by SKU. See
+    // CustomerOrdersService.hydrateOrders for the batching.
+    const sku = (n.sku ?? n.variant?.sku ?? '').trim();
+    const hyd = sku && hydration ? hydration.get(sku) : undefined;
     return {
-      name: n.title ?? n.name ?? '(unnamed)',
+      name: n.title ?? n.name ?? hyd?.productTitle ?? '(unnamed)',
       quantity: Number(n.quantity ?? 1),
       priceLabel: formatMoney(priceAmount, priceCurrency),
       imageUrl:
@@ -640,8 +691,9 @@ function toCustomerOrder(row: OrdersRow): CustomerOrder {
         n.variant?.image?.src ??
         n.image?.url ??
         n.image?.src ??
+        hyd?.imageUrl ??
         null,
-      variantTitle,
+      variantTitle: variantTitle ?? hyd?.variantOption ?? null,
     };
   });
 

@@ -16,6 +16,7 @@ import { HealthModule } from './health/health.module';
 import { OutreachModule } from './outreach/outreach.module';
 import { RulesModule } from './rules/rules.module';
 import { SettingsModule } from './settings/settings.module';
+import { ProductsModule } from './products/products.module';
 import { TagsModule } from './tags/tags.module';
 import { TeamsModule } from './teams/teams.module';
 import { TicketsModule } from './tickets/tickets.module';
@@ -50,6 +51,7 @@ import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
     RulesModule,
     SettingsModule,
     TagsModule,
+    ProductsModule,
     BotModule,
     AutomationsModule,
     WhatsappInboxModule,

@@ -35,3 +35,7 @@ coverage
 # Anchor the pattern to the repo root; `src/scripts/` holds committed
 # admin tools (backfills, one-off migrations) that need to ship.
 /scripts/
+
+# One-off Shopify exports uploaded to the EC2 box for the catalog
+# importer. ~3 MB and churns on every re-export — never belongs in git.
+/products_export_*.csv

@@ -8,6 +8,7 @@ import { Channel } from '../channels/entities/channel.entity';
 import { StorageModule } from '../common/storage/storage.module';
 import { EmailMessage } from '../email-inbox/entities/email-message.entity';
 import { EmailMessageAttachment } from '../email-inbox/entities/email-message-attachment.entity';
+import { ProductsModule } from '../products/products.module';
 import { SettingsModule } from '../settings/settings.module';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
@@ -56,6 +57,10 @@ import { TicketsService } from './tickets.service';
     // OpsReadService — read-only doorway to the surma_common_ops DB
     // for the customer-orders sidebar.
     OpsModule,
+    // ProductsService — hydrates line_items[] with the correct image +
+    // title from Bridge's local product catalog when the raw Shopify
+    // payload is missing them (common on raw REST webhooks).
+    ProductsModule,
     // S3StorageService — reply-attachment uploads.
     StorageModule,
     // WhatsappSenderService — Meta Graph outbound for WhatsApp
