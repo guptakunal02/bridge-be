@@ -135,6 +135,21 @@ export const AUTOMATION_EVENT = {
    * next" template.
    */
   CLICKPOST_RETURN_DELIVERED: 'clickpost.return_delivered',
+  /**
+   * Clickpost tracking — forward shipment's last-mile truck is heading
+   * to the customer's door. Fires on (code=6, bucket=4, is_rvp=false).
+   * Admin typically binds "your order is out for delivery today"
+   * template.
+   */
+  CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER: 'clickpost.out_for_delivery_customer',
+  /**
+   * Clickpost tracking — reverse shipment's last-mile truck is heading
+   * to the Surma warehouse. Fires on (code=6, bucket=4, is_rvp=true).
+   * Operational signal (customer doesn't need to know their return is
+   * en route to the warehouse) but surfaced as a trigger so ops /
+   * internal workflows can hook into it.
+   */
+  CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE: 'clickpost.out_for_delivery_warehouse',
 } as const;
 
 export type AutomationEventName =
@@ -620,7 +635,11 @@ export interface ReturnPrimeRequestRefundedEventPayload {
  * editor.
  */
 export interface ClickpostDeliveryEventPayload {
-  name: 'clickpost.order_delivered' | 'clickpost.return_delivered';
+  name:
+    | 'clickpost.order_delivered'
+    | 'clickpost.return_delivered'
+    | 'clickpost.out_for_delivery_customer'
+    | 'clickpost.out_for_delivery_warehouse';
   variables: Record<string, string | number | boolean>;
   customerPhone: string;
   channelId: string;
@@ -774,6 +793,16 @@ export type AutomationEventPayload =
     }
   | {
       event: typeof AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE;
       ticket: TicketSnapshot;
       payload: ClickpostDeliveryEventPayload;
     };

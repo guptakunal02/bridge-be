@@ -166,6 +166,20 @@ export class AutomationEngine {
     await this.safeEvaluate(payload);
   }
 
+  @OnEvent(qualify(AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER))
+  async onClickpostOutForDeliveryCustomer(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE))
+  async onClickpostOutForDeliveryWarehouse(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
   private async safeEvaluate(payload: AutomationEventPayload): Promise<void> {
     try {
       await this.evaluator.evaluate(payload);

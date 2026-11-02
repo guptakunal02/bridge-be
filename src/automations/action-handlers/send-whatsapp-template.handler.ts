@@ -87,7 +87,9 @@ export class SendWhatsappTemplateHandler
       ctx.event === AUTOMATION_EVENT.RETURN_PRIME_REQUEST_CREATED ||
       ctx.event === AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED ||
       ctx.event === AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED ||
-      ctx.event === AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED ||
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER ||
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE
     ) {
       await this.executeWebhookPath(action, ctx);
       return;

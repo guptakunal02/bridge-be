@@ -131,14 +131,26 @@ export class ClickpostWebhooksService {
   ): void {
     let event:
       | typeof AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED
-      | typeof AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED;
-    let name: 'clickpost.order_delivered' | 'clickpost.return_delivered';
+      | typeof AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED
+      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER
+      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE;
+    let name:
+      | 'clickpost.order_delivered'
+      | 'clickpost.return_delivered'
+      | 'clickpost.out_for_delivery_customer'
+      | 'clickpost.out_for_delivery_warehouse';
     if (normalisedStatus === 'Surma Order Delivered To Customer') {
       event = AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED;
       name = 'clickpost.order_delivered';
     } else if (normalisedStatus === 'Surma Return Delivered To Warehouse') {
       event = AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED;
       name = 'clickpost.return_delivered';
+    } else if (normalisedStatus === 'Surma Out For Delivery To Customer') {
+      event = AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER;
+      name = 'clickpost.out_for_delivery_customer';
+    } else if (normalisedStatus === 'Surma Out For Delivery To Warehouse') {
+      event = AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE;
+      name = 'clickpost.out_for_delivery_warehouse';
     } else {
       // Not a status we've chosen to emit as a typed event. Still
       // stored + visible in the Events inspector; admin can trigger
@@ -406,8 +418,17 @@ function asString(v: unknown): string | null {
  * Clickpost ships it as a JSON boolean.
  */
 const CLICKPOST_STATUS_NORMALISATION: Record<string, string> = {
+  // Delivered lifecycle
   '8:6:false': 'Surma Order Delivered To Customer',
   '8:6:true': 'Surma Return Delivered To Warehouse',
+  // Out-for-delivery lifecycle
+  //   is_rvp=false → last-mile truck heading to the customer's door
+  //   is_rvp=true  → last-mile truck heading to the Surma warehouse
+  //                  (operational, not customer-facing — but still
+  //                  surface it as a trigger so admin can wire ops /
+  //                  internal notifications)
+  '6:4:false': 'Surma Out For Delivery To Customer',
+  '6:4:true': 'Surma Out For Delivery To Warehouse',
 };
 
 function normaliseClickpostStatus(
