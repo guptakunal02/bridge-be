@@ -90,6 +90,19 @@ interface WhatsappInboundMessage {
     payload?: string;
     text?: string;
   };
+  /**
+   * Meta populates `context` when the customer swipe-replied to a prior
+   * message — `id` is the wamid of the quoted message. We lift it to
+   * whatsapp_message.replied_to_external_message_id so the inbox UI
+   * can render a quote block above the reply bubble (matching WhatsApp's
+   * native look). Other `context.*` fields (forwarded, referred_product)
+   * stay on raw_payload for future use.
+   */
+  context?: {
+    from?: string;
+    id?: string;
+    forwarded?: boolean;
+  };
 }
 interface WhatsappWebhookPayload {
   object?: string;
@@ -282,6 +295,15 @@ export class WhatsappIngestService {
             media?.content ??
             null,
           external_message_id: msg.id!,
+          // Only lift context.id when it's a non-empty string — Meta's
+          // webhook sometimes attaches an empty context on carrier-side
+          // metadata that isn't a real swipe-reply. Guards against a
+          // bogus foreign-key-like value showing up in the UI.
+          replied_to_external_message_id:
+            typeof msg.context?.id === 'string' &&
+            msg.context.id.trim().length > 0
+              ? msg.context.id
+              : null,
           message_type: msg.type ?? 'unknown',
           raw_payload: msg,
           media_url: media?.url ?? null,

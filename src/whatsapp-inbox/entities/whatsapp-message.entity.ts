@@ -67,6 +67,16 @@ export class WhatsappMessage {
   @Column({ type: 'text', unique: true, name: 'external_message_id' })
   external_message_id!: string;
 
+  /**
+   * `context.id` from Meta's inbound webhook when the customer
+   * swipe-replied to a prior message. Stores the wamid being quoted;
+   * ticket detail serializer uses it to render the WhatsApp-style
+   * quote block above the reply bubble. Null for standalone messages
+   * and for outbound sends.
+   */
+  @Column({ type: 'text', nullable: true, name: 'replied_to_external_message_id' })
+  replied_to_external_message_id!: string | null;
+
   @Column({ type: 'text', name: 'message_type' })
   message_type!: string;
 

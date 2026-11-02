@@ -691,7 +691,52 @@ export class TicketsService {
       // DESC fetch gives us the newest-first slice; reverse so the
       // mapper sees the familiar chronological order it expects.
       rows.reverse();
-      return rows.map(adaptWhatsappMessage);
+      // Resolve quoted-message references in one shot. For each row
+      // that has replied_to_external_message_id, build a Map keyed by
+      // wamid → the quoted row's content + direction. First pass fills
+      // the Map from the already-loaded rows (hits ~99% of the time
+      // since customers reply to recent messages in the same ticket).
+      // Second pass fetches any remaining ids separately — covers
+      // quoted-ancestors on long threads or cross-ticket references.
+      const quotedIndex = new Map<
+        string,
+        { content: string | null; direction: 'SENT' | 'RECEIVED'; messageType: string }
+      >();
+      for (const r of rows) {
+        quotedIndex.set(r.external_message_id, {
+          content: r.content,
+          direction: r.type as 'SENT' | 'RECEIVED',
+          messageType: r.message_type,
+        });
+      }
+      const missingWamids = Array.from(
+        new Set(
+          rows
+            .map((r) => r.replied_to_external_message_id)
+            .filter(
+              (v): v is string => v !== null && !quotedIndex.has(v),
+            ),
+        ),
+      );
+      if (missingWamids.length > 0) {
+        const extraRows = await this.whatsapps.find({
+          where: { external_message_id: In(missingWamids) },
+          select: {
+            external_message_id: true,
+            content: true,
+            type: true,
+            message_type: true,
+          },
+        });
+        for (const er of extraRows) {
+          quotedIndex.set(er.external_message_id, {
+            content: er.content,
+            direction: er.type as 'SENT' | 'RECEIVED',
+            messageType: er.message_type,
+          });
+        }
+      }
+      return rows.map((r) => adaptWhatsappMessage(r, quotedIndex));
     }
     const rows = await this.emails.find({
       where: { ticket_id: In(chainIds) },
@@ -2043,7 +2088,13 @@ export interface LatestMessageRow {
  * handles; sender is pretty-formatted so the FE header reads
  * "+91 85699 93083" instead of "918569993083".
  */
-function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
+function adaptWhatsappMessage(
+  row: WhatsappMessage,
+  quotedIndex?: Map<
+    string,
+    { content: string | null; direction: 'SENT' | 'RECEIVED'; messageType: string }
+  >,
+): EmailMessage {
   // sender stays raw here — the DTO mapper (toEmailMessage) does
   // channel-aware formatting so there's exactly one place to change
   // phone presentation.
@@ -2088,6 +2139,28 @@ function adaptWhatsappMessage(row: WhatsappMessage): EmailMessage {
     // the FE can render media rows as attachment cards instead of
     // text bubbles. Falls back to 'text' for anything unexpected.
     _waMediaKind: kind,
+    _repliedTo: row.replied_to_external_message_id
+      ? (() => {
+          const q = quotedIndex?.get(row.replied_to_external_message_id);
+          if (!q) {
+            // Quoted message isn't on this ticket (and wasn't in the
+            // in-chain lookup either). Still surface the raw id so the
+            // FE can render a minimal "replied to a message" placeholder
+            // instead of silently dropping the reference.
+            return {
+              externalMessageId: row.replied_to_external_message_id,
+              content: null,
+              direction: 'RECEIVED' as const,
+            };
+          }
+          return {
+            externalMessageId: row.replied_to_external_message_id,
+            content: q.content,
+            direction: q.direction,
+            mediaKind: normaliseWaMediaKind(q.messageType, null),
+          };
+        })()
+      : null,
   };
   return shaped as EmailMessage;
 }

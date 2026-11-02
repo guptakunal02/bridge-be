@@ -97,4 +97,19 @@ export class EmailMessage {
    * Email rows never set this; the mapper defaults to 'text'.
    */
   _waMediaKind?: 'text' | 'image' | 'video' | 'document' | 'audio' | null;
+
+  /**
+   * Transient — NOT a DB column. Same adapter stashes a snippet of the
+   * quoted message here when a WhatsApp inbound carried `context.id`
+   * (customer swipe-replied to a prior message). The DTO mapper
+   * surfaces this as `repliedTo` on EmailMessageResponse so the FE
+   * can render a WhatsApp-style quote block above the reply bubble.
+   * Null for standalone messages and all email rows.
+   */
+  _repliedTo?: {
+    externalMessageId: string;
+    content: string | null;
+    direction: 'SENT' | 'RECEIVED';
+    mediaKind?: 'text' | 'image' | 'video' | 'document' | 'audio';
+  } | null;
 }

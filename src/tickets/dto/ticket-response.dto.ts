@@ -157,6 +157,26 @@ export interface EmailMessageResponse {
    * bubble so agents can tell at a glance that a file was sent.
    */
   mediaKind: 'text' | 'image' | 'video' | 'document' | 'audio';
+  /**
+   * Populated when the customer swipe-replied to a prior message on
+   * WhatsApp (Meta sent `context.id` on the inbound). Null for
+   * standalone messages and all email rows. The FE renders a
+   * WhatsApp-style quote block above the reply bubble when present.
+   */
+  repliedTo: {
+    /** wamid of the quoted message — same format as externalMessageId. */
+    externalMessageId: string;
+    /** Content snippet of the quoted message. Null when the quoted row
+     *  wasn't resolvable (quoted an older message outside this ticket). */
+    content: string | null;
+    /** Direction of the quoted message — tells the FE whether the
+     *  quote bar should look like "them" (INBOUND) or "us" (OUTBOUND). */
+    direction: MessageDirection;
+    /** Media kind of the quoted message — lets the FE show "📷 Photo"
+     *  / "🎥 Video" / "📄 Document" instead of empty text for media
+     *  rows (WhatsApp's native look). */
+    mediaKind?: 'text' | 'image' | 'video' | 'document' | 'audio';
+  } | null;
   createdAt: string;
 
   /* -------------------------- View fields ------------------------- */
@@ -406,6 +426,19 @@ function toEmailMessage(
     // detail path; email never sets it so default to 'text'. The FE
     // branches on this to render media as an attachment card.
     mediaKind: m._waMediaKind ?? 'text',
+    // _repliedTo is set by adaptWhatsappMessage for inbound WhatsApp
+    // rows that quoted a prior message (customer used WhatsApp's
+    // swipe-reply). Null for all other paths — email, outbound, no-
+    // quote inbound. The `direction` field uses the same string
+    // literal as MessageDirection enum values, cast explicitly here.
+    repliedTo: m._repliedTo
+      ? {
+          externalMessageId: m._repliedTo.externalMessageId,
+          content: m._repliedTo.content,
+          direction: m._repliedTo.direction as MessageDirection,
+          mediaKind: m._repliedTo.mediaKind,
+        }
+      : null,
     createdAt: m.createdAt.toISOString(),
     // Server-computed view fields — see message-view-utils.ts for
     // the strategy stack (heuristics → prior-content fallback).
