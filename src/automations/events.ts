@@ -692,6 +692,20 @@ export interface ClickpostDeliveryEventPayload {
   /** The courier that carried the shipment (Delhivery, etc). */
   courierPartner: string | null;
   /**
+   * Clean carrier brand name — "Shadowfax" / "Bluedart" / "Delhivery" /
+   * "Shiprocket" — derived at ingest time from the messy merchant-side
+   * account nickname Clickpost ships in `account_code` (e.g. "Bluedart
+   * Forward Prepaid Air Surma Clickpost" → "Bluedart"). Admin binds this
+   * in customer-facing templates ("Your order is on its way via
+   * {{normalised_courier_partner_name}}") instead of the raw nickname.
+   *
+   * Null when the account_code doesn't match any registered brand —
+   * surfaces the gap rather than printing a messy string. Add new brand
+   * regexes to COURIER_BRAND_REGISTRY in clickpost-webhooks.service.ts
+   * as new couriers come online.
+   */
+  normalisedCourierPartnerName: string | null;
+  /**
    * Order-level fields hoisted from surma-ops's customer-contact
    * endpoint response. Populated on every typed Clickpost event when
    * the endpoint call succeeded. Null when the enrichment hop failed

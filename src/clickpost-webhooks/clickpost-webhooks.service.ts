@@ -51,6 +51,12 @@ export class ClickpostWebhooksService {
     // no toggle; surma-ops has the real contact on the parent Shopify
     // order. Mutates payload in-place; silent no-op on any failure.
     await this.enrichMaskedContact(payload, webhookId);
+    // Pure derivation from the just-received payload — adds a clean
+    // carrier brand under enrichments.courier_brand so the Events
+    // inspector + template authoring UI's JSON tree see it, and the
+    // emit() hoist below picks it up from the same spot. Separate from
+    // enrichMaskedContact because this doesn't hit surma-ops.
+    this.normaliseCourierPartner(payload);
     const rawStatus = asString(payload['status']) ?? 'unknown';
     const waybill = asString(payload['waybill']);
     const additional = payload['additional'] as
@@ -194,6 +200,15 @@ export class ClickpostWebhooksService {
           )
         : null;
     const courierPartner = asString(payload['account_code']);
+    // Normalised brand lives on enrichments.courier_brand (stamped at
+    // ingest). Hoist to top-level so admin rules + template bindings
+    // can read `event.normalisedCourierPartnerName` without diving into
+    // rawPayload. Null when the courier isn't in the brand registry.
+    const normalisedCourierPartnerName = asString(
+      (payload['enrichments'] as Record<string, unknown> | undefined)?.[
+        'courier_brand'
+      ],
+    );
     // Order-level fields were stamped on payload.enrichments.order_info
     // by enrichMaskedContact when surma-ops's /customer-contact
     // returned 200. Pick them up and hoist to typed event payload so
@@ -240,6 +255,7 @@ export class ClickpostWebhooksService {
         waybill,
         trackingUrl,
         courierPartner,
+        normalisedCourierPartnerName,
         paymentMode,
         codAmount,
         orderTotal,
@@ -252,6 +268,7 @@ export class ClickpostWebhooksService {
           waybill: waybill ?? '',
           tracking_url: trackingUrl ?? '',
           courier_partner: courierPartner ?? '',
+          normalised_courier_partner_name: normalisedCourierPartnerName ?? '',
           payment_mode: paymentMode ?? '',
           cod_amount: codAmount ?? '',
           order_total: orderTotal ?? '',
@@ -473,6 +490,36 @@ export class ClickpostWebhooksService {
   }
 
   /**
+   * Read the raw `account_code` from the Clickpost payload, run it
+   * through the brand registry, and stamp the clean brand name onto
+   * `enrichments.courier_brand`. Pure derivation — no side-effects
+   * beyond the in-place mutation; called before persistence so the
+   * stored row + emit() + the FE event-sample tree all see the brand.
+   *
+   * Silent no-op when the account_code is missing OR doesn't match any
+   * registered brand. Both cases leave `enrichments.courier_brand`
+   * absent so templates binding `{{normalised_courier_partner_name}}`
+   * render blank rather than printing a messy nickname.
+   */
+  private normaliseCourierPartner(payload: Record<string, unknown>): void {
+    const additional = payload['additional'] as
+      | Record<string, unknown>
+      | undefined;
+    // Clickpost ships account_code on BOTH the root AND additional —
+    // we read root first (consistent with the existing emit() hoist),
+    // then fall back to additional.
+    const accountCode =
+      asString(payload['account_code']) ??
+      asString(additional?.['account_code']);
+    const brand = extractCourierBrand(accountCode);
+    if (!brand) return;
+    const existing =
+      (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
+    existing['courier_brand'] = brand;
+    payload['enrichments'] = existing;
+  }
+
+  /**
    * Natural key: (waybill, clickpost_status_code, timestamp). Same
    * shipment + same status code + same scan time ≡ same event. Falls
    * back to a hash of the raw body when any key component is missing.
@@ -498,6 +545,34 @@ export class ClickpostWebhooksService {
 function asString(v: unknown): string | null {
   if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  return null;
+}
+
+/**
+ * Registry of carrier brand regexes applied to Clickpost's messy
+ * `account_code` field. The nickname is a merchant-side account label
+ * that mixes carrier name + account type (forward/reverse) + payment
+ * mode + hub + the word "Clickpost" — unusable for customer-facing
+ * templates ("Your order is on its way via Bluedart Forward Prepaid Air
+ * Surma Clickpost" reads badly). We substring-match against the carrier
+ * brand only. Ordered by prod volume so cheap matches hit first.
+ *
+ * Extend here as new couriers come online — a new entry is additive;
+ * ordering by volume keeps the hot path fastest.
+ */
+const COURIER_BRAND_REGISTRY: Array<{ needle: string; brand: string }> = [
+  { needle: 'shadowfax', brand: 'Shadowfax' },
+  { needle: 'bluedart', brand: 'Bluedart' },
+  { needle: 'delhivery', brand: 'Delhivery' },
+  { needle: 'shiprocket', brand: 'Shiprocket' },
+];
+
+function extractCourierBrand(accountCode: string | null): string | null {
+  if (!accountCode) return null;
+  const lowered = accountCode.toLowerCase();
+  for (const { needle, brand } of COURIER_BRAND_REGISTRY) {
+    if (lowered.includes(needle)) return brand;
+  }
   return null;
 }
 
