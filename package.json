@@ -30,6 +30,7 @@
     "backfill:clickpost-tracking-url": "pnpm build && node dist/scripts/backfill-clickpost-tracking-url.js",
     "backfill:template-paths": "pnpm build && node dist/scripts/backfill-template-paths.js",
     "backfill:shopify-enrichments": "pnpm build && node dist/scripts/backfill-shopify-enrichments.js",
+    "republish:templates-to-new-waba": "pnpm build && node dist/scripts/republish-templates-to-new-waba.js",
     "import:shopify-products": "pnpm build && node dist/scripts/import-shopify-products.js"
   },
   "dependencies": {
