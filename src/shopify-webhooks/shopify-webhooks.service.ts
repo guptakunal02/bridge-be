@@ -66,6 +66,28 @@ export class ShopifyWebhooksService {
     if (input.topic === 'orders/create') {
       await this.enrichOrdersCreate(input);
     }
+    // fulfillments/* payloads carry a `name` field like "#253451.1" —
+    // the ".1" is Shopify's split-shipment index, NOT part of the
+    // user-facing order number. Stamp a clean "#253451" on enrichments
+    // so authoring UI JSON trees + automation rule bindings pick up the
+    // customer-friendly value instead of the raw suffix form.
+    if (
+      input.topic === 'fulfillments/create' ||
+      input.topic === 'fulfillments/update'
+    ) {
+      this.stampFulfillmentOrderName(input.payload);
+      this.stampFulfillmentProducts(input.payload);
+    }
+    // orders/create + orders/fulfilled + orders/cancelled all carry
+    // line_items at the top level — same products-string pattern for
+    // consistent template authoring across every Shopify event source.
+    if (
+      input.topic === 'orders/create' ||
+      input.topic === 'orders/fulfilled' ||
+      input.topic === 'orders/cancelled'
+    ) {
+      this.stampOrderProducts(input.payload);
+    }
 
     // Pull the customer phone out of the topic-specific location so
     // the per-row Phone column + phone search on the Integrations →
@@ -585,6 +607,20 @@ export class ShopifyWebhooksService {
       );
       return;
     }
+    // Read the stamped clean names from enrichments so event.orderName
+    // is customer-facing "#253451" (not raw fulfillment "#253451.1") and
+    // event.variables.products carries the comma-joined item list.
+    const enrichments =
+      (input.payload['enrichments'] as Record<string, unknown> | undefined) ??
+      {};
+    const cleanOrderName =
+      typeof enrichments['order_name'] === 'string'
+        ? (enrichments['order_name'] as string)
+        : extracted.orderName;
+    const products =
+      typeof enrichments['products'] === 'string'
+        ? (enrichments['products'] as string)
+        : '';
     this.automations.emit({
       event,
       ticket: {
@@ -603,7 +639,7 @@ export class ShopifyWebhooksService {
         customerPhone: extracted.customerPhone,
         customerEmail: extracted.customerEmail,
         orderId: extracted.orderId,
-        orderName: extracted.orderName,
+        orderName: cleanOrderName,
         fulfillmentId: extracted.fulfillmentId,
         status: extracted.status,
         shipmentStatus: extracted.shipmentStatus,
@@ -613,7 +649,7 @@ export class ShopifyWebhooksService {
         shopDomain: input.shopDomain,
         variables: {
           order_id: extracted.orderId,
-          order_name: extracted.orderName ?? '',
+          order_name: cleanOrderName ?? '',
           fulfillment_id: extracted.fulfillmentId,
           status: extracted.status,
           shipment_status: extracted.shipmentStatus ?? '',
@@ -621,6 +657,7 @@ export class ShopifyWebhooksService {
           tracking_number: extracted.trackingNumber ?? '',
           tracking_url: extracted.trackingUrl ?? '',
           customer_email: extracted.customerEmail ?? '',
+          products,
         },
         rawPayload: input.payload,
       },
@@ -704,6 +741,66 @@ export class ShopifyWebhooksService {
    * the time this runs, so admins who want "any shipment" rules
    * aren't blocked by surma-ops downtime.
    */
+  /**
+   * Pure-derivation stamp — reads the raw fulfillment `name` (shape
+   * "#253451.1") off the payload, strips Shopify's split-shipment
+   * ".<N>" suffix, and writes the customer-facing "#253451" to
+   * `enrichments.order_name`. No-op when name is missing or already
+   * clean. Called at ingest so the stored row AND the typed event
+   * payload see the enriched shape identically.
+   */
+  private stampFulfillmentOrderName(payload: Record<string, unknown>): void {
+    const rawName = payload['name'];
+    if (typeof rawName !== 'string') return;
+    const bare = extractOrderNameFromFulfillmentName(rawName);
+    if (!bare) return;
+    const display = `#${bare}`;
+    const existing =
+      (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
+    existing['order_name'] = display;
+    payload['enrichments'] = existing;
+  }
+
+  /**
+   * Comma-space-joined human-readable product list from the fulfillment's
+   * line_items[]. Each entry is the item's `name` field — Shopify
+   * already formats this as "Product Title - Variant Title" (e.g.
+   * "Sudoku Farshi Set in Sage Green - XXL") so no further munging
+   * needed. Scoped to THIS fulfillment (box), not the whole order —
+   * ideal for split-shipment templates like "the following items in
+   * your order have shipped".
+   *
+   * Stamped on `enrichments.products` matching the Clickpost pattern,
+   * so admins get a consistent `{{products}}` binding regardless of
+   * event source.
+   */
+  private stampFulfillmentProducts(
+    payload: Record<string, unknown>,
+  ): void {
+    const products = extractLineItemNames(payload);
+    if (!products) return;
+    const existing =
+      (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
+    existing['products'] = products;
+    payload['enrichments'] = existing;
+  }
+
+  /**
+   * Same shape as stampFulfillmentProducts but reads from the ORDER
+   * payload's line_items (orders/create / orders/fulfilled /
+   * orders/cancelled). Covers the whole order — not scoped to any
+   * single shipment — so "your order has been placed" + "your order
+   * is cancelled" templates can bind {{products}} end-to-end.
+   */
+  private stampOrderProducts(payload: Record<string, unknown>): void {
+    const products = extractLineItemNames(payload);
+    if (!products) return;
+    const existing =
+      (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
+    existing['products'] = products;
+    payload['enrichments'] = existing;
+  }
+
   private async maybeEmitPartiallyFulfilled(input: {
     webhookId: string;
     topic: string;
@@ -794,40 +891,58 @@ export class ShopifyWebhooksService {
         teamId: '',
         subject: null,
       },
-      payload: {
-        name: 'shopify.order.partially_fulfilled',
-        channelId: '',
-        customerPhone: extracted.customerPhone,
-        customerEmail: extracted.customerEmail,
-        orderId: extracted.orderId,
-        orderName: extracted.orderName,
-        fulfillmentId: extracted.fulfillmentId,
-        status: extracted.status,
-        shipmentStatus: extracted.shipmentStatus,
-        trackingCompany: extracted.trackingCompany,
-        trackingNumber: extracted.trackingNumber,
-        trackingUrl: extracted.trackingUrl,
-        shopDomain: input.shopDomain,
-        fulfillmentNumber: context.fulfillment_number,
-        totalFulfillmentsSoFar: context.total_fulfillments_so_far,
-        orderTags: Array.isArray(context.order_tags)
-          ? context.order_tags
-          : [],
-        variables: {
-          order_id: extracted.orderId,
-          order_name: extracted.orderName ?? '',
-          fulfillment_id: extracted.fulfillmentId,
-          fulfillment_number: String(context.fulfillment_number),
-          total_fulfillments_so_far: String(context.total_fulfillments_so_far),
+      payload: (() => {
+        // Read clean names from enrichments (same pattern as emitFulfillment).
+        const enrichments =
+          (input.payload['enrichments'] as
+            | Record<string, unknown>
+            | undefined) ?? {};
+        const cleanOrderName =
+          typeof enrichments['order_name'] === 'string'
+            ? (enrichments['order_name'] as string)
+            : extracted.orderName;
+        const products =
+          typeof enrichments['products'] === 'string'
+            ? (enrichments['products'] as string)
+            : '';
+        return {
+          name: 'shopify.order.partially_fulfilled',
+          channelId: '',
+          customerPhone: extracted.customerPhone,
+          customerEmail: extracted.customerEmail,
+          orderId: extracted.orderId,
+          orderName: cleanOrderName,
+          fulfillmentId: extracted.fulfillmentId,
           status: extracted.status,
-          shipment_status: extracted.shipmentStatus ?? '',
-          tracking_company: extracted.trackingCompany ?? '',
-          tracking_number: extracted.trackingNumber ?? '',
-          tracking_url: extracted.trackingUrl ?? '',
-          customer_email: extracted.customerEmail ?? '',
-        },
-        rawPayload: input.payload,
-      },
+          shipmentStatus: extracted.shipmentStatus,
+          trackingCompany: extracted.trackingCompany,
+          trackingNumber: extracted.trackingNumber,
+          trackingUrl: extracted.trackingUrl,
+          shopDomain: input.shopDomain,
+          fulfillmentNumber: context.fulfillment_number,
+          totalFulfillmentsSoFar: context.total_fulfillments_so_far,
+          orderTags: Array.isArray(context.order_tags)
+            ? context.order_tags
+            : [],
+          variables: {
+            order_id: extracted.orderId,
+            order_name: cleanOrderName ?? '',
+            fulfillment_id: extracted.fulfillmentId,
+            fulfillment_number: String(context.fulfillment_number),
+            total_fulfillments_so_far: String(
+              context.total_fulfillments_so_far,
+            ),
+            status: extracted.status,
+            shipment_status: extracted.shipmentStatus ?? '',
+            tracking_company: extracted.trackingCompany ?? '',
+            tracking_number: extracted.trackingNumber ?? '',
+            tracking_url: extracted.trackingUrl ?? '',
+            customer_email: extracted.customerEmail ?? '',
+            products,
+          },
+          rawPayload: input.payload,
+        };
+      })(),
     });
   }
 
@@ -1244,4 +1359,28 @@ function extractOrderNameFromFulfillmentName(
   const noSuffix = trimmed.replace(/\.\d+$/, '');
   const bare = noSuffix.replace(/^#/, '').trim();
   return bare.length > 0 ? bare : null;
+}
+
+/**
+ * Pull a comma-space-joined human-readable product string out of a
+ * Shopify payload's top-level `line_items[]`. Each entry uses the
+ * item's `name` field — Shopify ships this already formatted as
+ * "Product Title - Variant Title" so no extra wrangling needed.
+ * Returns null when line_items is missing/empty — caller treats null
+ * as "no stamp, skip the enrichments write" rather than persisting "".
+ */
+function extractLineItemNames(
+  payload: Record<string, unknown>,
+): string | null {
+  const items = payload['line_items'];
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const names: string[] = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') continue;
+    const nameVal = (raw as Record<string, unknown>)['name'];
+    if (typeof nameVal === 'string' && nameVal.trim().length > 0) {
+      names.push(nameVal.trim());
+    }
+  }
+  return names.length > 0 ? names.join(', ') : null;
 }

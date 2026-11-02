@@ -29,6 +29,7 @@
     "backfill:clickpost-courier-brand": "pnpm build && node dist/scripts/backfill-clickpost-courier-brand.js",
     "backfill:clickpost-tracking-url": "pnpm build && node dist/scripts/backfill-clickpost-tracking-url.js",
     "backfill:template-paths": "pnpm build && node dist/scripts/backfill-template-paths.js",
+    "backfill:shopify-enrichments": "pnpm build && node dist/scripts/backfill-shopify-enrichments.js",
     "import:shopify-products": "pnpm build && node dist/scripts/import-shopify-products.js"
   },
   "dependencies": {
