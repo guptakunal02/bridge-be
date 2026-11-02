@@ -887,6 +887,96 @@ export class WhatsappTemplatesService {
     return { wamid };
   }
 
+  /**
+   * Edit the Bridge-side binding metadata on an existing template:
+   *   - `recipientPhonePath` / `headerImagePath` (template-level
+   *     JSON-path defaults inherited by any automation rule that uses
+   *     this template)
+   *   - per-variable `path` + `fallback` on each variableMapping entry
+   *
+   * These fields DON'T require Meta re-approval — Meta only cares about
+   * the body / buttons / examples. We never touch those here.
+   *
+   * Partial updates: fields left undefined on the DTO are preserved;
+   * fields explicitly set to null clear the stored value. Variable
+   * bindings target entries by `name` — unknown names are rejected so
+   * a typo doesn't silently create an orphan entry.
+   */
+  async updateBindings(
+    templateId: string,
+    channelId: string,
+    dto: {
+      recipientPhonePath?: string | null;
+      headerImagePath?: string | null;
+      variableBindings?: Array<{
+        name: string;
+        path?: string | null;
+        fallback?: string | null;
+      }>;
+    },
+  ): Promise<WhatsappTemplate> {
+    const template = await this.templates.findOne({
+      where: { id: templateId },
+    });
+    if (!template) throw new NotFoundException('Template not found');
+    if (template.channelId !== channelId) {
+      throw new BadRequestException(
+        'Template belongs to a different WhatsApp channel',
+      );
+    }
+
+    if (dto.recipientPhonePath !== undefined) {
+      template.recipientPhonePath =
+        dto.recipientPhonePath === null
+          ? null
+          : dto.recipientPhonePath.trim() || null;
+    }
+    if (dto.headerImagePath !== undefined) {
+      template.headerImagePath =
+        dto.headerImagePath === null
+          ? null
+          : dto.headerImagePath.trim() || null;
+    }
+
+    if (dto.variableBindings && dto.variableBindings.length > 0) {
+      if (!template.variableMapping || template.variableMapping.length === 0) {
+        throw new BadRequestException(
+          'Template has no variable mapping — cannot bind variables on a legacy / imported template',
+        );
+      }
+      const byName = new Map<string, VariableMappingEntry>(
+        template.variableMapping.map((e) => [e.name, e]),
+      );
+      for (const b of dto.variableBindings) {
+        const entry = byName.get(b.name);
+        if (!entry) {
+          throw new BadRequestException(
+            `Variable "${b.name}" is not part of this template's mapping`,
+          );
+        }
+        if (b.path !== undefined) {
+          entry.path = b.path === null ? null : b.path.trim() || null;
+        }
+        if (b.fallback !== undefined) {
+          entry.fallback = b.fallback === null ? null : b.fallback;
+        }
+      }
+      // Reassign so TypeORM detects the jsonb change; mutating the
+      // array in place sometimes doesn't dirty the entity on this
+      // ORM version (safer to be explicit).
+      template.variableMapping = [...template.variableMapping];
+    }
+
+    const saved = await this.templates.save(template);
+    this.logger.log(
+      `Template bindings updated: id=${templateId} ` +
+        `recipientPhonePath=${saved.recipientPhonePath ?? 'null'} ` +
+        `headerImagePath=${saved.headerImagePath ?? 'null'} ` +
+        `varsTouched=${dto.variableBindings?.length ?? 0}`,
+    );
+    return saved;
+  }
+
   private async assertWhatsappChannel(channelId: string): Promise<void> {
     const channel = await this.channels.findOne({ where: { id: channelId } });
     if (!channel) throw new NotFoundException('Channel not found');

@@ -8,6 +8,7 @@ import {
   NotFoundException,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UploadedFile,
@@ -22,6 +23,7 @@ import { Repository } from 'typeorm';
 import { WhatsappTemplateStatus } from '../database/enums';
 import { CreateWhatsappTemplateDto } from './dto/create-whatsapp-template.dto';
 import { TestSendTemplateDto } from './dto/test-send-template.dto';
+import { UpdateTemplateBindingsDto } from './dto/update-template-bindings.dto';
 import {
   toTemplateResponse,
   type WhatsappTemplateResponse,
@@ -206,6 +208,40 @@ export class WhatsappTemplatesController {
    * Lets admins verify template content + variable substitution
    * before using it on real customers.
    */
+  /**
+   * Edit the Bridge-side binding metadata on an APPROVED template —
+   * per-variable JSON paths + fallbacks, plus template-level
+   * recipient_phone_path + header_image_path. None of these touch
+   * Meta (no re-submit, no re-approval), so an admin can fix a wrong
+   * path or add a missing one without going through the Meta review
+   * loop again.
+   *
+   * Can't edit body / buttons / name / variable names / header type —
+   * those would require Meta re-approval and this endpoint is scoped
+   * to Bridge-only metadata.
+   */
+  @Patch(':templateId/bindings')
+  async updateBindings(
+    @Param('channelId', ParseUUIDPipe) channelId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
+    @Body() dto: UpdateTemplateBindingsDto,
+  ): Promise<WhatsappTemplateResponse> {
+    const updated = await this.templatesService.updateBindings(
+      templateId,
+      channelId,
+      {
+        recipientPhonePath: dto.recipientPhonePath,
+        headerImagePath: dto.headerImagePath,
+        variableBindings: dto.variableBindings,
+      },
+    );
+    const withCreator = await this.templates.findOne({
+      where: { id: updated.id },
+      relations: { creator: true },
+    });
+    return toTemplateResponse(withCreator ?? updated);
+  }
+
   @Post(':templateId/test')
   @HttpCode(HttpStatus.OK)
   async testSend(
