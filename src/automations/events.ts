@@ -691,6 +691,24 @@ export interface ClickpostDeliveryEventPayload {
   trackingUrl: string | null;
   /** The courier that carried the shipment (Delhivery, etc). */
   courierPartner: string | null;
+  /**
+   * Order-level fields hoisted from surma-ops's customer-contact
+   * endpoint response. Populated on every typed Clickpost event when
+   * the endpoint call succeeded. Null when the enrichment hop failed
+   * (admin's rule's condition on paymentMode will simply not match).
+   */
+  paymentMode: 'COD' | 'PREPAID' | null;
+  /** Amount customer owes at delivery for COD orders. Null for PREPAID
+   *  and when enrichment failed. String with 2 decimals (matches the
+   *  Shopify money precision). */
+  codAmount: string | null;
+  orderTotal: string | null;
+  /** Lowercased financial status Shopify sends — paid / pending /
+   *  partially_refunded / refunded / voided / authorized. Null when
+   *  enrichment failed or the field is missing on Shopify's side. */
+  financialStatus: string | null;
+  orderTags: string[];
+  currency: string | null;
   rawPayload?: Record<string, unknown>;
 }
 

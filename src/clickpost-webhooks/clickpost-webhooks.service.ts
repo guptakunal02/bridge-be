@@ -194,6 +194,23 @@ export class ClickpostWebhooksService {
           )
         : null;
     const courierPartner = asString(payload['account_code']);
+    // Order-level fields were stamped on payload.enrichments.order_info
+    // by enrichMaskedContact when surma-ops's /customer-contact
+    // returned 200. Pick them up and hoist to typed event payload so
+    // admin rules can filter on event.paymentMode etc. without diving
+    // into rawPayload.
+    const orderInfo =
+      (payload['enrichments'] as Record<string, unknown> | undefined)?.[
+        'order_info'
+      ] as Record<string, unknown> | undefined;
+    const paymentMode = (orderInfo?.['payment_mode'] as 'COD' | 'PREPAID' | null) ?? null;
+    const codAmount = asString(orderInfo?.['cod_amount']);
+    const orderTotal = asString(orderInfo?.['order_total']);
+    const financialStatus = asString(orderInfo?.['financial_status']);
+    const orderTags = Array.isArray(orderInfo?.['order_tags'])
+      ? (orderInfo?.['order_tags'] as string[])
+      : [];
+    const currency = asString(orderInfo?.['currency']);
     this.automations.emit({
       event,
       ticket: {
@@ -214,11 +231,23 @@ export class ClickpostWebhooksService {
         waybill,
         trackingUrl,
         courierPartner,
+        paymentMode,
+        codAmount,
+        orderTotal,
+        financialStatus,
+        orderTags,
+        currency,
         variables: {
           order_id: orderId ?? '',
           waybill: waybill ?? '',
           tracking_url: trackingUrl ?? '',
           courier_partner: courierPartner ?? '',
+          payment_mode: paymentMode ?? '',
+          cod_amount: codAmount ?? '',
+          order_total: orderTotal ?? '',
+          financial_status: financialStatus ?? '',
+          order_tags: orderTags.join(', '),
+          currency: currency ?? '',
         },
         rawPayload: payload,
       },
@@ -356,6 +385,12 @@ export class ClickpostWebhooksService {
         customer_email?: string | null;
         customer_first_name?: string | null;
         customer_last_name?: string | null;
+        payment_mode?: 'COD' | 'PREPAID' | null;
+        cod_amount?: string | null;
+        order_total?: string | null;
+        financial_status?: string | null;
+        order_tags?: string[] | null;
+        currency?: string | null;
       };
       // Overwrite ONLY the fields surma-ops actually returned a value
       // for — a null phone (COD-manual order without captured phone)
@@ -372,9 +407,28 @@ export class ClickpostWebhooksService {
       const existing =
         (payload['enrichments'] as Record<string, unknown> | undefined) ?? {};
       existing['contact_source'] = 'surma_ops_lookup';
+      // Stamp the order-level fields on enrichments.order_info so they
+      // show up in the Events inspector's JSON tree AND the admin can
+      // bind them at rawPayload.enrichments.order_info.* in rule
+      // conditions / template variables. The emit() path hoists these
+      // to top-level event.* fields as well — the enrichments.* copy is
+      // for FE sample-helper JSON path binding.
+      existing['order_info'] = {
+        payment_mode: body.payment_mode ?? null,
+        cod_amount: body.cod_amount ?? null,
+        order_total: body.order_total ?? null,
+        financial_status: body.financial_status ?? null,
+        order_tags: Array.isArray(body.order_tags) ? body.order_tags : [],
+        currency: body.currency ?? null,
+      };
       payload['enrichments'] = existing;
       this.logger.log(
-        `clickpost enrich: webhook_id=${webhookId} order=${orderId} unmasked phone=${body.customer_phone ? 'yes' : 'no'} email=${body.customer_email ? 'yes' : 'no'}`,
+        `clickpost enrich: webhook_id=${webhookId} order=${orderId} ` +
+          `unmasked phone=${body.customer_phone ? 'yes' : 'no'} ` +
+          `email=${body.customer_email ? 'yes' : 'no'} ` +
+          `payment_mode=${body.payment_mode ?? 'null'} ` +
+          `cod_amount=${body.cod_amount ?? 'null'} ` +
+          `order_total=${body.order_total ?? 'null'}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
