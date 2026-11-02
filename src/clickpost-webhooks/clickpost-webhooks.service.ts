@@ -133,12 +133,16 @@ export class ClickpostWebhooksService {
       | typeof AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED
       | typeof AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED
       | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER
-      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE;
+      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE
+      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE
+      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER;
     let name:
       | 'clickpost.order_delivered'
       | 'clickpost.return_delivered'
       | 'clickpost.out_for_delivery_customer'
-      | 'clickpost.out_for_delivery_warehouse';
+      | 'clickpost.out_for_delivery_warehouse'
+      | 'clickpost.out_for_pickup_from_warehouse'
+      | 'clickpost.out_for_pickup_from_customer';
     if (normalisedStatus === 'Surma Order Delivered To Customer') {
       event = AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED;
       name = 'clickpost.order_delivered';
@@ -151,6 +155,12 @@ export class ClickpostWebhooksService {
     } else if (normalisedStatus === 'Surma Out For Delivery To Warehouse') {
       event = AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE;
       name = 'clickpost.out_for_delivery_warehouse';
+    } else if (normalisedStatus === 'Surma Out For Pickup From Warehouse') {
+      event = AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE;
+      name = 'clickpost.out_for_pickup_from_warehouse';
+    } else if (normalisedStatus === 'Surma Out For Pickup From Customer') {
+      event = AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER;
+      name = 'clickpost.out_for_pickup_from_customer';
     } else {
       // Not a status we've chosen to emit as a typed event. Still
       // stored + visible in the Events inspector; admin can trigger
@@ -429,6 +439,13 @@ const CLICKPOST_STATUS_NORMALISATION: Record<string, string> = {
   //                  internal notifications)
   '6:4:false': 'Surma Out For Delivery To Customer',
   '6:4:true': 'Surma Out For Delivery To Warehouse',
+  // Out-for-pickup lifecycle
+  //   is_rvp=false → Clickpost agent heading to the Surma warehouse to
+  //                  collect a new order (= customer-facing "dispatched")
+  //   is_rvp=true  → Clickpost agent heading to the customer to collect
+  //                  their RVP return / exchange parcel
+  '25:1:false': 'Surma Out For Pickup From Warehouse',
+  '25:1:true': 'Surma Out For Pickup From Customer',
 };
 
 function normaliseClickpostStatus(

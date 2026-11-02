@@ -150,6 +150,23 @@ export const AUTOMATION_EVENT = {
    * internal workflows can hook into it.
    */
   CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE: 'clickpost.out_for_delivery_warehouse',
+  /**
+   * Clickpost tracking — forward pickup. Clickpost agent heading to the
+   * Surma warehouse to collect a new order (first physical scan of the
+   * forward journey). Fires on (code=25, bucket=1, is_rvp=false).
+   * Customer-facing meaning: "your order has been dispatched".
+   */
+  CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE:
+    'clickpost.out_for_pickup_from_warehouse',
+  /**
+   * Clickpost tracking — reverse pickup. Clickpost agent heading to the
+   * customer's address to collect their RVP return / exchange parcel.
+   * Fires on (code=25, bucket=1, is_rvp=true). Admin typically binds a
+   * "Our courier is on the way to collect your return — please keep the
+   * package ready" template.
+   */
+  CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER:
+    'clickpost.out_for_pickup_from_customer',
 } as const;
 
 export type AutomationEventName =
@@ -639,7 +656,9 @@ export interface ClickpostDeliveryEventPayload {
     | 'clickpost.order_delivered'
     | 'clickpost.return_delivered'
     | 'clickpost.out_for_delivery_customer'
-    | 'clickpost.out_for_delivery_warehouse';
+    | 'clickpost.out_for_delivery_warehouse'
+    | 'clickpost.out_for_pickup_from_warehouse'
+    | 'clickpost.out_for_pickup_from_customer';
   variables: Record<string, string | number | boolean>;
   customerPhone: string;
   channelId: string;
@@ -803,6 +822,16 @@ export type AutomationEventPayload =
     }
   | {
       event: typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER;
       ticket: TicketSnapshot;
       payload: ClickpostDeliveryEventPayload;
     };

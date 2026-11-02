@@ -89,7 +89,9 @@ export class SendWhatsappTemplateHandler
       ctx.event === AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED ||
       ctx.event === AUTOMATION_EVENT.CLICKPOST_RETURN_DELIVERED ||
       ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER ||
-      ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE ||
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE ||
+      ctx.event === AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER
     ) {
       await this.executeWebhookPath(action, ctx);
       return;
