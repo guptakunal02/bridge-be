@@ -194,6 +194,20 @@ export class AutomationEngine {
     await this.safeEvaluate(payload);
   }
 
+  @OnEvent(qualify(AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_WAREHOUSE))
+  async onClickpostPickedUpFromWarehouse(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
+  @OnEvent(qualify(AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_CUSTOMER))
+  async onClickpostPickedUpFromCustomer(
+    payload: AutomationEventPayload,
+  ): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
   private async safeEvaluate(payload: AutomationEventPayload): Promise<void> {
     try {
       await this.evaluator.evaluate(payload);

@@ -135,14 +135,18 @@ export class ClickpostWebhooksService {
       | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_CUSTOMER
       | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_DELIVERY_WAREHOUSE
       | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE
-      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER;
+      | typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER
+      | typeof AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_WAREHOUSE
+      | typeof AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_CUSTOMER;
     let name:
       | 'clickpost.order_delivered'
       | 'clickpost.return_delivered'
       | 'clickpost.out_for_delivery_customer'
       | 'clickpost.out_for_delivery_warehouse'
       | 'clickpost.out_for_pickup_from_warehouse'
-      | 'clickpost.out_for_pickup_from_customer';
+      | 'clickpost.out_for_pickup_from_customer'
+      | 'clickpost.picked_up_from_warehouse'
+      | 'clickpost.picked_up_from_customer';
     if (normalisedStatus === 'Surma Order Delivered To Customer') {
       event = AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED;
       name = 'clickpost.order_delivered';
@@ -161,6 +165,12 @@ export class ClickpostWebhooksService {
     } else if (normalisedStatus === 'Surma Out For Pickup From Customer') {
       event = AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER;
       name = 'clickpost.out_for_pickup_from_customer';
+    } else if (normalisedStatus === 'Surma Picked Up From Warehouse') {
+      event = AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_WAREHOUSE;
+      name = 'clickpost.picked_up_from_warehouse';
+    } else if (normalisedStatus === 'Surma Picked Up From Customer') {
+      event = AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_CUSTOMER;
+      name = 'clickpost.picked_up_from_customer';
     } else {
       // Not a status we've chosen to emit as a typed event. Still
       // stored + visible in the Events inspector; admin can trigger
@@ -446,6 +456,15 @@ const CLICKPOST_STATUS_NORMALISATION: Record<string, string> = {
   //                  their RVP return / exchange parcel
   '25:1:false': 'Surma Out For Pickup From Warehouse',
   '25:1:true': 'Surma Out For Pickup From Customer',
+  // Picked-up lifecycle — one physical scan AFTER out-for-pickup; the
+  // parcel is now in the courier's hands moving to the first hub.
+  //   is_rvp=false → forward: order picked up from Surma warehouse
+  //   is_rvp=true  → reverse: return picked up from customer
+  //
+  // Semantically close to (25, 1, *) — admins who wire templates to
+  // both for the same customer touchpoint will double-fire.
+  '4:2:false': 'Surma Picked Up From Warehouse',
+  '4:2:true': 'Surma Picked Up From Customer',
 };
 
 function normaliseClickpostStatus(

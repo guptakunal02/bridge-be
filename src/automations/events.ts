@@ -167,6 +167,25 @@ export const AUTOMATION_EVENT = {
    */
   CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER:
     'clickpost.out_for_pickup_from_customer',
+  /**
+   * Clickpost tracking — forward "picked up" scan. The parcel is now in
+   * the courier's hands, moving from Surma warehouse toward the first
+   * hub. Fires on (code=4, bucket=2, is_rvp=false). Customer-facing
+   * meaning: "your order has been shipped".
+   *
+   * Semantically close to CLICKPOST_OUT_FOR_PICKUP_FROM_WAREHOUSE —
+   * wiring the same template to both will double-fire for the same
+   * customer touchpoint. Pick one.
+   */
+  CLICKPOST_PICKED_UP_FROM_WAREHOUSE: 'clickpost.picked_up_from_warehouse',
+  /**
+   * Clickpost tracking — reverse "picked up" scan. The customer's RVP
+   * return / exchange parcel is now in the courier's hands, moving
+   * toward the first hub. Fires on (code=4, bucket=2, is_rvp=true).
+   * Customer-facing meaning: "we've collected your return — refund /
+   * exchange processing next".
+   */
+  CLICKPOST_PICKED_UP_FROM_CUSTOMER: 'clickpost.picked_up_from_customer',
 } as const;
 
 export type AutomationEventName =
@@ -658,7 +677,9 @@ export interface ClickpostDeliveryEventPayload {
     | 'clickpost.out_for_delivery_customer'
     | 'clickpost.out_for_delivery_warehouse'
     | 'clickpost.out_for_pickup_from_warehouse'
-    | 'clickpost.out_for_pickup_from_customer';
+    | 'clickpost.out_for_pickup_from_customer'
+    | 'clickpost.picked_up_from_warehouse'
+    | 'clickpost.picked_up_from_customer';
   variables: Record<string, string | number | boolean>;
   customerPhone: string;
   channelId: string;
@@ -832,6 +853,16 @@ export type AutomationEventPayload =
     }
   | {
       event: typeof AUTOMATION_EVENT.CLICKPOST_OUT_FOR_PICKUP_FROM_CUSTOMER;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_WAREHOUSE;
+      ticket: TicketSnapshot;
+      payload: ClickpostDeliveryEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.CLICKPOST_PICKED_UP_FROM_CUSTOMER;
       ticket: TicketSnapshot;
       payload: ClickpostDeliveryEventPayload;
     };
