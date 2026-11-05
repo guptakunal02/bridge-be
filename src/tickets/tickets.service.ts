@@ -230,7 +230,14 @@ export class TicketsService {
       });
     }
     applyMessageSearch(qb, query.q);
-    applyBotActiveFilter(qb, query.botActive);
+    applyBotActiveFilter(
+      qb,
+      query.botActive === 'true'
+        ? true
+        : query.botActive === 'false'
+          ? false
+          : undefined,
+    );
     await this.applyScope(qb, query.scope ?? 'all', actingUser, {
       widenForSearch: Boolean(query.q?.trim()),
     });
@@ -311,7 +318,14 @@ export class TicketsService {
       });
     }
     applyMessageSearch(qb, query.q);
-    applyBotActiveFilter(qb, query.botActive);
+    applyBotActiveFilter(
+      qb,
+      query.botActive === 'true'
+        ? true
+        : query.botActive === 'false'
+          ? false
+          : undefined,
+    );
     await this.applyScope(qb, query.scope ?? 'all', actingUser, {
       widenForSearch: Boolean(query.q?.trim()),
     });

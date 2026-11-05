@@ -2,8 +2,8 @@ import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -126,24 +126,21 @@ export class ListTicketsQuery {
   sortBy?: TicketSortBy;
 
   /**
-   * Split OPEN tickets by bot-session membership. Matches the
-   * client-side Open/Bot tab divide:
-   *   true   → only OPEN tickets with an ACTIVE bot_session and
-   *            assignee=BOT user (the "Bot" tab's set)
-   *   false  → OPEN tickets WITHOUT an active bot session (the
-   *            "Open" tab's set after the bot rows have moved aside)
-   *   unset  → no bot-session filter (legacy behaviour; `list` does
-   *            a client-side split on the response)
-   * Primarily used by the inbox "Select all N matching" affordance
-   * so the bulk endpoint resolves to the same slice the agent
-   * actually sees.
+   * Open/Bot tab split on the server side.
+   *   "true"   → only OPEN tickets with assignee=BOT user (Bot tab)
+   *   "false"  → only OPEN tickets with assignee!=BOT user or NULL
+   *              (Open tab + the unassigned queue)
+   *   unset    → no filter (legacy)
+   *
+   * Declared as a literal string, NOT boolean, on purpose. The
+   * ValidationPipe in main.ts runs with enableImplicitConversion
+   * which coerces any non-empty string into `true` via Boolean(v)
+   * for @IsBoolean fields — so `botActive=false` was arriving at
+   * the service as `true` and the EXISTS branch was firing on the
+   * Open tab, returning 100% BOT-assignee rows. The string shape
+   * dodges that entirely; the service converts to boolean itself.
    */
   @IsOptional()
-  @Transform(({ value }) => {
-    if (value === true || value === 'true') return true;
-    if (value === false || value === 'false') return false;
-    return value;
-  })
-  @IsBoolean()
-  botActive?: boolean;
+  @IsIn(['true', 'false'])
+  botActive?: 'true' | 'false';
 }
