@@ -74,7 +74,11 @@ export class WhatsappSenderService {
    * Network errors bubble as 500 — those are either Meta transient
    * failures (agent retries) or our egress being blocked (ops fixes).
    */
-  async sendText(waId: string, body: string): Promise<WhatsappSendResult> {
+  async sendText(
+    waId: string,
+    body: string,
+    opts?: { replyToWamid?: string },
+  ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
       throw new BadRequestException('Recipient wa_id missing or invalid');
@@ -93,13 +97,22 @@ export class WhatsappSenderService {
     });
     const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
 
-    const payload = {
+    // Meta's `context.message_id` carries the wamid of the message
+    // being quoted. When present, WhatsApp renders a swipe-reply-
+    // style quote block above our bubble on the customer's screen.
+    // Silently dropped by Meta if the wamid isn't recent enough to
+    // quote; our FE still shows the quote because we persist our
+    // own snippet locally.
+    const payload: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: digits,
       type: 'text',
       text: { preview_url: false, body: trimmed },
     };
+    if (opts?.replyToWamid) {
+      payload.context = { message_id: opts.replyToWamid };
+    }
 
     let res: Response;
     try {
@@ -575,6 +588,7 @@ export class WhatsappSenderService {
     mediaId: string,
     caption?: string,
     filename?: string,
+    opts?: { replyToWamid?: string },
   ): Promise<WhatsappSendResult> {
     const digits = waId.replace(/\D/g, '');
     if (!digits) {
@@ -599,13 +613,19 @@ export class WhatsappSenderService {
     // the agent uploaded + what the recipient expects.
     if (filename && kind === 'document') mediaPayload.filename = filename;
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: digits,
       type: kind,
       [kind]: mediaPayload,
     };
+    // Quote the message being replied to (same `context.message_id`
+    // shape as sendText). Attaches to the FIRST media in a batch —
+    // callers wire this through replyWhatsapp.
+    if (opts?.replyToWamid) {
+      payload.context = { message_id: opts.replyToWamid };
+    }
 
     let res: Response;
     try {

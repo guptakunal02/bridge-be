@@ -31,6 +31,9 @@
     "backfill:template-paths": "pnpm build && node dist/scripts/backfill-template-paths.js",
     "backfill:shopify-enrichments": "pnpm build && node dist/scripts/backfill-shopify-enrichments.js",
     "republish:templates-to-new-waba": "pnpm build && node dist/scripts/republish-templates-to-new-waba.js",
+    "migrate:phone-to-bridge": "pnpm build && node dist/scripts/migrate-phone-to-bridge-waba.js",
+    "rollback:phone-to-netcore": "pnpm build && node dist/scripts/rollback-phone-to-netcore-waba.js",
+    "es:exchange": "pnpm build && node dist/scripts/es-code-exchange-and-migrate.js",
     "import:shopify-products": "pnpm build && node dist/scripts/import-shopify-products.js"
   },
   "dependencies": {

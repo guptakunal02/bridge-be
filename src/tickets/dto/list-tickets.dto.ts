@@ -2,6 +2,7 @@ import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -123,4 +124,26 @@ export class ListTicketsQuery {
   @IsOptional()
   @IsEnum(['latest', 'created'])
   sortBy?: TicketSortBy;
+
+  /**
+   * Split OPEN tickets by bot-session membership. Matches the
+   * client-side Open/Bot tab divide:
+   *   true   → only OPEN tickets with an ACTIVE bot_session and
+   *            assignee=BOT user (the "Bot" tab's set)
+   *   false  → OPEN tickets WITHOUT an active bot session (the
+   *            "Open" tab's set after the bot rows have moved aside)
+   *   unset  → no bot-session filter (legacy behaviour; `list` does
+   *            a client-side split on the response)
+   * Primarily used by the inbox "Select all N matching" affordance
+   * so the bulk endpoint resolves to the same slice the agent
+   * actually sees.
+   */
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  botActive?: boolean;
 }

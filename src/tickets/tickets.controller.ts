@@ -29,6 +29,7 @@ import {
 import { CreateTicketNoteDto } from './dto/create-ticket-note.dto';
 import { ListCustomerOrdersQuery } from './dto/list-customer-orders.dto';
 import { ListTicketsQuery } from './dto/list-tickets.dto';
+import { ResolvedCountQuery } from './dto/resolved-count.dto';
 import { ReplyTicketDto } from './dto/reply-ticket.dto';
 import { SendTemplateDto } from './dto/send-template.dto';
 import {
@@ -67,6 +68,20 @@ export class TicketsController {
   }
 
   /**
+   * Count of my MARKED_RESOLVED activities inside an IST date range.
+   * Both bounds default to today when missing, giving the same number
+   * as myStats.resolvedTodayByMe. Backs the inbox's "Resolved" tile
+   * once the member has picked a custom range from the calendar pill.
+   */
+  @Get('me/resolved-count')
+  myResolvedCount(
+    @Query() query: ResolvedCountQuery,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ count: number; from: string; to: string }> {
+    return this.tickets.myResolvedCount(user, query);
+  }
+
+  /**
    * Per-status counts respecting the same scope/channel filters as
    * GET /tickets. Backs the "N behind each filter" counts on the
    * inbox UI so agents (and admins) can see workload distribution at
@@ -97,9 +112,12 @@ export class TicketsController {
 
   /**
    * Apply the same patch (status / assignee / team / add tags) to
-   * up to 100 tickets in one request. Best-effort per-ticket:
-   * response lists succeeded + failed ids so the FE can show a
-   * partial-success toast rather than a whole-batch error.
+   * either an explicit id list OR every ticket matching a filter.
+   * The explicit path is capped at 100 ids; the filter-based path
+   * (selectAll=true in the body) is capped at IDS_SAFETY_CAP on the
+   * service. Best-effort per-ticket — response lists succeeded +
+   * failed ids so the FE can show a partial-success toast rather
+   * than a whole-batch error.
    *
    * Sits before `:id` on purpose — Nest routes `POST /tickets/bulk`
    * to this before it can be greedy-matched by any `:id` variant.

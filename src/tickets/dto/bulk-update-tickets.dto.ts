@@ -1,8 +1,9 @@
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
-  ArrayNotEmpty,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsIn,
   IsOptional,
@@ -11,8 +12,11 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  ValidateNested,
+  ValidateIf,
 } from 'class-validator';
 import { TicketStatus } from '../../database/enums';
+import { ListTicketsQuery } from './list-tickets.dto';
 
 /**
  * Payload for POST /tickets/bulk. Applies the same patch to a
@@ -40,18 +44,54 @@ const BULK_STATUS_OPTIONS: TicketStatus[] = [
 
 export class BulkUpdateTicketsDto {
   /**
-   * Ticket ids to patch. Cap 100 — anything more should be a
-   * saved-view "resolve all matching" server-side action rather
-   * than a UI batch. Each id is validated as a positive-integer
-   * string so ParseBigintIdPipe-style precision loss can't sneak
-   * in via the body.
+   * Ticket ids to patch. Required unless `selectAll` is true. Cap
+   * 100 — explicit multi-select from the inbox is a one-page batch,
+   * anything bigger goes through the filter-based path below. Each
+   * id is validated as a positive-integer string so ParseBigintId
+   * Pipe-style precision loss can't sneak in via the body.
    */
+  @ValidateIf((o: BulkUpdateTicketsDto) => o.selectAll !== true)
   @IsArray()
-  @ArrayNotEmpty()
   @ArrayMaxSize(100)
   @ArrayUnique()
   @Matches(/^[1-9]\d{0,18}$/, { each: true })
-  ticketIds!: string[];
+  ticketIds?: string[];
+
+  /**
+   * "Apply to every ticket matching `filter`, minus `excludeIds`."
+   * Mutually exclusive with the explicit `ticketIds` path. Service
+   * resolves the full id set via TicketsService.listIds (capped at
+   * IDS_SAFETY_CAP = 10k) before fanning out the per-ticket patches.
+   * Lets the inbox fire one bulk request for "all 573 bot tickets"
+   * without transferring 573 ids over the wire.
+   */
+  @IsOptional()
+  @IsBoolean()
+  selectAll?: boolean;
+
+  /**
+   * Filter used to resolve the target id set when `selectAll=true`.
+   * Shape matches GET /tickets — statuses/scope/channelIds/etc —
+   * so the same validation logic applies to both read and write
+   * paths. Required when selectAll is true, ignored otherwise.
+   */
+  @ValidateIf((o: BulkUpdateTicketsDto) => o.selectAll === true)
+  @ValidateNested()
+  @Type(() => ListTicketsQuery)
+  filter?: ListTicketsQuery;
+
+  /**
+   * Ids to subtract from the filter-resolved set. Supports the
+   * "select all 573, then uncheck a few" UX without the client
+   * needing to send every id it actually wants modified. Cap matches
+   * ticketIds so a pathological client can't abuse this path.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @Matches(/^[1-9]\d{0,18}$/, { each: true })
+  excludeIds?: string[];
 
   @IsOptional()
   @IsEnum(TicketStatus)

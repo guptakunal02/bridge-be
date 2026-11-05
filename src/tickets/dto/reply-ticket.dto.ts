@@ -105,4 +105,21 @@ export class ReplyTicketDto {
   @ValidateNested({ each: true })
   @Type(() => ReplyAttachmentRef)
   attachments?: ReplyAttachmentRef[];
+
+  /**
+   * The Meta `wamid.xxx` of the message this reply is quoting. When
+   * set, WhatsApp sends go out with `context: { message_id }` so the
+   * customer sees a swipe-reply-style quote block above our bubble;
+   * the SENT row also stores this wamid so Bridge's own inbox renders
+   * a matching quote block on the agent's side. Ignored on email
+   * tickets (SMTP has its own In-Reply-To threading).
+   *
+   * Format matches Meta's wamid shape: a base64-ish string of up to
+   * 128 chars — we don't crack it open, just pass through.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  replyToExternalMessageId?: string;
 }

@@ -70,6 +70,16 @@ import { TicketLifecycleService } from './ticket-lifecycle.service';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+/**
+ * Safety cap for `listIds` — "Select all matching" on filters wide
+ * enough to match more than this will silently stop at the cap. In
+ * practice, the inbox counts are the signal: if the count tab says
+ * 573 and we return exactly 10000 we know the cap didn't kick in.
+ * Stops a bulk-select from inadvertently fetching millions of ids
+ * if someone points this at an un-filtered RESOLVED tab five years
+ * from now.
+ */
+const IDS_SAFETY_CAP = 10_000;
 
 /**
  * Every ticket status that is NOT terminal — the ones a member is
@@ -220,6 +230,7 @@ export class TicketsService {
       });
     }
     applyMessageSearch(qb, query.q);
+    applyBotActiveFilter(qb, query.botActive);
     await this.applyScope(qb, query.scope ?? 'all', actingUser, {
       widenForSearch: Boolean(query.q?.trim()),
     });
@@ -256,6 +267,57 @@ export class TicketsService {
         activeBotSessionTicketIds.has(t.id),
       ),
     );
+  }
+
+  /**
+   * Thin companion to `list` — returns ONLY ticket ids for the same
+   * filters. Powers the inbox "Select all N matching" affordance:
+   * the FE loads 100-at-a-time and the human-readable rows need all
+   * the joins + enrichment, but a bulk-modify selection only needs
+   * identifiers. Skipping the joins + the per-row Promise.all of
+   * latest-message / unread / customer-email / bot-session fetches
+   * makes this ~10× cheaper than the full list.
+   *
+   * Unlike `list`, this does NOT accept pagination — the whole point
+   * is "give me every id that matches this filter, up to the safety
+   * cap" so the FE can select-all without paging through the result.
+   */
+  async listIds(
+    query: ListTicketsQuery,
+    actingUser: AuthenticatedUser,
+  ): Promise<string[]> {
+    const qb = this.tickets
+      .createQueryBuilder('t')
+      .select('t.id', 'id')
+      .limit(IDS_SAFETY_CAP);
+
+    if (query.statuses && query.statuses.length > 0) {
+      qb.andWhere('t.status IN (:...statuses)', {
+        statuses: query.statuses,
+      });
+    } else if (query.status) {
+      qb.andWhere('t.status = :status', { status: query.status });
+    }
+    if (query.channelIds && query.channelIds.length > 0) {
+      qb.andWhere('t.channel_id IN (:...channelIds)', {
+        channelIds: query.channelIds,
+      });
+    } else if (query.channelId) {
+      qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
+    }
+    if (query.assigneeIds && query.assigneeIds.length > 0) {
+      qb.andWhere('t.assignee IN (:...assigneeIds)', {
+        assigneeIds: query.assigneeIds,
+      });
+    }
+    applyMessageSearch(qb, query.q);
+    applyBotActiveFilter(qb, query.botActive);
+    await this.applyScope(qb, query.scope ?? 'all', actingUser, {
+      widenForSearch: Boolean(query.q?.trim()),
+    });
+
+    const rows: Array<{ id: string }> = await qb.getRawMany();
+    return rows.map((r) => r.id);
   }
 
   /**
@@ -318,6 +380,64 @@ export class TicketsService {
     const resolvedTodayByMe = Number(resolvedRows[0]?.count ?? 0);
 
     return { teamQueueCount, activeOnMe, resolvedTodayByMe };
+  }
+
+  /**
+   * Count of MARKED_RESOLVED activities authored by the caller inside
+   * an inclusive IST date range. Both bounds are optional — missing
+   * ends default to "today IST", preserving the legacy
+   * `resolvedTodayByMe` semantics. If `from > to` we swap silently so
+   * a user who clicks the end date first + start date second still
+   * gets what they meant.
+   *
+   * Window is expressed as [from 00:00 IST, (to + 1 day) 00:00 IST).
+   * Half-open so Nov 3 – Nov 5 catches every activity on Nov 3, 4,
+   * and 5 without double-counting the midnight boundary.
+   */
+  async myResolvedCount(
+    actingUser: AuthenticatedUser,
+    query: import('./dto/resolved-count.dto').ResolvedCountQuery,
+  ): Promise<{ count: number; from: string; to: string }> {
+    // Today IST — computed once from the DB so we don't drift with
+    // the Node process's timezone. `date_trunc` returns a timestamp;
+    // we format it to YYYY-MM-DD so the FE can compare / store as a
+    // plain calendar date string.
+    const todayRows: Array<{ today: string }> = await this.tickets.query(
+      `SELECT to_char(
+         (NOW() AT TIME ZONE 'Asia/Kolkata')::date,
+         'YYYY-MM-DD'
+       ) AS today`,
+    );
+    const today = todayRows[0]?.today;
+    if (!today) {
+      // Defensive — the query above always returns one row, so this
+      // branch is unreachable. Guard appeases strict TS + protects
+      // against a future refactor swapping the query.
+      throw new Error('Failed to compute today in IST');
+    }
+    let from = query.from ?? today;
+    let to = query.to ?? today;
+    if (from > to) {
+      const swap = from;
+      from = to;
+      to = swap;
+    }
+
+    const rows: Array<{ count: string }> = await this.activity
+      .createQueryBuilder('a')
+      .select('COUNT(a.id)', 'count')
+      .where('a.event = :event', { event: TicketActivity.MARKED_RESOLVED })
+      .andWhere('a.actor_id = :actorId', { actorId: actingUser.id })
+      .andWhere(
+        `a."createdAt" AT TIME ZONE 'Asia/Kolkata' >= :from::date`,
+        { from },
+      )
+      .andWhere(
+        `a."createdAt" AT TIME ZONE 'Asia/Kolkata' < (:to::date + INTERVAL '1 day')`,
+        { to },
+      )
+      .getRawMany();
+    return { count: Number(rows[0]?.count ?? 0), from, to };
   }
 
   /**
@@ -1208,13 +1328,38 @@ export class TicketsService {
   ): Promise<
     import('./dto/bulk-update-tickets.dto').BulkUpdateResult
   > {
+    // Resolve the target id set. Two shapes:
+    //   1. Explicit list — `ticketIds[]` sent by the client (cap 100).
+    //   2. Filter — `selectAll:true + filter` resolved via listIds
+    //      (capped at IDS_SAFETY_CAP). `excludeIds` lets the UI
+    //      support "select all 573, uncheck 5" without transferring
+    //      the 568-id list.
+    let targetIds: string[];
+    if (dto.selectAll) {
+      if (!dto.filter) {
+        throw new BadRequestException(
+          'filter is required when selectAll is true',
+        );
+      }
+      const matching = await this.listIds(dto.filter, actingUser);
+      const exclude = new Set(dto.excludeIds ?? []);
+      targetIds = exclude.size > 0
+        ? matching.filter((id) => !exclude.has(id))
+        : matching;
+    } else {
+      targetIds = dto.ticketIds ?? [];
+    }
+    if (targetIds.length === 0) {
+      return { succeeded: [], failed: [] };
+    }
+
     // Load the current tags for every requested ticket in one round
     // trip so we can compute per-ticket union without one SELECT per
     // patch when the caller supplied addTags.
     const tagOverlay = new Map<string, string[]>();
     if (dto.addTags && dto.addTags.length > 0) {
       const rows = await this.tickets.find({
-        where: { id: In(dto.ticketIds) },
+        where: { id: In(targetIds) },
         select: { id: true, tags: true },
       });
       for (const r of rows) tagOverlay.set(r.id, r.tags ?? []);
@@ -1223,7 +1368,7 @@ export class TicketsService {
     const succeeded: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
 
-    for (const id of dto.ticketIds) {
+    for (const id of targetIds) {
       try {
         const perTicketPatch: {
           status?: TicketStatus;
@@ -1594,6 +1739,17 @@ export class TicketsService {
       );
     }
 
+    // "Quote reply" wamid — if the agent clicked Reply on a specific
+    // bubble in the inbox, this is the wamid of that message. Attaches
+    // to the FIRST outbound in this batch (media if present, else the
+    // text), matching how WhatsApp mobile treats a swipe-reply with a
+    // multi-part message: the quote banner sits on the first bubble
+    // the recipient sees. Subsequent messages in the same batch go
+    // as fresh (unquoted) sends — a single reply can only quote one
+    // thing.
+    const replyToWamid = dto.replyToExternalMessageId;
+    let replyToConsumed = false;
+
     // Collect every send that succeeded on Meta's side — we persist
     // all of them in a single commit at the end, so a late persist
     // failure logs a divergence record covering every outbound.
@@ -1606,6 +1762,9 @@ export class TicketsService {
       mediaUrl: string | null;
       mediaMime: string | null;
       mediaSize: number | null;
+      /** Wamid this specific message is quoting. Null when it isn't a
+       *  quote reply — only the first send in a batch carries this. */
+      repliedToWamid: string | null;
     }
     const sent: PendingSend[] = [];
 
@@ -1622,13 +1781,16 @@ export class TicketsService {
           ref.contentType,
           ref.filename,
         );
+        const quoteNow = replyToWamid && !replyToConsumed ? replyToWamid : undefined;
         const { wamid, raw } = await this.whatsappSender.sendMedia(
           inbound.sender,
           kind,
           mediaId,
           undefined,
           ref.filename,
+          quoteNow ? { replyToWamid: quoteNow } : undefined,
         );
+        if (quoteNow) replyToConsumed = true;
         sent.push({
           wamid,
           raw,
@@ -1640,16 +1802,20 @@ export class TicketsService {
           mediaUrl: ref.storageUrl,
           mediaMime: ref.contentType,
           mediaSize: ref.sizeBytes,
+          repliedToWamid: quoteNow ?? null,
         });
       }
 
       // 2. Text body — if the agent typed one, goes out as its own
       //    message after all media. Follows WhatsApp Web ordering.
       if (trimmed) {
+        const quoteNow = replyToWamid && !replyToConsumed ? replyToWamid : undefined;
         const { wamid, raw } = await this.whatsappSender.sendText(
           inbound.sender,
           trimmed,
+          quoteNow ? { replyToWamid: quoteNow } : undefined,
         );
+        if (quoteNow) replyToConsumed = true;
         sent.push({
           wamid,
           raw,
@@ -1658,6 +1824,7 @@ export class TicketsService {
           mediaUrl: null,
           mediaMime: null,
           mediaSize: null,
+          repliedToWamid: quoteNow ?? null,
         });
       }
     } catch (sendErr) {
@@ -1885,6 +2052,7 @@ export class TicketsService {
       mediaUrl: string | null;
       mediaMime: string | null;
       mediaSize: number | null;
+      repliedToWamid: string | null;
     }>,
     actingUser: AuthenticatedUser,
   ): Promise<void> {
@@ -1910,6 +2078,10 @@ export class TicketsService {
             // bigint column — TypeORM wants a string on the write path
             // too. null stays null for text sends.
             media_size_bytes: s.mediaSize === null ? null : String(s.mediaSize),
+            // Symmetric with inbound: stamp the quoted wamid so the FE
+            // renders the quote block above our bubble in the ticket
+            // view, same way it does for customer-side swipe replies.
+            replied_to_external_message_id: s.repliedToWamid,
           }),
         ),
       );
@@ -2358,6 +2530,37 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * (thousands of rows); add pg_trgm + GIN indexes if the inbox
  * grows past ~50k messages.
  */
+/**
+ * Mirror of the FE's "Bot" vs "Open" tab split on the server side.
+ * `true`  — only OPEN tickets with an ACTIVE bot_session AND assignee
+ *           = BOT user (the "Bot" tab's set)
+ * `false` — OPEN tickets WITHOUT the above (the "Open" tab's set
+ *           after bot sessions have moved aside)
+ * `undefined` — no-op
+ *
+ * Uses EXISTS semantics rather than INNER JOIN so the predicate
+ * composes cleanly with other filters (no duplicate rows from a
+ * malformed join; the `false` branch gets a straightforward NOT
+ * EXISTS wrapper).
+ */
+function applyBotActiveFilter(
+  qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
+  botActive: boolean | undefined,
+): void {
+  if (botActive === undefined) return;
+  const op = botActive ? 'EXISTS' : 'NOT EXISTS';
+  qb.andWhere(
+    `${op} (
+       SELECT 1
+         FROM public.bot_session bs
+         INNER JOIN public."user" u ON u.id = t.assignee
+        WHERE bs.ticket_id = t.id
+          AND bs.status = 'active'
+          AND u.role = 'BOT'
+     )`,
+  );
+}
+
 function applyMessageSearch(
   qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
   raw: string | undefined,
