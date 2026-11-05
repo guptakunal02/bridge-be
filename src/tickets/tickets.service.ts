@@ -498,20 +498,15 @@ export class TicketsService {
     const waiting = by.get(TicketStatus.WAITING) ?? 0;
     const resolved = by.get(TicketStatus.RESOLVED) ?? 0;
 
-    // Bot count — same scope / channel / assignee / search filters as
-    // the status counts above, but joined with bot_session + the user
-    // table to pick out OPEN tickets where the bot is actively
-    // driving. "Actively driving" = active session AND assignee is
-    // the BOT user; a human reassignment flips the ticket off the
-    // Bot tab even if the session row happens to still be ACTIVE.
+    // Bot count — same scope / channel / search filters as the
+    // status counts above, filtered to OPEN tickets whose assignee
+    // is the BOT user. No bot_session join: Groot can hold a ticket
+    // even after the session row ages out of 'active' (automation
+    // dispatches reply-events without bumping it), and the agent-
+    // facing mental model is "who currently owns it", not "is the
+    // bot still RECORD-level active".
     const botQb = this.tickets
       .createQueryBuilder('t')
-      .innerJoin(
-        'bot_session',
-        'bs',
-        'bs.ticket_id = t.id AND bs.status = :botActive',
-        { botActive: 'active' },
-      )
       .innerJoin('user', 'u', 'u.id = t.assignee AND u.role = :botRole', {
         botRole: 'BOT',
       })
@@ -2531,17 +2526,23 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * grows past ~50k messages.
  */
 /**
- * Mirror of the FE's "Bot" vs "Open" tab split on the server side.
- * `true`  — only OPEN tickets with an ACTIVE bot_session AND assignee
- *           = BOT user (the "Bot" tab's set)
- * `false` — OPEN tickets WITHOUT the above (the "Open" tab's set
- *           after bot sessions have moved aside)
- * `undefined` — no-op
+ * "Bot" vs "Open" tab split on the server side. Keyed off the
+ * ticket's ASSIGNEE role only:
+ *   `true`  — assignee is the BOT user (Groot holds the ticket;
+ *             goes under the Bot tab)
+ *   `false` — assignee is anyone else (human) OR null (email
+ *             tickets waiting in the unassigned queue; both
+ *             go under the Open tab)
+ *   `undefined` — no-op
  *
- * Uses EXISTS semantics rather than INNER JOIN so the predicate
- * composes cleanly with other filters (no duplicate rows from a
- * malformed join; the `false` branch gets a straightforward NOT
- * EXISTS wrapper).
+ * Earlier version also required an ACTIVE bot_session row on top of
+ * the BOT-assignee check. That created a drift: Groot can hold a
+ * ticket even after the session row ages out of 'active' (Shopify
+ * event dispatcher replies but the bot session isn't bumped), and
+ * such tickets kept showing under Open despite the assignee still
+ * being Groot. Assignee-only matches the agent's mental model —
+ * "who currently owns it" — and matches what the FE renders in the
+ * row footer.
  */
 function applyBotActiveFilter(
   qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
@@ -2552,10 +2553,8 @@ function applyBotActiveFilter(
   qb.andWhere(
     `${op} (
        SELECT 1
-         FROM public.bot_session bs
-         INNER JOIN public."user" u ON u.id = t.assignee
-        WHERE bs.ticket_id = t.id
-          AND bs.status = 'active'
+         FROM public."user" u
+        WHERE u.id = t.assignee
           AND u.role = 'BOT'
      )`,
   );
