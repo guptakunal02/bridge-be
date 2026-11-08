@@ -367,7 +367,10 @@ export class TicketsService {
             'tm.team_id = t.team_id AND tm.user_id = :userId AND tm.paused_in_team = false',
             { userId: actingUser.id },
           )
-          .where('t.assignee = :botId', { botId })
+          // Unassigned queue = both NULL (new model) and BOT-parked
+          // (legacy / WhatsApp handoff sentinel). See migration
+          // 1726490000000 for the overall shift.
+          .where('(t.assignee = :botId OR t.assignee IS NULL)', { botId })
           .andWhere('t.status IN (:...open)', { open: OPEN_STATUSES })
           .andWhere('t."deletedAt" IS NULL')
           .getCount()
@@ -512,15 +515,26 @@ export class TicketsService {
     const waiting = by.get(TicketStatus.WAITING) ?? 0;
     const resolved = by.get(TicketStatus.RESOLVED) ?? 0;
 
-    // Bot count — same scope / channel / search filters as the
-    // status counts above, filtered to OPEN tickets whose assignee
-    // is the BOT user. No bot_session join: Groot can hold a ticket
-    // even after the session row ages out of 'active' (automation
-    // dispatches reply-events without bumping it), and the agent-
-    // facing mental model is "who currently owns it", not "is the
-    // bot still RECORD-level active".
+    // Bot count — OPEN tickets where Groot is ACTIVELY driving the
+    // conversation: active bot_session row AND assignee = BOT user.
+    // Both halves matter:
+    //   - no bot_session           → ticket was never in a bot flow
+    //                                (email ticket parked to BOT
+    //                                because no live member was
+    //                                Online; still counts as "In
+    //                                queue" / Open, not Bot)
+    //   - bot_session but inactive → Groot handed off to a human who
+    //                                hasn't picked it up yet; the
+    //                                live-driver semantics are gone
+    //                                so it leaves the Bot tab
     const botQb = this.tickets
       .createQueryBuilder('t')
+      .innerJoin(
+        'bot_session',
+        'bs',
+        'bs.ticket_id = t.id AND bs.status = :botActive',
+        { botActive: 'active' },
+      )
       .innerJoin('user', 'u', 'u.id = t.assignee AND u.role = :botRole', {
         botRole: 'BOT',
       })
@@ -2149,13 +2163,21 @@ export class TicketsService {
       return;
     }
     if (scope === 'unassigned') {
+      // Unassigned covers both NULL (post-migration unassigned
+      // queue) and BOT-parked (legacy, and WhatsApp handoff
+      // sentinel). The BOT lookup is still needed because WhatsApp
+      // still parks to BOT on reroute. If BOT isn't seeded, fall
+      // back to NULL-only; prior behaviour returned nothing which
+      // broke /my/stats for admins immediately after a fresh BE
+      // deploy.
       const bot = await loadBot(this.users);
-      if (!bot) {
-        // No bot seeded means no ticket can be "unassigned" under this model.
-        qb.andWhere('1 = 0');
-        return;
+      if (bot) {
+        qb.andWhere('(t.assignee IS NULL OR t.assignee = :botId)', {
+          botId: bot.id,
+        });
+      } else {
+        qb.andWhere('t.assignee IS NULL');
       }
-      qb.andWhere('t.assignee = :botId', { botId: bot.id });
     }
   }
 
@@ -2540,23 +2562,23 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * grows past ~50k messages.
  */
 /**
- * "Bot" vs "Open" tab split on the server side. Keyed off the
- * ticket's ASSIGNEE role only:
- *   `true`  — assignee is the BOT user (Groot holds the ticket;
- *             goes under the Bot tab)
- *   `false` — assignee is anyone else (human) OR null (email
- *             tickets waiting in the unassigned queue; both
- *             go under the Open tab)
+ * "Bot" vs "Open" tab split on the server side. "Bot" = Groot is
+ * ACTIVELY driving the conversation, which requires both:
+ *   - assignee = BOT user   (Groot owns the ticket), AND
+ *   - an ACTIVE bot_session row on the ticket.
+ *
+ *   `true`  — passes the above conjunction (Bot tab)
+ *   `false` — fails EITHER condition (Open tab + unassigned queue).
+ *             Covers email tickets parked to BOT when no live
+ *             members were online (BOT assignee, no bot_session row
+ *             at all) — those read as "In queue" in the row footer
+ *             and belong in Open, not Bot.
  *   `undefined` — no-op
  *
- * Earlier version also required an ACTIVE bot_session row on top of
- * the BOT-assignee check. That created a drift: Groot can hold a
- * ticket even after the session row ages out of 'active' (Shopify
- * event dispatcher replies but the bot session isn't bumped), and
- * such tickets kept showing under Open despite the assignee still
- * being Groot. Assignee-only matches the agent's mental model —
- * "who currently owns it" — and matches what the FE renders in the
- * row footer.
+ * Simpler assignee-only earlier version regressed: email parked
+ * tickets (BOT assignee, no bot_session) leaked into Bot. The
+ * bot_session predicate is what separates "Groot actively driving"
+ * from "parked by the ingest router".
  */
 function applyBotActiveFilter(
   qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
@@ -2567,8 +2589,10 @@ function applyBotActiveFilter(
   qb.andWhere(
     `${op} (
        SELECT 1
-         FROM public."user" u
-        WHERE u.id = t.assignee
+         FROM public.bot_session bs
+         INNER JOIN public."user" u ON u.id = t.assignee
+        WHERE bs.ticket_id = t.id
+          AND bs.status = 'active'
           AND u.role = 'BOT'
      )`,
   );

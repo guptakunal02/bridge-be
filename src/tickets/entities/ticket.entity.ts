@@ -50,12 +50,19 @@ export class Ticket {
   @JoinColumn({ name: 'team_id' })
   team!: Team;
 
-  @Column({ type: 'uuid' })
-  assignee!: string;
+  // Nullable from migration 1726490000000 onwards. NULL means the
+  // ticket is parked in the unassigned queue (no live member was
+  // online at ingest, OR a member went offline and the ticket was
+  // bounced back). Previously overloaded with BOT user id for the
+  // same meaning; BOT assignee now exclusively signals "Groot is
+  // actively driving a WhatsApp conversation" paired with an active
+  // bot_session row.
+  @Column({ type: 'uuid', nullable: true })
+  assignee!: string | null;
 
-  @ManyToOne(() => User)
+  @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'assignee' })
-  assigneeUser!: User;
+  assigneeUser!: User | null;
 
   @Column({ type: 'enum', enum: TicketStatus })
   status!: TicketStatus;

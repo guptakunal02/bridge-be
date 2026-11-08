@@ -358,17 +358,19 @@ export class EmailInboxService {
               mgr,
             );
           }
-          // New-ticket initial assignee is always BOT — the picker
-          // decides the real human target, but the ticket is parked
-          // on BOT so the drain loop can pull FIFO. loadBot() returns
-          // null if missing; a missing BOT at ticket-mint time is a
-          // deployment misconfiguration we can't recover from, so
-          // throw a loud error (findOneOrFail-equivalent).
+          // Email tickets have no bot runtime, so "parked to BOT"
+          // never made semantic sense. Since migration
+          // 1726490000000 the ticket.assignee column is nullable and
+          // the drain / member-presence code paths handle NULL
+          // alongside BOT. If the picker returned BOT (no live
+          // members), store NULL — the UI reads NULL + OPEN as
+          // "In queue" without the overloaded-BOT hack.
           const bot = await loadBot(mgr);
           if (!bot) {
             throw new Error('BOT user not seeded — cannot mint ticket');
           }
-          const initialAssigneeId = bot.id;
+          const initialAssigneeId: string | null =
+            pickedAssigneeId === bot.id ? null : pickedAssigneeId;
           ticket = await ticketRepo.save(
             ticketRepo.create({
               channel_id: channelId,
@@ -1032,22 +1034,22 @@ export class EmailInboxService {
       }${matchedTail}`,
     });
 
-    // Decide whether the current assignee follows or the ticket
-    // gets parked on BOT for the new team's picker to backfill.
-    let nextAssignee = ticket.assignee;
-    const currentUser = await mgr.getRepository(User).findOne({
-      where: { id: ticket.assignee },
-    });
-    if (currentUser && currentUser.role !== UserRole.BOT) {
-      const stillMember = await mgr.getRepository(TeamMember).findOne({
-        where: { team_id: nextTeamId, user_id: ticket.assignee },
+    // Decide whether the current assignee follows the reroute or
+    // the ticket gets kicked back to the unassigned queue
+    // (`assignee = null`) for the new team's picker to backfill.
+    // Already-null assignees stay null — nothing to re-park.
+    let nextAssignee: string | null = ticket.assignee;
+    if (ticket.assignee !== null) {
+      const currentUser = await mgr.getRepository(User).findOne({
+        where: { id: ticket.assignee },
       });
-      if (!stillMember) {
-        const bot = await loadBot(mgr);
-        if (!bot) {
-          throw new Error('BOT user not seeded — cannot reroute to BOT queue');
+      if (currentUser && currentUser.role !== UserRole.BOT) {
+        const stillMember = await mgr.getRepository(TeamMember).findOne({
+          where: { team_id: nextTeamId, user_id: ticket.assignee },
+        });
+        if (!stillMember) {
+          nextAssignee = null;
         }
-        nextAssignee = bot.id;
       }
     }
 

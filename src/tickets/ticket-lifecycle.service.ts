@@ -752,27 +752,23 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
           .getMany();
         if (openTickets.length === 0) return;
 
-        const bot = await loadBot(mgr);
-        if (!bot) {
-          // Keep the status change but surface the warning so admin
-          // can seed the BOT user. Prevents orphaning on a dead id.
-          this.logger.warn(
-            `EMERGENCY bounce skipped for user=${payload.userId}: no BOT user found`,
-          );
-          return;
-        }
-
+        // Park back to the unassigned queue (NULL) rather than onto
+        // BOT. BOT assignee is reserved for "Groot actively driving"
+        // and would mis-route email tickets into the Bot tab. The
+        // capacity-backfill loop picks up both NULL and BOT tickets
+        // when another member comes online, so either shape would
+        // drain — NULL keeps the data model honest.
         await ticketRepo
           .createQueryBuilder()
           .update()
-          .set({ assignee: bot.id })
+          .set({ assignee: null })
           .whereInIds(openTickets.map((t) => t.id))
           .execute();
 
         await logRepo.save(
           openTickets.map((t) => ({
             ticket_id: t.id,
-            event: TicketActivity.ASSIGNED_TO_BOT,
+            event: TicketActivity.SENT_BACK_TO_QUEUE,
             actor_id: null,
             log: 'Re-queued — assignee set status to EMERGENCY',
           })),
@@ -874,7 +870,11 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         { userId },
       )
       .innerJoin('team', 'team', 'team.id = t.team_id')
-      .where('t.assignee = :botId', { botId: bot.id })
+      // Both NULL-assigned (new unassigned queue) and legacy BOT-
+      // parked tickets drain to this member. The two co-exist during
+      // the TicketAssigneeNullable rollout window + afterwards for
+      // WhatsApp where BOT parking is still the handoff sentinel.
+      .where('(t.assignee = :botId OR t.assignee IS NULL)', { botId: bot.id })
       .andWhere('t.status = :openStatus', { openStatus: TicketStatus.OPEN })
       .andWhere('t."deletedAt" IS NULL')
       .andWhere('team.assignment_paused = false')
@@ -921,7 +921,11 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
         { userId },
       )
       .innerJoin('team', 'team', 'team.id = t.team_id')
-      .where('t.assignee = :botId', { botId: bot.id })
+      // Both NULL-assigned (new unassigned queue) and legacy BOT-
+      // parked tickets drain to this member. The two co-exist during
+      // the TicketAssigneeNullable rollout window + afterwards for
+      // WhatsApp where BOT parking is still the handoff sentinel.
+      .where('(t.assignee = :botId OR t.assignee IS NULL)', { botId: bot.id })
       .andWhere('t.status = :openStatus', { openStatus: TicketStatus.OPEN })
       .andWhere('t."deletedAt" IS NULL')
       .andWhere('team.assignment_paused = false')
