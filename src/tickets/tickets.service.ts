@@ -1048,20 +1048,34 @@ export class TicketsService {
         ticket.assigneeUser?.role !== UserRole.BOT;
 
       if (dto.assigneeId !== undefined && dto.assigneeId !== ticket.assignee) {
-        const nextUser = await userRepo.findOne({
-          where: { id: dto.assigneeId },
-        });
-        if (!nextUser) {
-          throw new NotFoundException('Assignee user not found');
+        if (dto.assigneeId === null) {
+          // Admin manually unassigned via the sidebar dropdown —
+          // park back in the unassigned queue. Treated as freeing
+          // capacity (same as a reassign-away) so the drain backfill
+          // can pull the vacated slot for another member.
+          const prevName = ticket.assigneeUser?.name ?? 'assignee';
+          patch.assignee = null;
+          if (heldOpenByHuman) freedCapacityFor = ticket.assignee;
+          logs.push({
+            event: TicketActivity.SENT_BACK_TO_QUEUE,
+            log: `Unassigned ${prevName} — sent back to queue by ${actorLabel(actingUser)}`,
+          });
+        } else {
+          const nextUser = await userRepo.findOne({
+            where: { id: dto.assigneeId },
+          });
+          if (!nextUser) {
+            throw new NotFoundException('Assignee user not found');
+          }
+          const prevRole = ticket.assigneeUser?.role ?? null;
+          const event = pickAssigneeEvent(prevRole, nextUser.role);
+          patch.assignee = nextUser.id;
+          if (heldOpenByHuman) freedCapacityFor = ticket.assignee;
+          logs.push({
+            event,
+            log: `Assignee changed to ${nextUser.name} (${nextUser.role}) by ${actorLabel(actingUser)}`,
+          });
         }
-        const prevRole = ticket.assigneeUser?.role ?? null;
-        const event = pickAssigneeEvent(prevRole, nextUser.role);
-        patch.assignee = nextUser.id;
-        if (heldOpenByHuman) freedCapacityFor = ticket.assignee;
-        logs.push({
-          event,
-          log: `Assignee changed to ${nextUser.name} (${nextUser.role}) by ${actorLabel(actingUser)}`,
-        });
       }
 
       if (dto.teamId !== undefined && dto.teamId !== ticket.team_id) {

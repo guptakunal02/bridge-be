@@ -12,6 +12,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { TicketStatus, WaitingAction } from '../../database/enums';
 
@@ -49,9 +50,17 @@ export class UpdateTicketDto {
   @IsEnum(WaitingAction)
   waitingAction?: WaitingAction;
 
+  /**
+   * UUID of the new assignee, OR explicit `null` to kick the ticket
+   * back into the unassigned FIFO queue. `undefined` (field omitted)
+   * means "don't touch the assignee." The null path is admin-only
+   * and is how we support "unassign from the sidebar dropdown"
+   * without introducing a second endpoint.
+   */
   @IsOptional()
+  @ValidateIf((_, value) => value !== null)
   @IsUUID()
-  assigneeId?: string;
+  assigneeId?: string | null;
 
   /**
    * Force-move the ticket to a different team. Bypasses the routing
