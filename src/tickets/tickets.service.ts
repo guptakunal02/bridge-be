@@ -2619,35 +2619,56 @@ function applyMessageSearch(
   const q = raw?.trim();
   if (!q) return;
 
-  // If the query looks like a ticket id ("831" or "#831") we OR-in
-  // an exact-id predicate. Substring text search stays in place so
-  // typing "831" on a ticket whose subject mentions "Order #831"
-  // still surfaces that ticket too. Non-numeric input skips the id
-  // branch entirely.
+  // Ticket-id branch: "831" or "#831" OR-in an exact id predicate.
   const idCandidate = q.replace(/^#/, '');
   const isNumericId = /^\d+$/.test(idCandidate);
+
+  // Phone branch: input containing +, spaces, dashes, or long digit
+  // runs → treat as a phone query and match stripped digits against
+  // the message.sender column (holds the wa_id for WhatsApp inbound).
+  // Also match against the ticket.thread_key which encodes the
+  // customer's wa_id as `wa:<digits>[:archived:...]`, so OUTBOUND
+  // messages on the same thread still surface the ticket.
+  // "Phone-like" heuristic: ≥6 digits after stripping — enough to
+  // avoid false positives on "831" but still match partials like
+  // "85699".
+  const digits = q.replace(/\D/g, '');
+  const isPhoneLike =
+    digits.length >= 6 && /[+\-\s(]/.test(q) === false
+      ? digits.length >= 10
+      : digits.length >= 6;
+
+  const conditions: string[] = [
+    `m.sender ILIKE :bridgeQ`,
+    `m.subject ILIKE :bridgeQ`,
+  ];
+  const params: Record<string, string> = { bridgeQ: `%${q}%` };
+
+  if (isPhoneLike) {
+    // Match against normalized-digits sender (handles "+91 98716 81656"
+    // typed by agent → stored "919871681656") + ticket thread_key.
+    conditions.push(`m.sender ILIKE :bridgeDigits`);
+    conditions.push(`t.thread_key LIKE :bridgeWaKey`);
+    params.bridgeDigits = `%${digits}%`;
+    params.bridgeWaKey = `wa:%${digits}%`;
+  }
+
+  const existsPredicate = `EXISTS (
+         SELECT 1 FROM public.message m
+          WHERE m.ticket_id = t.id
+            AND (${conditions.join(' OR ')})
+       )`;
 
   if (isNumericId) {
     qb.andWhere(
       `(
          t.id::text = :bridgeIdExact
-         OR EXISTS (
-           SELECT 1 FROM public.message m
-            WHERE m.ticket_id = t.id
-              AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
-         )
+         OR ${existsPredicate}
        )`,
-      { bridgeIdExact: idCandidate, bridgeQ: `%${q}%` },
+      { bridgeIdExact: idCandidate, ...params },
     );
   } else {
-    qb.andWhere(
-      `EXISTS (
-         SELECT 1 FROM public.message m
-          WHERE m.ticket_id = t.id
-            AND (m.sender ILIKE :bridgeQ OR m.subject ILIKE :bridgeQ)
-       )`,
-      { bridgeQ: `%${q}%` },
-    );
+    qb.andWhere(existsPredicate, params);
   }
 }
 

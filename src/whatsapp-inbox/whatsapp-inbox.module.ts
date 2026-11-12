@@ -18,6 +18,8 @@ import { WhatsappTemplate } from './entities/whatsapp-template.entity';
 import { WhatsappSignatureGuard } from './guards/whatsapp-signature.guard';
 import { TemplateVariableResolverService } from './template-variable-resolver.service';
 import { WhatsappChannelAdapter } from './whatsapp-channel-adapter';
+import { WhatsappHistoryController } from './whatsapp-history.controller';
+import { WhatsappHistoryService } from './whatsapp-history.service';
 import { WhatsappIngestService } from './whatsapp-ingest.service';
 import { WhatsappMediaUploadService } from './whatsapp-media-upload.service';
 import { WhatsappReachEstimateService } from './whatsapp-reach-estimate.service';
@@ -88,7 +90,11 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // team-attribute rules apply to WhatsApp too, not just email.
     RulesModule,
   ],
-  controllers: [WhatsappWebhookController, WhatsappTemplatesController],
+  controllers: [
+    WhatsappWebhookController,
+    WhatsappTemplatesController,
+    WhatsappHistoryController,
+  ],
   providers: [
     WhatsappWebhookService,
     WhatsappIngestService,
@@ -96,6 +102,7 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     WhatsappTemplatesService,
     WhatsappMediaUploadService,
     WhatsappReachEstimateService,
+    WhatsappHistoryService,
     TemplateVariableResolverService,
     WhatsappSignatureGuard,
     WhatsappChannelAdapter,
