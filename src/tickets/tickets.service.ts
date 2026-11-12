@@ -756,7 +756,7 @@ export class TicketsService {
       // channel-specific extras — attachments for email, raw media
       // metadata for whatsapp when V3 renders it — and those belong
       // on the typed entity, not a stripped projection.
-      this.loadDetailMessages(ticket.channel_type, chainIds),
+      this.loadDetailMessages(ticket.channel_type, chainIds, ticket),
       // Activity log stays scoped to THIS ticket. Ancestor activity
       // is operational (assignments, timers, etc.) and belongs to
       // each ticket individually.
@@ -805,6 +805,7 @@ export class TicketsService {
   private async loadDetailMessages(
     channel: ChannelType,
     chainIds: string[],
+    ticket: Ticket,
   ): Promise<EmailMessage[]> {
     // Hotfix caps — root cause of the Oct 29 OOM-kill cluster. A single
     // email ticket thread returned 24 MB of JSON (ticket 1956); at
@@ -831,6 +832,40 @@ export class TicketsService {
         order: { createdAt: 'DESC' },
         take: MAX_MESSAGES,
       });
+
+      // Blend in ticketless automation sends + broadcast sends to the
+      // same customer that landed within the ticket chain's lifetime.
+      // Without this an agent working on the ticket couldn't see
+      // utility templates (order_confirmation, shipped, etc.) or
+      // marketing broadcasts the customer received — only direct
+      // ticket-path messages. Window = [earliest chain ticket's
+      // createdAt, latest chain ticket's updatedAt]; keeps noise out
+      // of long-dormant threads while still surfacing sends that
+      // actually happened during this case's life.
+      const customerWaId = extractWaIdFromThreadKey(ticket.thread_key);
+      if (customerWaId) {
+        const chainWindow = await this.fetchChainWindow(chainIds);
+        if (chainWindow) {
+          const [ticketlessRows, broadcastRows] = await Promise.all([
+            this.fetchTicketlessSendsInWindow(
+              customerWaId,
+              chainWindow.start,
+              chainWindow.end,
+            ),
+            this.fetchBroadcastSendsInWindow(
+              customerWaId,
+              chainWindow.start,
+              chainWindow.end,
+            ),
+          ]);
+          rows.push(...ticketlessRows, ...broadcastRows);
+          // Re-sort DESC and re-cap after the union so the merged
+          // stream still obeys the 500-row ceiling.
+          rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+          if (rows.length > MAX_MESSAGES) rows.length = MAX_MESSAGES;
+        }
+      }
+
       // DESC fetch gives us the newest-first slice; reverse so the
       // mapper sees the familiar chronological order it expects.
       rows.reverse();
@@ -2279,6 +2314,136 @@ export class TicketsService {
     for (const r of rows) out.add(String(r.ticket_id));
     return out;
   }
+
+  /**
+   * Min(createdAt) and max(updatedAt) across the chain tickets.
+   * Defines the [start, end] window used to blend in ticketless
+   * automation sends + broadcasts for this ticket's customer. Any
+   * row outside that window is irrelevant context for the current
+   * case.
+   */
+  private async fetchChainWindow(
+    chainIds: string[],
+  ): Promise<{ start: Date; end: Date } | null> {
+    if (chainIds.length === 0) return null;
+    const row = (await this.dataSource.query(
+      `SELECT MIN(t."createdAt") AS start, MAX(t."updatedAt") AS "end"
+         FROM ticket t
+        WHERE t.id = ANY($1::bigint[])`,
+      [chainIds],
+    )) as Array<{ start: Date | null; end: Date | null }>;
+    const r = row[0];
+    if (!r || !r.start || !r.end) return null;
+    return { start: r.start, end: r.end };
+  }
+
+  /**
+   * Automation-fired template sends that landed to this customer with
+   * NO owning ticket (send_whatsapp_template on a webhook event, or a
+   * cross-channel ticket-path send). Scoped to the ticket chain's
+   * time window so an agent sees exactly the sends that happened
+   * during this case's life.
+   */
+  private async fetchTicketlessSendsInWindow(
+    customerWaId: string,
+    start: Date,
+    end: Date,
+  ): Promise<WhatsappMessage[]> {
+    return this.whatsapps
+      .createQueryBuilder('m')
+      .where('m.recipient_wa_id = :waId', { waId: customerWaId })
+      .andWhere('m.ticket_id IS NULL')
+      .andWhere('m."createdAt" BETWEEN :start AND :end', { start, end })
+      .orderBy('m."createdAt"', 'DESC')
+      .limit(200)
+      .getMany();
+  }
+
+  /**
+   * Marketing broadcast rows for this customer within the chain
+   * window. broadcast_recipient is a separate persistence surface
+   * from whatsapp_message — we synthesize WhatsappMessage-shaped
+   * objects at read time so they flow through the same
+   * adaptWhatsappMessage mapper as everything else. Only sends that
+   * actually left the door (status in SENT/DELIVERED/READ) are
+   * surfaced; failed/pending rows would mislead the agent.
+   */
+  private async fetchBroadcastSendsInWindow(
+    customerWaId: string,
+    start: Date,
+    end: Date,
+  ): Promise<WhatsappMessage[]> {
+    const rows = (await this.dataSource.query(
+      `SELECT br.id, br.phone AS recipient, br.wam_id, br.sent_at,
+              br.variables_resolved, b.channel_id, b.name AS broadcast_name,
+              wt.name AS template_name, wt.language, wt.body AS template_body
+         FROM broadcast_recipient br
+         JOIN broadcast b ON b.id = br.broadcast_id
+         JOIN whatsapp_template wt ON wt.id = b.template_id
+        WHERE br.phone = $1
+          AND br.sent_at BETWEEN $2 AND $3
+          AND br.status IN ('SENT','DELIVERED','READ')
+        ORDER BY br.sent_at DESC
+        LIMIT 100`,
+      [customerWaId, start, end],
+    )) as Array<{
+      id: string;
+      recipient: string;
+      wam_id: string;
+      sent_at: Date;
+      variables_resolved: Array<string | null> | null;
+      channel_id: string;
+      broadcast_name: string;
+      template_name: string;
+      language: string;
+      template_body: string;
+    }>;
+    return rows.map((r) => {
+      // Positional body render — broadcast_recipient.variables_resolved
+      // is an ordered array matching the template's variableMapping.
+      // {{1}} = variables[0], {{2}} = variables[1], etc.
+      let body = r.template_body ?? '';
+      if (Array.isArray(r.variables_resolved)) {
+        r.variables_resolved.forEach((v, i) => {
+          body = body.split(`{{${i + 1}}}`).join(v ?? '');
+        });
+      }
+      const synthetic: Partial<WhatsappMessage> = {
+        id: r.id,
+        channelId: r.channel_id,
+        ticket_id: null,
+        type: MessageDirection.SENT,
+        sender: '',
+        content: body,
+        external_message_id: r.wam_id,
+        message_type: 'template',
+        media_url: null,
+        media_mime_type: null,
+        media_size_bytes: null,
+        replied_to_external_message_id: null,
+        recipient_wa_id: r.recipient,
+        raw_payload: {
+          template: { name: r.template_name, language: r.language },
+          broadcast: { name: r.broadcast_name },
+          source: 'broadcast',
+        },
+        createdAt: r.sent_at,
+      };
+      return synthetic as WhatsappMessage;
+    });
+  }
+}
+
+/** Pull the digits-only customer wa_id out of a thread_key like
+ *  `wa:918569993083` or `wa:918569993083:archived:1762200000`. Returns
+ *  null when the key doesn't match the WhatsApp shape — tickets on
+ *  other channels never reach the WhatsApp branch of loadDetailMessages,
+ *  so null is a safe no-op (the union just doesn't add anything).
+ */
+function extractWaIdFromThreadKey(key: string | null | undefined): string | null {
+  if (!key) return null;
+  const m = /^wa:(\d{6,})/.exec(key);
+  return m ? m[1]! : null;
 }
 
 /**
@@ -2339,14 +2504,47 @@ function adaptWhatsappMessage(
           } as EmailMessageAttachment,
         ]
       : [];
+  // Template name — set for SENT rows where the row records a
+  // template send. Could be: agent-triggered template via the
+  // send-template UI, automation-triggered on this ticket, or an
+  // automation/broadcast blended in from a recipient_wa_id match.
+  // We look at raw_payload.template.name defensively since the value
+  // is `unknown`. Null for everything else (text replies, inbound).
+  let templateName: string | null = null;
+  const rawPayload = row.raw_payload;
+  if (rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)) {
+    const tpl = (rawPayload as Record<string, unknown>).template;
+    if (tpl && typeof tpl === 'object' && !Array.isArray(tpl)) {
+      const name = (tpl as Record<string, unknown>).name;
+      if (typeof name === 'string') templateName = name;
+    }
+  }
+
+  // System source — flags blended-in rows. If ticket_id is null the
+  // row wasn't produced on this ticket by an agent; the originating
+  // system is encoded in raw_payload.source for webhook-path and
+  // cross-channel sends, or marked explicitly for synthesized
+  // broadcast rows. Never set for regular ticket-path rows.
+  let systemSource: 'automation' | 'broadcast' | null = null;
+  if (row.ticket_id == null) {
+    const src =
+      rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+        ? (rawPayload as Record<string, unknown>).source
+        : null;
+    if (src === 'broadcast') systemSource = 'broadcast';
+    else if (typeof src === 'string') systemSource = 'automation';
+    else systemSource = 'automation';
+  }
+
   const shaped: Partial<EmailMessage> = {
     id: row.id,
     channelId: row.channelId,
-    // Rows reaching this adapter are always from the ticket detail
-    // query (loaded by ticket id), so ticket_id is guaranteed set.
-    // The schema allows null for automation-webhook-path sends but
-    // those never reach this unified-message serializer.
-    ticket_id: row.ticket_id!,
+    // Ticket_id is nullable in the schema (automation-webhook-path +
+    // broadcast sends have no owning ticket). The ticket detail view
+    // blends these in alongside chain rows; for DTO purposes we fill
+    // null ids with '0' so the response remains typed `string`. The
+    // FE doesn't branch on this field for rendering.
+    ticket_id: row.ticket_id ?? '0',
     type: row.type,
     sender: row.sender,
     subject: null,
@@ -2360,6 +2558,8 @@ function adaptWhatsappMessage(
     // the FE can render media rows as attachment cards instead of
     // text bubbles. Falls back to 'text' for anything unexpected.
     _waMediaKind: kind,
+    _templateName: templateName,
+    _systemSource: systemSource,
     _repliedTo: row.replied_to_external_message_id
       ? (() => {
           const q = quotedIndex?.get(row.replied_to_external_message_id);

@@ -177,6 +177,23 @@ export interface EmailMessageResponse {
      *  rows (WhatsApp's native look). */
     mediaKind?: 'text' | 'image' | 'video' | 'document' | 'audio';
   } | null;
+  /**
+   * WhatsApp template name when this row is a template send — whether
+   * fired via the agent's manual send-template UI, via an automation
+   * on this ticket, via an automation that touched this customer
+   * outside this ticket (blended in from recipient_wa_id match), or
+   * via a broadcast. Null for text replies + email rows. The FE can
+   * render a small `template · <name>` chip on the bubble.
+   */
+  templateName: string | null;
+  /**
+   * Flags a blended-in row that wasn't produced by a human agent on
+   * this ticket. 'automation' = automation rule fired it (ticketless
+   * or cross-channel). 'broadcast' = marketing campaign recipient.
+   * Null for regular inbound + outbound ticket activity. Lets the FE
+   * mark system-origin bubbles distinctly from agent replies.
+   */
+  systemSource: 'automation' | 'broadcast' | null;
   createdAt: string;
 
   /* -------------------------- View fields ------------------------- */
@@ -439,6 +456,8 @@ function toEmailMessage(
           mediaKind: m._repliedTo.mediaKind,
         }
       : null,
+    templateName: m._templateName ?? null,
+    systemSource: m._systemSource ?? null,
     createdAt: m.createdAt.toISOString(),
     // Server-computed view fields — see message-view-utils.ts for
     // the strategy stack (heuristics → prior-content fallback).

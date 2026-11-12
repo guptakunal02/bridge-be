@@ -112,4 +112,27 @@ export class EmailMessage {
     direction: 'SENT' | 'RECEIVED';
     mediaKind?: 'text' | 'image' | 'video' | 'document' | 'audio';
   } | null;
+
+  /**
+   * Transient — NOT a DB column. For WhatsApp messages blended into
+   * the ticket detail view, carries the template name if the row is
+   * a template send (whether through a ticket or ticketless via an
+   * automation/broadcast). Null for text replies + email rows. The
+   * DTO mapper surfaces this as `templateName` so the FE can render
+   * a `template · <name>` chip the way the /history page does.
+   */
+  _templateName?: string | null;
+
+  /**
+   * Transient — NOT a DB column. Flags the originating system when
+   * the row is a ticketless outbound blended into a ticket's thread:
+   *   'automation' — rule-fired template (webhook-path persist, or
+   *                  cross-channel ticket-path send)
+   *   'broadcast'  — marketing campaign send (synthesized from
+   *                  broadcast_recipient at read time)
+   * Null for anything else (regular ticket replies, inbound,
+   * standalone emails). Lets the FE annotate the bubble so agents
+   * know "that wasn't me, that was the system."
+   */
+  _systemSource?: 'automation' | 'broadcast' | null;
 }
