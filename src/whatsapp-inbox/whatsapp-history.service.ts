@@ -65,16 +65,21 @@ export class WhatsappHistoryService {
     // AND outbound (joined via ticket.thread_key = `wa:<digits>...`).
     // Union-via-OR keeps it one plan; createdAt sort orders them
     // across both branches in a single result set.
+    //
+    // Matching is SUFFIX-based (LIKE '%<digits>') so a caller can
+    // pass either the 10-digit national number ("8569993083") OR
+    // the 12-digit E.164 wa_id Meta stores ("918569993083") and
+    // land the same rows. Exact-match-only tripped us up because
+    // inbound.sender is always E.164 (Meta's shape) but the inbox
+    // search chip hands the raw substring the agent typed.
+    const senderSuffix = `%${digits}`;
+    const waKeyPrefixSuffix = `wa:%${digits}%`;
     const rows = (await this.messages
       .createQueryBuilder('m')
       .leftJoin('ticket', 't', 't.id = m.ticket_id')
       .where(
-        '(m.sender = :digits OR t.thread_key LIKE :waKey OR t.thread_key = :waKeyExact)',
-        {
-          digits,
-          waKey: `wa:${digits}:%`,
-          waKeyExact: `wa:${digits}`,
-        },
+        '(m.sender LIKE :senderSuffix OR t.thread_key LIKE :waKey)',
+        { senderSuffix, waKey: waKeyPrefixSuffix },
       )
       .orderBy('m."createdAt"', 'DESC')
       .limit(500)
