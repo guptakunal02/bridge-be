@@ -110,6 +110,46 @@ export class SendWhatsappTemplateHandler
     templateId: string,
     ctx: AutomationEventPayload,
   ): Promise<void> {
+    // Load the template up front so we can detect the cross-channel
+    // case. tickets.sendTemplate would also load it, but by then it's
+    // already asserted channel equality and thrown — we need to see
+    // the template first.
+    const template = await this.templates.findOne({ where: { id: templateId } });
+    if (!template) {
+      this.logger.warn(
+        `send_whatsapp_template ticket-path: template ${templateId} not found; skipping`,
+      );
+      return;
+    }
+    if (template.status !== WhatsappTemplateStatus.APPROVED) {
+      this.logger.warn(
+        `send_whatsapp_template ticket-path: template ${templateId} status=${template.status}; skipping`,
+      );
+      return;
+    }
+
+    // Cross-channel send: template is bound to a DIFFERENT WhatsApp
+    // channel than the ticket this event arrived on. The canonical
+    // use case (2026-11-13) is the old-number migration — customer
+    // messages the decommissioned number, inbound still arrives on
+    // the old channel, rule matches, action fires a `redirect_here`
+    // template bound to the NEW channel.
+    //
+    // tickets.sendTemplate refuses this with
+    //   BadRequestException("Template belongs to a different WhatsApp channel")
+    // so we bypass it entirely and go direct via the sender, writing
+    // the outbound as a ticketless whatsapp_message row (same shape
+    // the webhook path uses). The ticket on the old channel is left
+    // untouched — the customer's thread on the new channel will mint
+    // its own ticket when they reply there.
+    if (template.channelId !== ctx.ticket.channelId) {
+      await this.executeCrossChannelTicketSend(template, ctx);
+      return;
+    }
+
+    // Same-channel: original path. tickets.sendTemplate owns variable
+    // resolution from ticket + customer DB, threads the outbound into
+    // the ticket's conversation, and writes the activity log.
     const sys = await this.actor.resolve();
     if (!sys) {
       this.logger.warn(
@@ -126,6 +166,81 @@ export class SendWhatsappTemplateHandler
     } catch (err) {
       this.logger.warn(
         `send_whatsapp_template failed on ticket=${ctx.ticket.id} template=${templateId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Send a template that's bound to a different WhatsApp channel than
+   * the ticket that triggered the rule. Customer wa_id comes from the
+   * ticket's most-recent inbound row (same lookup tickets.sendTemplate
+   * uses internally). Variables resolve to their template fallbacks —
+   * ticket-path binding against raw webhook JSON doesn't apply because
+   * the triggering event here is a ticket event, not a webhook event.
+   * For the migration-redirect use case the template has 0 vars (or
+   * uses first_name fallback), so this is fine. If a future use case
+   * needs richer binding we can fold in TemplateVariableResolver.
+   */
+  private async executeCrossChannelTicketSend(
+    template: WhatsappTemplate,
+    ctx: AutomationEventPayload,
+  ): Promise<void> {
+    const inbound = await this.messages.findOne({
+      where: {
+        ticket_id: ctx.ticket.id,
+        type: MessageDirection.RECEIVED,
+      },
+      order: { createdAt: 'DESC' },
+    });
+    if (!inbound) {
+      this.logger.warn(
+        `cross-channel send: ticket=${ctx.ticket.id} has no inbound message to resolve customer wa_id; skipping`,
+      );
+      return;
+    }
+    const customerWaId = inbound.sender;
+
+    // Build variables with fallbacks — no rawPayload available on
+    // ticket events for JSON-path binding, and no per-event variable
+    // map either. Templates designed for cross-channel redirect should
+    // be authored with 0 vars or sensible fallbacks.
+    const variables: string[] = [];
+    if (template.variableMapping) {
+      for (const entry of template.variableMapping) {
+        variables.push(entry.fallback ?? '');
+      }
+    }
+
+    this.logger.log(
+      `TRACE_XCHANNEL_SEND event=${ctx.event} template=${template.name} ` +
+        `to=${customerWaId} originTicket=${ctx.ticket.id} ` +
+        `originChannel=${ctx.ticket.channelId} templateChannel=${template.channelId} ` +
+        `vars=${JSON.stringify(variables)}`,
+    );
+
+    try {
+      const result = await this.sender.sendTemplate(
+        customerWaId,
+        template.name,
+        template.language,
+        variables,
+        null,
+        { useMarketingEndpoint: template.maxPriceAmount !== null },
+      );
+      await this.persistWebhookSend({
+        channelId: template.channelId,
+        recipientPhone: customerWaId,
+        template,
+        variables,
+        headerUrl: null,
+        wamid: result.wamid,
+        eventName: ctx.event,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `cross-channel send failed: event=${ctx.event} template=${template.name} to=${customerWaId} originTicket=${ctx.ticket.id}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
