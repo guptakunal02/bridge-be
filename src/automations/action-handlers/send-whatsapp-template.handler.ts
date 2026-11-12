@@ -416,6 +416,7 @@ export class SendWhatsappTemplateHandler
         recipientPhone,
         template,
         variables,
+        headerUrl,
         wamid: result.wamid,
         eventName: payload.name,
       });
@@ -457,22 +458,56 @@ export class SendWhatsappTemplateHandler
     recipientPhone: string;
     template: WhatsappTemplate;
     variables: string[];
+    headerUrl: string | null;
     wamid: string;
     eventName: string;
   }): Promise<void> {
-    const { channelId, recipientPhone, template, variables, wamid, eventName } =
-      args;
+    const {
+      channelId,
+      recipientPhone,
+      template,
+      variables,
+      headerUrl,
+      wamid,
+      eventName,
+    } = args;
     const digits = recipientPhone.replace(/\D/g, '');
     const phoneNumberId =
       this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID') ?? '';
-    // Positional substitution: template.body has {{1}}, {{2}} markers;
-    // variables[] is 1-indexed by position in template.variableMapping.
-    // If body renders without variables (static template), we store it
-    // verbatim.
+    // Render body for a human-readable history row. Templates can use
+    // TWO placeholder styles in `body`:
+    //   * positional   — {{1}}, {{2}}, …         (Meta-canonical)
+    //   * named        — {{first_name}}, {{order_number}}, …
+    //                    (how the authoring UI writes them — the
+    //                    emitter lowers to positional only at send
+    //                    time; the stored template.body keeps the
+    //                    named form).
+    // variables[i] aligns with template.variableMapping[i], so we walk
+    // mapping to substitute both forms simultaneously. Any {{var}}
+    // that doesn't match a mapping entry (shouldn't happen on well-
+    // formed templates) is left in place rather than silently blanked.
     let renderedBody = template.body ?? '';
-    variables.forEach((v, i) => {
-      renderedBody = renderedBody.split(`{{${i + 1}}}`).join(v);
-    });
+    if (template.variableMapping) {
+      template.variableMapping.forEach((entry, i) => {
+        const value = variables[i] ?? entry.fallback ?? '';
+        renderedBody = renderedBody.split(`{{${entry.name}}}`).join(value);
+        renderedBody = renderedBody.split(`{{${i + 1}}}`).join(value);
+      });
+    } else {
+      // No mapping but still some positional vars: best-effort.
+      variables.forEach((v, i) => {
+        renderedBody = renderedBody.split(`{{${i + 1}}}`).join(v);
+      });
+    }
+    // Header image: store the URL we actually sent to Meta so the
+    // history page can render the image inline (same renderer the
+    // ticket detail uses). Only meaningful when the template has an
+    // IMAGE header and we resolved a URL; text / no-header templates
+    // leave media_url NULL.
+    const hasImageHeader =
+      template.headerType === 'IMAGE' &&
+      typeof headerUrl === 'string' &&
+      headerUrl.length > 0;
     try {
       await this.messages.insert({
         channelId,
@@ -482,9 +517,17 @@ export class SendWhatsappTemplateHandler
         recipient_wa_id: digits,
         content: renderedBody,
         external_message_id: wamid,
-        message_type: 'template',
+        message_type: hasImageHeader ? 'image' : 'template',
+        media_url: hasImageHeader ? headerUrl : null,
+        media_mime_type: hasImageHeader ? 'image/jpeg' : null,
         raw_payload: {
-          template: { id: template.id, name: template.name, language: template.language },
+          template: {
+            id: template.id,
+            name: template.name,
+            language: template.language,
+            headerType: template.headerType,
+            headerImageUrl: hasImageHeader ? headerUrl : null,
+          },
           variables,
           wamid,
           event: eventName,
