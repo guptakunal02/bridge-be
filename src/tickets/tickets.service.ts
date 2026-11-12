@@ -858,6 +858,16 @@ export class TicketsService {
               chainWindow.end,
             ),
           ]);
+          // Stamp blended rows with the current ticket's id BEFORE
+          // they reach adaptWhatsappMessage. The FE groups bubbles by
+          // ticketId and draws a "New ticket #X started here" divider
+          // at each boundary — leaving these as null (coerced to '0'
+          // downstream) made every blended automation/broadcast send
+          // read as its own fake ticket. Stamping with ticket.id folds
+          // them into THIS chain; the real ancestor-chain dividers
+          // keep working because those rows hold their real ticket_id.
+          for (const r of ticketlessRows) r.ticket_id = ticket.id;
+          for (const r of broadcastRows) r.ticket_id = ticket.id;
           rows.push(...ticketlessRows, ...broadcastRows);
           // Re-sort DESC and re-cap after the union so the merged
           // stream still obeys the 500-row ceiling.
@@ -2520,20 +2530,19 @@ function adaptWhatsappMessage(
     }
   }
 
-  // System source — flags blended-in rows. If ticket_id is null the
-  // row wasn't produced on this ticket by an agent; the originating
-  // system is encoded in raw_payload.source for webhook-path and
-  // cross-channel sends, or marked explicitly for synthesized
-  // broadcast rows. Never set for regular ticket-path rows.
+  // System source — flags blended-in rows. raw_payload.source is the
+  // authoritative discriminator (set by the persist paths:
+  // 'automation_webhook_path' for ticketless automation sends,
+  // 'broadcast' for synthesized broadcast rows). ticket_id can't be
+  // the check anymore because loadDetailMessages stamps blended rows
+  // with the current ticket id to suppress false chain dividers.
   let systemSource: 'automation' | 'broadcast' | null = null;
-  if (row.ticket_id == null) {
-    const src =
-      rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
-        ? (rawPayload as Record<string, unknown>).source
-        : null;
+  if (rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)) {
+    const src = (rawPayload as Record<string, unknown>).source;
     if (src === 'broadcast') systemSource = 'broadcast';
-    else if (typeof src === 'string') systemSource = 'automation';
-    else systemSource = 'automation';
+    else if (typeof src === 'string' && src.startsWith('automation')) {
+      systemSource = 'automation';
+    }
   }
 
   const shaped: Partial<EmailMessage> = {
