@@ -98,6 +98,23 @@ export type Action =
        * Must be publicly reachable (Meta fetches it at send time).
        */
       header_image_fallback?: string;
+      /**
+       * Delay this send by N minutes from match time. Optional; absent
+       * / 0 / undefined = send immediately (the historical default,
+       * preserved so every existing rule keeps working untouched).
+       *
+       * Stored as minutes (not hours) so a future "30 min after" option
+       * doesn't need a migration — the FE currently exposes whole-hour
+       * UI but the type is finer-grained. Validator enforces 0..1440
+       * (24-hour ceiling, product decision — mostly a guardrail
+       * against typos like "200 hours").
+       *
+       * When > 0, the dispatcher snapshots action + event context into
+       * scheduled_whatsapp_send and returns; a background worker fires
+       * it when due. No downstream cancellation — the send goes out
+       * regardless of ticket state changes during the wait.
+       */
+      delay_minutes?: number;
     }
   | {
       type: 'send_email_template';

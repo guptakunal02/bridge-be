@@ -299,3 +299,16 @@ export enum BroadcastRecipientStatus {
   READ = 'READ',
   FAILED = 'FAILED',
 }
+
+/**
+ * State machine for a send_whatsapp_template action that was queued
+ * for delayed dispatch (rule config carried delay_minutes > 0). The
+ * worker owns PENDING → SENT / FAILED. There's no CANCELLED state in
+ * V1 — per product decision, delays fire regardless of downstream
+ * state (customer reply, ticket close, rule edit etc).
+ */
+export enum ScheduledSendStatus {
+  PENDING = 'PENDING',
+  SENT = 'SENT',
+  FAILED = 'FAILED',
+}

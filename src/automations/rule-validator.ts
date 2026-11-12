@@ -265,6 +265,21 @@ function validateAction(a: unknown, path: string, errors: string[]): void {
             `${path}.header_image_fallback: must be a non-empty URL when provided`,
           );
         }
+        // delay_minutes: 0..1440 integer. 24h ceiling matches the FE
+        // slider max — stops accidental "200 hour" typos from queueing
+        // sends into oblivion.
+        if (obj.delay_minutes !== undefined) {
+          if (
+            typeof obj.delay_minutes !== 'number' ||
+            !Number.isInteger(obj.delay_minutes) ||
+            obj.delay_minutes < 0 ||
+            obj.delay_minutes > 1440
+          ) {
+            errors.push(
+              `${path}.delay_minutes: must be an integer between 0 and 1440 (24 hours)`,
+            );
+          }
+        }
       }
       break;
     case 'opt_out_customer':

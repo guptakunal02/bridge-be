@@ -22,7 +22,9 @@ import { AutomationSystemActor } from './automation-system-actor';
 import { AutomationsController } from './automations.controller';
 import { AutomationsService } from './automations.service';
 import { AutomationRule } from './entities/automation-rule.entity';
+import { ScheduledWhatsappSend } from './entities/scheduled-whatsapp-send.entity';
 import { RuleEvaluator } from './rule-evaluator.service';
+import { ScheduledWhatsappSendWorker } from './scheduled-whatsapp-send.worker';
 
 /**
  * Automation engine wiring. TicketsModule + EmailInboxModule are
@@ -34,7 +36,13 @@ import { RuleEvaluator } from './rule-evaluator.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AutomationRule, User, Team, WhatsappTemplate]),
+    TypeOrmModule.forFeature([
+      AutomationRule,
+      ScheduledWhatsappSend,
+      User,
+      Team,
+      WhatsappTemplate,
+    ]),
     forwardRef(() => TicketsModule),
     forwardRef(() => EmailInboxModule),
     // forwardRef because WhatsappInboxModule imports BotModule which
@@ -60,6 +68,7 @@ import { RuleEvaluator } from './rule-evaluator.service';
     SendEmailTemplateHandler,
     OptOutCustomerHandler,
     CallWebhookHandler,
+    ScheduledWhatsappSendWorker,
   ],
   exports: [AutomationEngine],
 })
