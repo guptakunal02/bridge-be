@@ -61,10 +61,16 @@ export class WhatsappHistoryService {
       );
     }
 
-    // Single query returns BOTH inbound (sender = customer wa_id)
-    // AND outbound (joined via ticket.thread_key = `wa:<digits>...`).
+    // Single query covers all THREE branches of "a message that
+    // touched this phone":
+    //   1. inbound                → m.sender = customer wa_id
+    //   2. outbound ticket-path   → join via ticket.thread_key `wa:<digits>...`
+    //   3. outbound ticketless    → m.recipient_wa_id = customer wa_id digits
+    //      (automation-fired templates on webhook events: shopify / clickpost /
+    //      return-prime rules that never produced a ticket).
+    //
     // Union-via-OR keeps it one plan; createdAt sort orders them
-    // across both branches in a single result set.
+    // across all branches in a single result set.
     //
     // Matching is SUFFIX-based (LIKE '%<digits>') so a caller can
     // pass either the 10-digit national number ("8569993083") OR
@@ -78,7 +84,7 @@ export class WhatsappHistoryService {
       .createQueryBuilder('m')
       .leftJoin('ticket', 't', 't.id = m.ticket_id')
       .where(
-        '(m.sender LIKE :senderSuffix OR t.thread_key LIKE :waKey)',
+        '(m.sender LIKE :senderSuffix OR t.thread_key LIKE :waKey OR m.recipient_wa_id LIKE :senderSuffix)',
         { senderSuffix, waKey: waKeyPrefixSuffix },
       )
       .orderBy('m."createdAt"', 'DESC')

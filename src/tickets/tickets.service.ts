@@ -2342,7 +2342,11 @@ function adaptWhatsappMessage(
   const shaped: Partial<EmailMessage> = {
     id: row.id,
     channelId: row.channelId,
-    ticket_id: row.ticket_id,
+    // Rows reaching this adapter are always from the ticket detail
+    // query (loaded by ticket id), so ticket_id is guaranteed set.
+    // The schema allows null for automation-webhook-path sends but
+    // those never reach this unified-message serializer.
+    ticket_id: row.ticket_id!,
     type: row.type,
     sender: row.sender,
     subject: null,

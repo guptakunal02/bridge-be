@@ -41,12 +41,26 @@ export class WhatsappMessage {
   @JoinColumn({ name: 'channelId' })
   channel!: Channel;
 
-  @Column({ type: 'bigint', name: 'ticket_id' })
-  ticket_id!: string;
+  // Nullable so automation-fired webhook-path template sends (which
+  // have no ticket to attach to) can land in the same table. Ticket-
+  // path sends + all inbound rows still set this; the history query
+  // handles both branches.
+  @Column({ type: 'bigint', name: 'ticket_id', nullable: true })
+  ticket_id!: string | null;
 
-  @ManyToOne(() => Ticket, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Ticket, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'ticket_id' })
-  ticket!: Ticket;
+  ticket!: Ticket | null;
+
+  /**
+   * Customer wa_id for OUTBOUND rows that have no ticket (webhook-path
+   * template sends). Null for inbound (sender carries the wa_id) and
+   * for ticket-path outbound (joined via ticket.thread_key). Set this
+   * at send-INSERT time so the by-phone history query can UNION the
+   * three branches with one indexed lookup.
+   */
+  @Column({ type: 'text', nullable: true, name: 'recipient_wa_id' })
+  recipient_wa_id!: string | null;
 
   // Reuse the enum TypeORM created for email_message's `type` column
   // instead of minting a parallel whatsapp_message_type_enum. Same

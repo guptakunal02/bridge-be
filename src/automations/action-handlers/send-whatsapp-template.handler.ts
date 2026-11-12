@@ -1,10 +1,12 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TicketsService } from '../../tickets/tickets.service';
+import { WhatsappMessage } from '../../whatsapp-inbox/entities/whatsapp-message.entity';
 import { WhatsappTemplate } from '../../whatsapp-inbox/entities/whatsapp-template.entity';
 import { WhatsappSenderService } from '../../whatsapp-inbox/whatsapp-sender.service';
-import { WhatsappTemplateStatus } from '../../database/enums';
+import { MessageDirection, WhatsappTemplateStatus } from '../../database/enums';
 import { resolveButtonId } from '../../whatsapp-inbox/template-buttons';
 import type { Action, ActionHandler } from '../action';
 import { AutomationSystemActor } from '../automation-system-actor';
@@ -53,6 +55,9 @@ export class SendWhatsappTemplateHandler
     private readonly actor: AutomationSystemActor,
     @InjectRepository(WhatsappTemplate)
     private readonly templates: Repository<WhatsappTemplate>,
+    @InjectRepository(WhatsappMessage)
+    private readonly messages: Repository<WhatsappMessage>,
+    private readonly config: ConfigService,
     // forwardRef because AutomationsModule and WhatsappInboxModule
     // form a 2-way cycle (automations imports whatsapp-inbox for
     // this handler, whatsapp-inbox imports automations for the
@@ -391,7 +396,7 @@ export class SendWhatsappTemplateHandler
     );
 
     try {
-      await this.sender.sendTemplate(
+      const result = await this.sender.sendTemplate(
         recipientPhone,
         template.name,
         template.language,
@@ -406,9 +411,89 @@ export class SendWhatsappTemplateHandler
       this.logger.log(
         `send_whatsapp_template webhook send ok: event=${payload.name} template=${template.name} to=${recipientPhone}${useBindings ? ' (bindings)' : ''}${buttonUrlParams.length > 0 ? ` (${buttonUrlParams.length} url param${buttonUrlParams.length === 1 ? '' : 's'})` : ''}${buttonQuickReplyParams.length > 0 ? ` (${buttonQuickReplyParams.length} qr payload${buttonQuickReplyParams.length === 1 ? '' : 's'})` : ''}`,
       );
+      await this.persistWebhookSend({
+        channelId: template.channelId,
+        recipientPhone,
+        template,
+        variables,
+        wamid: result.wamid,
+        eventName: payload.name,
+      });
     } catch (err) {
       this.logger.warn(
         `send_whatsapp_template webhook send failed: event=${payload.name} template=${template.name} to=${recipientPhone}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Persist a webhook-path (ticketless) template send as a
+   * whatsapp_message row. Makes two things queryable that weren't
+   * before:
+   *   * /whatsapp/history/by-phone — shows automation-fired templates
+   *     a customer actually received, even with no ticket exchange.
+   *   * template-send analytics — count by raw_payload->template->name
+   *     over any window.
+   *
+   * Row shape mirrors other outbound sends:
+   *   sender           = business phone_number_id (same as ticket-path)
+   *   recipient_wa_id  = customer wa_id digits (NEW, used by history)
+   *   ticket_id        = NULL
+   *   external_message_id = wamid (unique index — idempotent on retry)
+   *   content          = body with {{n}} substituted (so the history
+   *                      page shows the actual message, not "(no body)")
+   *   raw_payload      = {template.name, template.language, variables,
+   *                      wamid, eventName} so analytics / future
+   *                      replay has everything.
+   *
+   * Non-fatal on failure — the send already succeeded at Meta; losing
+   * the audit row to a transient DB blip shouldn't retroactively fail
+   * the whole send. Logs at WARN so we can grep for drift.
+   */
+  private async persistWebhookSend(args: {
+    channelId: string;
+    recipientPhone: string;
+    template: WhatsappTemplate;
+    variables: string[];
+    wamid: string;
+    eventName: string;
+  }): Promise<void> {
+    const { channelId, recipientPhone, template, variables, wamid, eventName } =
+      args;
+    const digits = recipientPhone.replace(/\D/g, '');
+    const phoneNumberId =
+      this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID') ?? '';
+    // Positional substitution: template.body has {{1}}, {{2}} markers;
+    // variables[] is 1-indexed by position in template.variableMapping.
+    // If body renders without variables (static template), we store it
+    // verbatim.
+    let renderedBody = template.body ?? '';
+    variables.forEach((v, i) => {
+      renderedBody = renderedBody.split(`{{${i + 1}}}`).join(v);
+    });
+    try {
+      await this.messages.insert({
+        channelId,
+        ticket_id: null,
+        type: MessageDirection.SENT,
+        sender: phoneNumberId,
+        recipient_wa_id: digits,
+        content: renderedBody,
+        external_message_id: wamid,
+        message_type: 'template',
+        raw_payload: {
+          template: { id: template.id, name: template.name, language: template.language },
+          variables,
+          wamid,
+          event: eventName,
+          source: 'automation_webhook_path',
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `persistWebhookSend: INSERT failed for wamid=${wamid} to=${digits} template=${template.name}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

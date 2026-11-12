@@ -5,6 +5,7 @@ import { OutreachModule } from '../outreach/outreach.module';
 import { Team } from '../teams/entities/team.entity';
 import { TicketsModule } from '../tickets/tickets.module';
 import { User } from '../users/entities/user.entity';
+import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { WhatsappTemplate } from '../whatsapp-inbox/entities/whatsapp-template.entity';
 import { WhatsappInboxModule } from '../whatsapp-inbox/whatsapp-inbox.module';
 import { ActionDispatcher } from './action-dispatcher.service';
@@ -41,6 +42,7 @@ import { ScheduledWhatsappSendWorker } from './scheduled-whatsapp-send.worker';
       ScheduledWhatsappSend,
       User,
       Team,
+      WhatsappMessage,
       WhatsappTemplate,
     ]),
     forwardRef(() => TicketsModule),
