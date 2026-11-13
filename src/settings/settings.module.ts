@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClickpostWebhooksModule } from '../clickpost-webhooks/clickpost-webhooks.module';
 import { LensWebhooksModule } from '../lens-webhooks/lens-webhooks.module';
 import { ReturnPrimeWebhooksModule } from '../return-prime-webhooks/return-prime-webhooks.module';
+import { RewindWebhooksModule } from '../rewind-webhooks/rewind-webhooks.module';
 import { ShopifyWebhooksModule } from '../shopify-webhooks/shopify-webhooks.module';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
 import { AppSettingsService } from './app-settings.service';
@@ -21,6 +22,7 @@ import { SettingsController } from './settings.controller';
     forwardRef(() => ReturnPrimeWebhooksModule),
     forwardRef(() => ClickpostWebhooksModule),
     forwardRef(() => LensWebhooksModule),
+    forwardRef(() => RewindWebhooksModule),
   ],
   controllers: [SettingsController],
   providers: [AppSettingsService],

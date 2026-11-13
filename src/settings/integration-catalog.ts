@@ -37,6 +37,7 @@ export const INTEGRATION_API_CALLS: Record<
   shopify: [],
   returnprime: [],
   clickpost: [],
+  rewind: [],
   lens: [
     {
       method: 'GET',
@@ -136,6 +137,23 @@ export const INTEGRATION_WEBHOOK_TOPICS: Record<
   returnprime: [],
   clickpost: [],
   lens: [],
+  rewind: [
+    {
+      topic: 'rewind.return_created',
+      purpose:
+        'Customer initiated a return/exchange via Rewind. Admin typically sends a "received, we\'re reviewing" acknowledgement template.',
+    },
+    {
+      topic: 'rewind.points_earned',
+      purpose:
+        'Customer earned loyalty points. Admin can send a "you\'ve earned X points!" nudge.',
+    },
+    {
+      topic: 'rewind.subscription_cancelled',
+      purpose:
+        'Customer cancelled a recurring subscription. Admin can send a win-back template.',
+    },
+  ],
   whatsapp: [
     {
       topic: 'messages',

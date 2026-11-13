@@ -17,6 +17,7 @@ import { UserRole } from '../database/enums';
 import { ClickpostWebhooksService } from '../clickpost-webhooks/clickpost-webhooks.service';
 import { LensWebhooksService } from '../lens-webhooks/lens-webhooks.service';
 import { ReturnPrimeWebhooksService } from '../return-prime-webhooks/return-prime-webhooks.service';
+import { RewindWebhooksService } from '../rewind-webhooks/rewind-webhooks.service';
 import type { TopicStatRow } from '../shopify-webhooks/shopify-webhooks.service';
 import { ShopifyWebhooksService } from '../shopify-webhooks/shopify-webhooks.service';
 import { WhatsappMessage } from '../whatsapp-inbox/entities/whatsapp-message.entity';
@@ -59,6 +60,16 @@ export interface IntegrationsResponse {
     /** ISO timestamp of the most recent Lens-forwarded event (NDR / NPR). */
     lastEventAt: string | null;
   };
+  rewind: {
+    /**
+     * Rewind uses the shared X-Bridge-Secret (same as /webhooks/custom-events),
+     * which auto-generates on first read — so this is always true. Kept in
+     * the shape for UI consistency with the other platforms.
+     */
+    configured: boolean;
+    /** ISO timestamp of the most recent Rewind webhook, null when none seen. */
+    lastEventAt: string | null;
+  };
   whatsapp: {
     /** True when every required WHATSAPP_* env var is present. */
     configured: boolean;
@@ -74,6 +85,7 @@ export type IntegrationPlatform =
   | 'returnprime'
   | 'clickpost'
   | 'lens'
+  | 'rewind'
   | 'whatsapp';
 
 /**
@@ -140,6 +152,7 @@ export class SettingsController {
     private readonly returnPrime: ReturnPrimeWebhooksService,
     private readonly clickpost: ClickpostWebhooksService,
     private readonly lens: LensWebhooksService,
+    private readonly rewind: RewindWebhooksService,
     @InjectRepository(WhatsappMessage)
     private readonly whatsappMessages: Repository<WhatsappMessage>,
   ) {}
@@ -177,6 +190,7 @@ export class SettingsController {
       infer: true,
     });
     const lensLastEventAt = await this.lens.lastEventAt();
+    const rewindLastEventAt = await this.rewind.lastEventAt();
     // WhatsApp configured = every required WA env var present. We only
     // check the three that are REQUIRED (per EnvVars validators); the
     // others are either optional or already covered.
@@ -215,6 +229,12 @@ export class SettingsController {
         configured: Boolean(lensSecret),
         lastEventAt: lensLastEventAt ? lensLastEventAt.toISOString() : null,
       },
+      rewind: {
+        configured: true,
+        lastEventAt: rewindLastEventAt
+          ? rewindLastEventAt.toISOString()
+          : null,
+      },
       whatsapp: {
         configured: waConfigured,
         phoneNumberId: waPhoneNumberId ?? null,
@@ -246,6 +266,7 @@ export class SettingsController {
       'returnprime',
       'clickpost',
       'lens',
+      'rewind',
       'whatsapp',
     ];
     if (!platforms.includes(platform as IntegrationPlatform)) {
@@ -271,6 +292,8 @@ export class SettingsController {
           return this.clickpost.topicStats({ since });
         case 'lens':
           return this.lens.topicStats({ since });
+        case 'rewind':
+          return this.rewind.topicStats({ since });
         case 'whatsapp':
           // Meta webhooks aren't audited to a dedicated table — the
           // FE renders the static catalog as a fallback.

@@ -37,11 +37,34 @@ export class RewindEventDto {
   @MaxLength(32)
   customerPhone!: string;
 
+  /**
+   * Optional. Rewind doesn't know Bridge's internal channel UUIDs;
+   * when absent, the downstream send handler falls back to each
+   * matched template's own bound channel — same convention Shopify /
+   * Clickpost custom-sends use.
+   */
+  @IsOptional()
   @IsString()
   @MaxLength(64)
-  channelId!: string;
+  channelId?: string;
 
   @IsOptional()
   @IsObject()
   rawPayload?: Record<string, unknown>;
+
+  /**
+   * Pass-through fields Rewind puts at the top of the body (their
+   * internal event id + event key). Declared so the whitelist
+   * ValidationPipe accepts the payload; we read nothing from them
+   * directly — dedup/idempotency uses sha256 of the full body.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  id?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  key?: string;
 }

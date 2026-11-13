@@ -36,11 +36,12 @@ export class RewindWebhooksService {
   async handle(dto: RewindEventDto): Promise<{ deduped: boolean }> {
     const eventName = dto.event.trim();
     const customerPhone = normalisePhone(dto.customerPhone);
+    const channelId = dto.channelId ?? '';
     const webhookId = deriveWebhookId(dto);
     const bodyForAudit: Record<string, unknown> = {
       event: eventName,
       customerPhone: dto.customerPhone,
-      channelId: dto.channelId,
+      channelId,
       ...(dto.variables !== undefined ? { variables: dto.variables } : {}),
       ...(dto.rawPayload !== undefined ? { rawPayload: dto.rawPayload } : {}),
     };
@@ -74,7 +75,7 @@ export class RewindWebhooksService {
       // convention as WEBHOOK_CUSTOM). Predicates key on `event.*`.
       ticket: {
         id: '',
-        channelId: dto.channelId,
+        channelId,
         channelType: null,
         status: TicketStatus.OPEN,
         tags: [],
@@ -84,7 +85,7 @@ export class RewindWebhooksService {
       },
       payload: {
         name: 'rewind.webhook',
-        channelId: dto.channelId,
+        channelId,
         customerPhone: customerPhone ?? dto.customerPhone,
         eventType: eventName,
         variables: dto.variables ?? {},
@@ -92,6 +93,20 @@ export class RewindWebhooksService {
       },
     });
     return { deduped: false };
+  }
+
+  /**
+   * ISO timestamp of the most recent Rewind webhook received, null
+   * when the audit table is empty. Powers the "last event received"
+   * line on the Integrations page's Rewind card.
+   */
+  async lastEventAt(): Promise<Date | null> {
+    const row = await this.events.findOne({
+      where: {},
+      order: { received_at: 'DESC' },
+      select: { received_at: true },
+    });
+    return row?.received_at ?? null;
   }
 
   /**
