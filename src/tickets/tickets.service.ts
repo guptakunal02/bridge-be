@@ -603,27 +603,60 @@ export class TicketsService {
   ): Promise<
     import('./dto/ticket-response.dto').RelatedTicketSummary[]
   > {
-    // Two-step because Postgres wants scalar subqueries when we mix
-    // window functions with joins on the same message table — cleaner
-    // to just resolve the customer email first, then a plain SELECT.
-    const customerRow: Array<{ sender: string | null }> = await this.emails
-      .query(
-        `SELECT sender
-           FROM public.message
-          WHERE ticket_id = $1
-            AND direction = 'RECEIVED'
-          ORDER BY "createdAt" ASC
-          LIMIT 1`,
-        [ticketId],
-      );
-    const customerEmail = customerRow[0]?.sender;
-    if (!customerEmail) return [];
+    // Step 1: resolve the current ticket's customer identifier — the
+    // sender of the earliest RECEIVED message. For email tickets this
+    // is an address, for WhatsApp tickets a wa_id (digits).
+    const seedRow: Array<{ sender: string | null }> = await this.emails.query(
+      `SELECT sender
+         FROM public.message
+        WHERE ticket_id = $1
+          AND direction = 'RECEIVED'
+        ORDER BY "createdAt" ASC
+        LIMIT 1`,
+      [ticketId],
+    );
+    const seedSender = seedRow[0]?.sender;
+    if (!seedSender) return [];
+
+    // Step 2: fan the identifier out via the Customer table so email
+    // tickets surface the same customer's WhatsApp tickets (and vice
+    // versa). Customer.phone is CSV-shaped ("+91..."), message.sender
+    // is wa_id-shaped ("91..."); strip non-digits on both sides to
+    // compare. Email comparison is case-insensitive.
+    const seedIsEmail = seedSender.includes('@');
+    const seedDigits = seedSender.replace(/\D/g, '');
+    const emailIdentifiers = new Set<string>();
+    const phoneIdentifiers = new Set<string>();
+    if (seedIsEmail) emailIdentifiers.add(seedSender.toLowerCase());
+    else if (seedDigits.length >= 6) phoneIdentifiers.add(seedDigits);
+
+    const customerLink: Array<{
+      email: string | null;
+      phone: string | null;
+    }> = seedIsEmail
+      ? await this.emails.query(
+          `SELECT email, phone FROM public.customer
+            WHERE LOWER(email) = LOWER($1)
+            LIMIT 1`,
+          [seedSender],
+        )
+      : await this.emails.query(
+          `SELECT email, phone FROM public.customer
+            WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+            LIMIT 1`,
+          [seedDigits],
+        );
+    const link = customerLink[0];
+    if (link?.email) emailIdentifiers.add(link.email.toLowerCase());
+    if (link?.phone) {
+      const linkDigits = link.phone.replace(/\D/g, '');
+      if (linkDigits.length >= 6) phoneIdentifiers.add(linkDigits);
+    }
 
     // DISTINCT ON keeps one row per ticket while joining the message
-    // view. Subject comes from the earliest message on each ticket so
-    // it matches the header the ticket detail page shows (null for
-    // WhatsApp tickets, which the FE already renders as "(no
-    // subject)").
+    // view. Subject comes from the earliest message on each ticket.
+    // Match on email OR digit-normalized phone so a customer with
+    // both inboxes gets a unified list.
     const rows: Array<{
       id: string;
       status: TicketStatus;
@@ -645,16 +678,21 @@ export class TicketsService {
          INNER JOIN public.message m
                  ON m.ticket_id = t.id
                 AND m.direction = 'RECEIVED'
-                AND m.sender = $1
-        WHERE t.id <> $2
+                AND (
+                  (array_length($1::text[], 1) IS NOT NULL
+                    AND LOWER(m.sender) = ANY($1::text[]))
+                  OR
+                  (array_length($2::text[], 1) IS NOT NULL
+                    AND regexp_replace(COALESCE(m.sender, ''), '\\D', '', 'g') = ANY($2::text[]))
+                )
+        WHERE t.id <> $3
           AND t."deletedAt" IS NULL
         ORDER BY t.id, t."updatedAt" DESC
         LIMIT 50`,
-      [customerEmail, ticketId],
+      [Array.from(emailIdentifiers), Array.from(phoneIdentifiers), ticketId],
     );
-    // The DISTINCT ON pass sorted by ticket id (Postgres requires the
-    // dedupe column to lead the ORDER BY). Re-sort by updatedAt DESC
-    // for the FE list order.
+    // DISTINCT ON forces ORDER BY to lead with t.id; re-sort by
+    // updatedAt DESC for the FE list order.
     rows.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     return rows.map((r) => ({
       id: r.id,
