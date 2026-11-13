@@ -19,7 +19,11 @@ import { RewindWebhooksService } from './rewind-webhooks.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([RewindWebhookEvent]),
-    SettingsModule,
+    // SettingsModule itself imports RewindWebhooksModule (for the
+    // Integrations controller's topicStats dispatcher), so both sides
+    // of the cycle need forwardRef — otherwise one evaluates to
+    // undefined at module-scan time and the whole app fails to boot.
+    forwardRef(() => SettingsModule),
     forwardRef(() => AutomationsModule),
   ],
   controllers: [RewindWebhooksController],
