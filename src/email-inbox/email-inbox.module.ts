@@ -4,6 +4,7 @@ import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { Channel } from '../channels/entities/channel.entity';
+import { LinkedContactsModule } from '../linked-contacts/linked-contacts.module';
 import { RulesModule } from '../rules/rules.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
@@ -59,6 +60,9 @@ import { ImapResumeStore } from './providers/imap-resume-store.service';
     // handler on the automations side imports EmailTemplatesService
     // back from this module, closing the cycle.
     forwardRef(() => AutomationsModule),
+    // LinkedContactsService — fire-and-forget Lens enrichment on
+    // fresh-ticket mint so cross-channel related tickets work.
+    LinkedContactsModule,
   ],
   controllers: [EmailInboxController, EmailTemplatesController],
   providers: [

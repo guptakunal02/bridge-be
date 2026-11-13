@@ -23,6 +23,7 @@ import { TicketsModule } from './tickets/tickets.module';
 import { UsersModule } from './users/users.module';
 import { ClickpostWebhooksModule } from './clickpost-webhooks/clickpost-webhooks.module';
 import { LensWebhooksModule } from './lens-webhooks/lens-webhooks.module';
+import { LinkedContactsModule } from './linked-contacts/linked-contacts.module';
 import { ReturnPrimeWebhooksModule } from './return-prime-webhooks/return-prime-webhooks.module';
 import { RewindWebhooksModule } from './rewind-webhooks/rewind-webhooks.module';
 import { ShopifyWebhooksModule } from './shopify-webhooks/shopify-webhooks.module';
@@ -61,6 +62,7 @@ import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
     ReturnPrimeWebhooksModule,
     ClickpostWebhooksModule,
     LensWebhooksModule,
+    LinkedContactsModule,
     RewindWebhooksModule,
     OutreachModule,
   ],

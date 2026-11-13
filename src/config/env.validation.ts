@@ -288,6 +288,22 @@ export class EnvVars {
   LENS_FULFILLMENT_CONTEXT_URL?: string;
 
   /**
+   * Base URL for surma-ops's linked-contacts lookup endpoint. Bridge
+   * calls `${LENS_LINKED_CONTACTS_URL}?email=<x>` or `?phone=<digits>`
+   * from the email + whatsapp ingest paths (post-commit, fire-and-
+   * forget) to find the customer's other identifiers on Shopify, then
+   * upserts them into the `customer` table so the ticket sidebar's
+   * related-tickets query returns a unified list across inboxes.
+   *
+   * Optional — when unset, Bridge skips the enrichment and the sidebar
+   * falls back to single-identifier related tickets. Non-2xx / timeout
+   * / unset env are all handled identically by the service.
+   */
+  @IsOptional()
+  @IsUrl({ require_tld: false, require_protocol: true })
+  LENS_LINKED_CONTACTS_URL?: string;
+
+  /**
    * Base URL for surma-ops's customer-contact endpoint. Bridge calls
    * `${LENS_CUSTOMER_CONTACT_URL}/<order-name>/customer-contact` to
    * un-mask inbound Clickpost webhooks — Clickpost's enterprise plan

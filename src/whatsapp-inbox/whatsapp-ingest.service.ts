@@ -15,6 +15,7 @@ import {
   TicketStatus,
 } from '../database/enums';
 import { RoutingService } from '../rules/routing.service';
+import { LinkedContactsService } from '../linked-contacts/linked-contacts.service';
 import { buildTicketContext } from '../rules/ticket-context';
 import { AppSettingsService } from '../settings/app-settings.service';
 import { TeamsService } from '../teams/teams.service';
@@ -133,6 +134,7 @@ export class WhatsappIngestService {
     private readonly sender: WhatsappSenderService,
     private readonly storage: S3StorageService,
     private readonly appSettings: AppSettingsService,
+    private readonly linkedContacts: LinkedContactsService,
   ) {}
 
   /**
@@ -365,6 +367,25 @@ export class WhatsappIngestService {
           dayOfWeekIst,
         },
       });
+      // Cross-channel identity enrichment via Lens — fire-and-forget
+      // so a slow / down Lens never delays the ingest. Looks up the
+      // customer's other identifiers on Shopify and upserts them into
+      // the `customer` table so the related-tickets sidebar can
+      // surface email tickets for this WhatsApp customer on the next
+      // sidebar open.
+      const ticketId = ticket.id;
+      const seedWaId = msg.from;
+      if (seedWaId) {
+        setImmediate(() => {
+          this.linkedContacts.enrich(ticketId, seedWaId).catch((err) => {
+            this.logger.warn(
+              `linked-contacts enrich failed after WhatsApp mint: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          });
+        });
+      }
     }
     if (reopenedFromResolved) {
       this.automations.emit({

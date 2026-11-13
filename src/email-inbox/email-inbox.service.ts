@@ -21,6 +21,7 @@ import {
   UserStatus,
 } from '../database/enums';
 import { RoutingService } from '../rules/routing.service';
+import { LinkedContactsService } from '../linked-contacts/linked-contacts.service';
 import { AppSettingsService } from '../settings/app-settings.service';
 import { buildTicketContext } from '../rules/ticket-context';
 import { Team } from '../teams/entities/team.entity';
@@ -53,6 +54,7 @@ export class EmailInboxService {
     private readonly appSettings: AppSettingsService,
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
     private readonly automations: AutomationEngine,
+    private readonly linkedContacts: LinkedContactsService,
   ) {}
 
   /**
@@ -575,6 +577,25 @@ export class EmailInboxService {
     // BotRuntimeService.pickFlow, then re-engage behind that gate.
     if (wasNewTicket && pickedAssigneeId) {
       await this.lifecycle.onCapacityFreed(pickedAssigneeId);
+    }
+
+    // Cross-channel identity enrichment via Lens. Fire-and-forget so a
+    // slow / down Lens never delays the ingest response — the ticket
+    // is already committed, this just back-fills the customer graph
+    // so the related-tickets sidebar can surface WhatsApp threads for
+    // this email customer (and vice versa) on the next sidebar open.
+    if (wasNewTicket && ticket && req.sender) {
+      const ticketId = ticket.id;
+      const seed = req.sender;
+      setImmediate(() => {
+        this.linkedContacts.enrich(ticketId, seed).catch((err) => {
+          this.logger.warn(
+            `linked-contacts enrich failed after email mint: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+      });
     }
 
     return message;

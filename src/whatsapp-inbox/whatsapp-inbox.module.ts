@@ -4,6 +4,7 @@ import { AutomationsModule } from '../automations/automations.module';
 import { BotModule } from '../bot/bot.module';
 import { Channel } from '../channels/entities/channel.entity';
 import { StorageModule } from '../common/storage/storage.module';
+import { LinkedContactsModule } from '../linked-contacts/linked-contacts.module';
 import { RulesModule } from '../rules/rules.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TeamsModule } from '../teams/teams.module';
@@ -89,6 +90,9 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
     // mint time (same as email ingest) so admin-authored OOH /
     // team-attribute rules apply to WhatsApp too, not just email.
     RulesModule,
+    // LinkedContactsService — fire-and-forget Lens enrichment on
+    // fresh-ticket mint so cross-channel related tickets work.
+    LinkedContactsModule,
   ],
   controllers: [
     WhatsappWebhookController,
