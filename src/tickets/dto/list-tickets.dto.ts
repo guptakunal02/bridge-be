@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -143,4 +144,30 @@ export class ListTicketsQuery {
   @IsOptional()
   @IsIn(['true', 'false'])
   botActive?: 'true' | 'false';
+
+  /**
+   * Inclusive calendar date in YYYY-MM-DD form, interpreted as midnight
+   * IST that day. "Give me tickets created on or after this day in
+   * IST." Omitted → no lower bound. Paired with `createdTo`; both can
+   * be the same date to filter to a single day.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'createdFrom must be an ISO date (YYYY-MM-DD)',
+  })
+  createdFrom?: string;
+
+  /**
+   * Inclusive calendar date in YYYY-MM-DD form, IST. "Give me tickets
+   * created on or before the END of this day in IST." Service converts
+   * to `< (date+1 day) in IST` so the whole day is included even
+   * though ticket.createdAt is a timestamptz.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'createdTo must be an ISO date (YYYY-MM-DD)',
+  })
+  createdTo?: string;
 }

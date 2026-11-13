@@ -229,6 +229,7 @@ export class TicketsService {
         assigneeIds: query.assigneeIds,
       });
     }
+    applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     applyBotActiveFilter(
       qb,
@@ -317,6 +318,7 @@ export class TicketsService {
         assigneeIds: query.assigneeIds,
       });
     }
+    applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     applyBotActiveFilter(
       qb,
@@ -502,6 +504,7 @@ export class TicketsService {
     // counts endpoint — the count-by-status is the whole point of
     // this response, so applying a status filter would collapse
     // every row to zero except the picked one.
+    applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     await this.applyScope(qb, query.scope ?? 'all', actingUser, {
       widenForSearch: Boolean(query.q?.trim()),
@@ -2807,6 +2810,34 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * bot_session predicate is what separates "Groot actively driving"
  * from "parked by the ingest router".
  */
+/**
+ * Applies the YYYY-MM-DD createdFrom/createdTo window as IST
+ * calendar-day bounds. DTO shape already Matches(/^\d{4}-\d{2}-\d{2}$/)
+ * so params are safe to inline-cast. IST (Asia/Kolkata) chosen to
+ * match the ops team's lived day — same convention as myStats's
+ * resolvedTodayByMe. Inclusive on BOTH ends: createdTo="2026-11-13"
+ * includes everything up to IST midnight of the 14th, so the whole
+ * 13th is in the window even though createdAt is a timestamptz.
+ */
+function applyCreatedDateRange(
+  qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
+  createdFrom: string | undefined,
+  createdTo: string | undefined,
+): void {
+  if (createdFrom) {
+    qb.andWhere(
+      `t."createdAt" >= (CAST(:createdFrom AS date)::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+      { createdFrom },
+    );
+  }
+  if (createdTo) {
+    qb.andWhere(
+      `t."createdAt" < ((CAST(:createdTo AS date) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`,
+      { createdTo },
+    );
+  }
+}
+
 function applyBotActiveFilter(
   qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
   botActive: boolean | undefined,
