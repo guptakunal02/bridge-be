@@ -24,6 +24,7 @@ import { UsersModule } from './users/users.module';
 import { ClickpostWebhooksModule } from './clickpost-webhooks/clickpost-webhooks.module';
 import { LensWebhooksModule } from './lens-webhooks/lens-webhooks.module';
 import { ReturnPrimeWebhooksModule } from './return-prime-webhooks/return-prime-webhooks.module';
+import { RewindWebhooksModule } from './rewind-webhooks/rewind-webhooks.module';
 import { ShopifyWebhooksModule } from './shopify-webhooks/shopify-webhooks.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
@@ -60,6 +61,7 @@ import { WhatsappInboxModule } from './whatsapp-inbox/whatsapp-inbox.module';
     ReturnPrimeWebhooksModule,
     ClickpostWebhooksModule,
     LensWebhooksModule,
+    RewindWebhooksModule,
     OutreachModule,
   ],
 })

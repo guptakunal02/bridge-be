@@ -145,6 +145,11 @@ export class AutomationEngine {
     await this.safeEvaluate(payload);
   }
 
+  @OnEvent(qualify(AUTOMATION_EVENT.REWIND_WEBHOOK))
+  async onRewindWebhook(payload: AutomationEventPayload): Promise<void> {
+    await this.safeEvaluate(payload);
+  }
+
   @OnEvent(qualify(AUTOMATION_EVENT.WHATSAPP_BUTTON_REPLY))
   async onWhatsappButtonReply(
     payload: AutomationEventPayload,

@@ -116,6 +116,18 @@ export const AUTOMATION_EVENT = {
    */
   RETURN_PRIME_REQUEST_REFUNDED: 'return_prime.request.refunded',
   /**
+   * Inbound Rewind (loyalty / rewards) webhook. ONE typed event covers
+   * the whole platform; the specific Rewind event name
+   * ("rewind.points_earned", "rewind.subscription_cancelled", …) rides
+   * on `event.eventType` and admin rules match it via an equality
+   * predicate. Rationale for not splitting into per-event triggers:
+   * loyalty taxonomies evolve faster than our deploy cadence, and the
+   * "trigger on When Rewind reports X" UX works equivalently via the
+   * eventType filter with zero BE maintenance when new Rewind events
+   * ship.
+   */
+  REWIND_WEBHOOK: 'rewind.webhook',
+  /**
    * Clickpost tracking event — the forward shipment has reached the
    * customer. Fires on inbound Clickpost webhooks that normalise to
    * (code=8, bucket=6, is_rvp=false). See clickpost-webhooks.service's
@@ -738,6 +750,30 @@ export interface ClickpostDeliveryEventPayload {
 }
 
 /**
+ * Inbound Rewind webhook. Mirrors the `WebhookCustomEventPayload`
+ * send-friendly shape because the body contract Rewind's team was
+ * emailed is byte-identical to custom-events' DTO. The Rewind-specific
+ * event name (what Rewind calls their event, e.g.
+ * "rewind.points_earned") rides on `eventType` — admin rules filter
+ * via `event.eventType equals "..."` instead of needing a per-event
+ * trigger in the dropdown.
+ */
+export interface RewindWebhookEventPayload {
+  name: 'rewind.webhook';
+  variables: Record<string, string | number | boolean>;
+  customerPhone: string;
+  channelId: string;
+  /**
+   * The `event` field as the Rewind caller sent it. Admin rules
+   * predicate on this ("rewind.points_earned",
+   * "rewind.subscription_cancelled", …). See the REWIND_WEBHOOK
+   * constant for why it's a filter field, not a trigger key.
+   */
+  eventType: string;
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
  * Fires when a customer taps a QUICK_REPLY button on an outbound
  * template. Carries the admin-defined `button_id` (so rules can
  * filter on it) + the context that was stamped at send time (the
@@ -868,6 +904,11 @@ export type AutomationEventPayload =
       event: typeof AUTOMATION_EVENT.RETURN_PRIME_REQUEST_REFUNDED;
       ticket: TicketSnapshot;
       payload: ReturnPrimeRequestRefundedEventPayload;
+    }
+  | {
+      event: typeof AUTOMATION_EVENT.REWIND_WEBHOOK;
+      ticket: TicketSnapshot;
+      payload: RewindWebhookEventPayload;
     }
   | {
       event: typeof AUTOMATION_EVENT.CLICKPOST_ORDER_DELIVERED;
