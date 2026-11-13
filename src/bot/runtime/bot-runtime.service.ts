@@ -16,6 +16,7 @@ import {
   BotTrigger,
   TicketActivity,
   TicketStatus,
+  UserRole,
 } from '../../database/enums';
 import { RuleEvaluatorService } from '../../rules/rule-evaluator.service';
 import type { ConditionTree } from '../../rules/rule-evaluator.service';
@@ -446,6 +447,31 @@ export class BotRuntimeService implements OnModuleInit, OnModuleDestroy {
    * pointing at a stale step.
    */
   private async tick(session: BotSession, channelId: string): Promise<void> {
+    // Hard gate: the bot must not send ANY outbound while a human (or
+    // nobody — NULL unassigned) owns the ticket. This is the central
+    // advancement path — every inbound reply, every delay wake, every
+    // function result flows through here — so one guard covers them
+    // all. Fixes the "bot auto-replies on reopen even though the
+    // member already answered" class: the original session stays
+    // ACTIVE from the initial bot walk; without this guard, the next
+    // customer message that auto-reopens the ticket would resume the
+    // flow and send the next step's message.
+    const ticketForGate = await this.tickets.findOne({
+      where: { id: session.ticket_id },
+      relations: { assigneeUser: true },
+    });
+    const currentRole = ticketForGate?.assigneeUser?.role ?? null;
+    if (currentRole !== UserRole.BOT) {
+      session.status = BotSessionStatus.HANDOFF;
+      await this.sessions.save(session);
+      await this.logActivity({
+        session,
+        event: 'handoff_fired',
+        stepId: session.current_step_id,
+        message: `Handoff — ticket assignee is ${currentRole ?? 'unassigned'} (not BOT); bot stays silent`,
+      });
+      return;
+    }
     for (let iter = 0; iter < MAX_TICKS; iter++) {
       if (session.current_step_id === null) {
         session.status = BotSessionStatus.COMPLETED;
