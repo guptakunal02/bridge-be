@@ -354,40 +354,50 @@ export class SettingsController {
     const wantReturnPrime = !platform || platform === 'returnprime';
     const wantClickpost = !platform || platform === 'clickpost';
     const wantLens = !platform || platform === 'lens';
-    const [shopifyRows, rpRows, clickpostRows, lensRows] = await Promise.all([
-      wantShopify
-        ? this.shopify.listRecent({
-            before: safeBefore,
-            limit: limit + 1,
-            phone,
-            topic,
-          })
-        : Promise.resolve([]),
-      wantReturnPrime
-        ? this.returnPrime.listRecent({
-            before: safeBefore,
-            limit: limit + 1,
-            phone,
-            topic,
-          })
-        : Promise.resolve([]),
-      wantClickpost
-        ? this.clickpost.listRecent({
-            before: safeBefore,
-            limit: limit + 1,
-            phone,
-            topic,
-          })
-        : Promise.resolve([]),
-      wantLens
-        ? this.lens.listRecent({
-            before: safeBefore,
-            limit: limit + 1,
-            phone,
-            topic,
-          })
-        : Promise.resolve([]),
-    ]);
+    const wantRewind = !platform || platform === 'rewind';
+    const [shopifyRows, rpRows, clickpostRows, lensRows, rewindRows] =
+      await Promise.all([
+        wantShopify
+          ? this.shopify.listRecent({
+              before: safeBefore,
+              limit: limit + 1,
+              phone,
+              topic,
+            })
+          : Promise.resolve([]),
+        wantReturnPrime
+          ? this.returnPrime.listRecent({
+              before: safeBefore,
+              limit: limit + 1,
+              phone,
+              topic,
+            })
+          : Promise.resolve([]),
+        wantClickpost
+          ? this.clickpost.listRecent({
+              before: safeBefore,
+              limit: limit + 1,
+              phone,
+              topic,
+            })
+          : Promise.resolve([]),
+        wantLens
+          ? this.lens.listRecent({
+              before: safeBefore,
+              limit: limit + 1,
+              phone,
+              topic,
+            })
+          : Promise.resolve([]),
+        wantRewind
+          ? this.rewind.listRecent({
+              before: safeBefore,
+              limit: limit + 1,
+              phone,
+              topic,
+            })
+          : Promise.resolve([]),
+      ]);
     const merged: IntegrationEventRow[] = [
       ...shopifyRows.map(
         (r): IntegrationEventRow => ({
@@ -433,6 +443,20 @@ export class SettingsController {
           // Lens's forwarder carries an explicit `topic` field (ndr / npr);
           // we store it on the row directly, no derivation needed.
           topic: r.topic,
+          shopDomain: null,
+          receivedAt: r.received_at.toISOString(),
+          customerPhone: r.customer_phone ?? null,
+          payload: r.payload ?? {},
+        }),
+      ),
+      ...rewindRows.map(
+        (r): IntegrationEventRow => ({
+          id: r.id,
+          platform: 'rewind',
+          // Rewind's `event_type` column carries the platform event name
+          // ("rewind.return_created", etc). Same topic-surface role as
+          // Lens's `topic` or Clickpost's `status`.
+          topic: r.event_type,
           shopDomain: null,
           receivedAt: r.received_at.toISOString(),
           customerPhone: r.customer_phone ?? null,

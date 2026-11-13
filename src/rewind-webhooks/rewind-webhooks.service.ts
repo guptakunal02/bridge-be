@@ -96,6 +96,37 @@ export class RewindWebhooksService {
   }
 
   /**
+   * Chronological descending page for the Events inspector, matching
+   * the shape used by shopify / clickpost / return-prime / lens
+   * services. Caller requests limit+1 for next-page detection.
+   */
+  async listRecent(input: {
+    before: Date | null;
+    limit: number;
+    phone?: string | null;
+    topic?: string | null;
+  }): Promise<RewindWebhookEvent[]> {
+    const qb = this.events
+      .createQueryBuilder('e')
+      .orderBy('e.received_at', 'DESC')
+      .limit(input.limit);
+    if (input.before) {
+      qb.andWhere('e.received_at < :before', { before: input.before });
+    }
+    if (input.phone && input.phone.trim().length > 0) {
+      qb.andWhere('e.customer_phone ILIKE :phone', {
+        phone: `%${input.phone.trim()}%`,
+      });
+    }
+    if (input.topic && input.topic.trim().length > 0) {
+      qb.andWhere('e.event_type ILIKE :topic', {
+        topic: `%${input.topic.trim()}%`,
+      });
+    }
+    return qb.getMany();
+  }
+
+  /**
    * ISO timestamp of the most recent Rewind webhook received, null
    * when the audit table is empty. Powers the "last event received"
    * line on the Integrations page's Rewind card.
