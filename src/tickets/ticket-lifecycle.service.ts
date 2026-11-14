@@ -878,6 +878,18 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
       .andWhere('t.status = :openStatus', { openStatus: TicketStatus.OPEN })
       .andWhere('t."deletedAt" IS NULL')
       .andWhere('team.assignment_paused = false')
+      // Bot-flow guard: a ticket with a live bot_session (customer
+      // hasn't replied to the current question yet, or bot is mid-
+      // delay) is still in the bot's hands. Only drain once the bot
+      // has explicitly handed off / completed / failed, OR has no
+      // session at all (parked on BOT with no flow matched).
+      .andWhere(
+        `NOT EXISTS (
+            SELECT 1 FROM bot_session bs
+             WHERE bs.ticket_id = t.id
+               AND bs.status = 'active'
+         )`,
+      )
       .limit(1)
       .getOne();
     return {
@@ -929,6 +941,18 @@ export class TicketLifecycleService implements OnModuleInit, OnModuleDestroy {
       .andWhere('t.status = :openStatus', { openStatus: TicketStatus.OPEN })
       .andWhere('t."deletedAt" IS NULL')
       .andWhere('team.assignment_paused = false')
+      // Bot-flow guard: a ticket with a live bot_session (customer
+      // hasn't replied to the current question yet, or bot is mid-
+      // delay) is still in the bot's hands. Only drain once the bot
+      // has explicitly handed off / completed / failed, OR has no
+      // session at all (parked on BOT with no flow matched).
+      .andWhere(
+        `NOT EXISTS (
+            SELECT 1 FROM bot_session bs
+             WHERE bs.ticket_id = t.id
+               AND bs.status = 'active'
+         )`,
+      )
       .andWhere(
         `(SELECT COUNT(*) FROM public.ticket
             WHERE assignee = :userId
