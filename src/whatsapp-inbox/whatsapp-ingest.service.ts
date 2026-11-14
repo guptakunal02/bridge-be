@@ -300,9 +300,7 @@ export class WhatsappIngestService {
             msg.interactive?.button_reply?.title ??
             msg.interactive?.list_reply?.title ??
             msg.button?.text ??
-            (msg.type === 'reaction'
-              ? (msg as { reaction?: { emoji?: string } }).reaction?.emoji ?? null
-              : null) ??
+            extractNonTextContent(msg as unknown as Record<string, unknown>) ??
             media?.content ??
             null,
           external_message_id: msg.id!,
@@ -833,6 +831,59 @@ function computeDayOfWeekIst(at: Date): number {
  * generic ".bin" if the mime is one we haven't catalogued (defensive
  * — Meta occasionally sends vendor-specific variants).
  */
+/**
+ * Content-column text for message types Meta sends with no body of
+ * their own — reactions, shared contacts (vCards), stickers, and
+ * "unsupported" catch-alls. Without this the bubble renders blank
+ * and the agent can't tell what the customer actually sent. The
+ * text here is intentionally short: it's what shows up in the
+ * inbox-row preview too, so a terse human-readable summary beats
+ * a verbose multi-line one.
+ *
+ *   reaction        → "👍"   (the emoji; "(reaction removed)" when
+ *                     the user un-reacted and Meta sends an empty
+ *                     reaction payload)
+ *   contacts        → "📇 Name · +91…"   (+" · +N more" for extras)
+ *   sticker         → "🏷️ Sticker"
+ *   unsupported     → "⚠️ Unsupported message type"
+ *
+ * Returns null for anything else — the ?? chain at the caller then
+ * falls through to media?.content and finally to null. Shape-typed
+ * loosely because Meta's payload isn't captured in our TS types
+ * beyond what we actively parse.
+ */
+function extractNonTextContent(msg: Record<string, unknown>): string | null {
+  const type = typeof msg.type === 'string' ? msg.type : '';
+  if (type === 'reaction') {
+    const emoji = (msg.reaction as { emoji?: string } | undefined)?.emoji;
+    return emoji && emoji.length > 0 ? emoji : '(reaction removed)';
+  }
+  if (type === 'contacts') {
+    const contacts = Array.isArray(msg.contacts) ? msg.contacts : [];
+    if (contacts.length === 0) return '📇 Shared contact';
+    const first = contacts[0] as {
+      name?: { formatted_name?: string };
+      phones?: Array<{ phone?: string; wa_id?: string }>;
+    };
+    const name = first.name?.formatted_name?.trim() || 'Shared contact';
+    const phone =
+      first.phones?.[0]?.phone?.trim() ??
+      first.phones?.[0]?.wa_id?.trim() ??
+      '';
+    const base = phone ? `📇 ${name} · ${phone}` : `📇 ${name}`;
+    return contacts.length > 1
+      ? `${base} · +${contacts.length - 1} more`
+      : base;
+  }
+  if (type === 'sticker') {
+    return '🏷️ Sticker';
+  }
+  if (type === 'unsupported') {
+    return '⚠️ Unsupported message type';
+  }
+  return null;
+}
+
 function extForMime(mime: string): string {
   const m = mime.toLowerCase();
   if (m === 'image/jpeg') return '.jpg';
