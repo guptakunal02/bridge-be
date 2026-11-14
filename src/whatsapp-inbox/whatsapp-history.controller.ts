@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { WhatsappHistoryService } from './whatsapp-history.service';
 
 /**
@@ -15,7 +15,13 @@ export class WhatsappHistoryController {
   constructor(private readonly service: WhatsappHistoryService) {}
 
   @Get('by-phone/:phone')
-  async byPhone(@Param('phone') phone: string) {
-    return this.service.byPhone(phone);
+  async byPhone(
+    @Param('phone') phone: string,
+    // Optional UUID — when provided, filters results to a single
+    // WhatsApp channel. Powers the FE's inbox picker that defaults
+    // to the new WhatsApp number during the migration.
+    @Query('channelId') channelId?: string,
+  ) {
+    return this.service.byPhone(phone, channelId);
   }
 }

@@ -49,7 +49,10 @@ export class WhatsappHistoryService {
     private readonly messages: Repository<WhatsappMessage>,
   ) {}
 
-  async byPhone(rawPhone: string): Promise<HistoryResponse> {
+  async byPhone(
+    rawPhone: string,
+    channelId?: string,
+  ): Promise<HistoryResponse> {
     const digits = rawPhone.replace(/\D/g, '');
     if (digits.length < 6) {
       // Guard against overly-broad queries ("91" would match millions
@@ -80,13 +83,21 @@ export class WhatsappHistoryService {
     // search chip hands the raw substring the agent typed.
     const senderSuffix = `%${digits}`;
     const waKeyPrefixSuffix = `wa:%${digits}%`;
-    const rows = (await this.messages
+    const qb = this.messages
       .createQueryBuilder('m')
       .leftJoin('ticket', 't', 't.id = m.ticket_id')
       .where(
         '(m.sender LIKE :senderSuffix OR t.thread_key LIKE :waKey OR m.recipient_wa_id LIKE :senderSuffix)',
         { senderSuffix, waKey: waKeyPrefixSuffix },
-      )
+      );
+    // Optional channel scope — the FE defaults to the new WhatsApp
+    // inbox during the drain period so the old-number thread doesn't
+    // noise up the view; admins can still flip the picker to see
+    // legacy or both.
+    if (channelId && channelId.trim().length > 0) {
+      qb.andWhere('m."channelId" = :channelId', { channelId });
+    }
+    const rows = (await qb
       .orderBy('m."createdAt"', 'DESC')
       .limit(500)
       .getMany()) as WhatsappMessage[];
