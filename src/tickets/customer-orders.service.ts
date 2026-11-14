@@ -198,10 +198,17 @@ export class CustomerOrdersService {
                o.cancelled_at,
                o.shopify_tags,
                o.raw_shopify_response,
-               o.ordered_at,
+               -- ops stores ordered_at as a naive timestamp holding
+               -- the IST wall-clock. Without this cast node-postgres
+               -- parses it as UTC and .toISOString() emits a Z-flavoured
+               -- string with the IST digits intact, which the FE then
+               -- IST-converts again and the date shifts by a day near
+               -- midnight. AT TIME ZONE pins the naive clock to IST and
+               -- returns a proper timestamptz with the correct instant.
+               (o.ordered_at AT TIME ZONE 'Asia/Kolkata') AS ordered_at,
                o.shopify_order_id,
                e.new_shopify_order_id AS exchange_new_order_id,
-               e.request_created_at   AS exchange_request_created_at,
+               (e.request_created_at AT TIME ZONE 'Asia/Kolkata') AS exchange_request_created_at,
                ROW_NUMBER() OVER (
                  PARTITION BY COALESCE(o.shopify_order_id, o.id::text)
                  ORDER BY
@@ -361,7 +368,10 @@ export class CustomerOrdersService {
             o.cancelled_at,
             o.shopify_tags,
             o.raw_shopify_response,
-            o.ordered_at,
+            -- See note in listForEmail: ops stores ordered_at as a
+            -- naive IST timestamp; cast to timestamptz so downstream
+            -- Date->ISO serialisation reflects the correct instant.
+            (o.ordered_at AT TIME ZONE 'Asia/Kolkata') AS ordered_at,
             o.shopify_order_id,
             NULL::text AS exchange_new_order_id,
             NULL::timestamp AS exchange_request_created_at
@@ -400,7 +410,10 @@ export class CustomerOrdersService {
             o.cancelled_at,
             o.shopify_tags,
             o.raw_shopify_response,
-            o.ordered_at,
+            -- See note in listForEmail: ops stores ordered_at as a
+            -- naive IST timestamp; cast to timestamptz so downstream
+            -- Date->ISO serialisation reflects the correct instant.
+            (o.ordered_at AT TIME ZONE 'Asia/Kolkata') AS ordered_at,
             o.shopify_order_id,
             NULL::text AS exchange_new_order_id,
             NULL::timestamp AS exchange_request_created_at
