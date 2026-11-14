@@ -559,6 +559,14 @@ export class TicketsService {
         assigneeIds: query.assigneeIds,
       });
     }
+    // Keep the bot subquery in lockstep with the main counts qb above —
+    // tags + createdDateRange were previously missing here, so the Bot
+    // count ignored those filters while the overall Open count respected
+    // them. Result: Open tab showed `max(0, open − bot)` and collapsed to
+    // 0 whenever bot > open (the filter was narrow but bot was the
+    // global total).
+    applyTagsFilter(botQb, query.tags);
+    applyCreatedDateRange(botQb, query.createdFrom, query.createdTo);
     applyMessageSearch(botQb, query.q);
     await this.applyScope(botQb, query.scope ?? 'all', actingUser, {
       widenForSearch: Boolean(query.q?.trim()),
