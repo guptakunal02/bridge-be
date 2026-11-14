@@ -7,11 +7,11 @@ import { CustomerSource } from '../database/enums';
 import { Customer } from '../outreach/entities/customer.entity';
 
 /**
- * Hard timeout on the Lens call. Chosen alongside the Lens agent —
- * 5s is generous for a local-sync-only endpoint (expected <10ms
- * cache-hit, <500ms Shopify-fallback) but shields Bridge ingest from
- * anything pathological. On expiry we fall through to the no-op
- * path; ticket mint continues regardless.
+ * Hard timeout on the Lens call. 5s is generous for a local-sync-only
+ * endpoint (Lens warm-path is ~125–130ms against indexed Shopify
+ * webhook data — no live Shopify Admin API fallback) but shields
+ * Bridge ingest from anything pathological. On expiry we fall through
+ * to the no-op path; ticket mint continues regardless.
  */
 const LENS_TIMEOUT_MS = 5000;
 
