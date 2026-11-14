@@ -224,11 +224,11 @@ export class TicketsService {
     } else if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
     }
-    if (query.assigneeIds && query.assigneeIds.length > 0) {
-      qb.andWhere('t.assignee IN (:...assigneeIds)', {
-        assigneeIds: query.assigneeIds,
-      });
-    }
+    applyAssigneeIdsFilter(
+      qb,
+      query.assigneeIds,
+      (await loadBot(this.users))?.id ?? null,
+    );
     applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     applyBotActiveFilter(
@@ -313,11 +313,11 @@ export class TicketsService {
     } else if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
     }
-    if (query.assigneeIds && query.assigneeIds.length > 0) {
-      qb.andWhere('t.assignee IN (:...assigneeIds)', {
-        assigneeIds: query.assigneeIds,
-      });
-    }
+    applyAssigneeIdsFilter(
+      qb,
+      query.assigneeIds,
+      (await loadBot(this.users))?.id ?? null,
+    );
     applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     applyBotActiveFilter(
@@ -495,11 +495,11 @@ export class TicketsService {
     } else if (query.channelId) {
       qb.andWhere('t.channel_id = :channelId', { channelId: query.channelId });
     }
-    if (query.assigneeIds && query.assigneeIds.length > 0) {
-      qb.andWhere('t.assignee IN (:...assigneeIds)', {
-        assigneeIds: query.assigneeIds,
-      });
-    }
+    applyAssigneeIdsFilter(
+      qb,
+      query.assigneeIds,
+      (await loadBot(this.users))?.id ?? null,
+    );
     // NOTE: status filters are intentionally NOT applied to the
     // counts endpoint — the count-by-status is the whole point of
     // this response, so applying a status filter would collapse
@@ -2857,6 +2857,32 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * includes everything up to IST midnight of the 14th, so the whole
  * 13th is in the window even though createdAt is a timestamptz.
  */
+/**
+ * Apply the assigneeIds filter. If the BOT user id is in the set, the
+ * filter also OR-matches NULL — because the FE labels the BOT row as
+ * "Unassigned (queue)" and uses the BOT id as the wire value, but
+ * email tickets store their unassigned state as NULL (per migration
+ * 1726490000000-TicketAssigneeNullable), not as BOT. Without this
+ * OR, picking "Unassigned (queue)" + an email inbox returned zero
+ * rows while hundreds were actually sitting in the queue.
+ */
+function applyAssigneeIdsFilter(
+  qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
+  assigneeIds: string[] | undefined,
+  botUserId: string | null,
+): void {
+  if (!assigneeIds || assigneeIds.length === 0) return;
+  const includesBot = botUserId !== null && assigneeIds.includes(botUserId);
+  if (includesBot) {
+    qb.andWhere(
+      '(t.assignee IN (:...assigneeIds) OR t.assignee IS NULL)',
+      { assigneeIds },
+    );
+  } else {
+    qb.andWhere('t.assignee IN (:...assigneeIds)', { assigneeIds });
+  }
+}
+
 function applyCreatedDateRange(
   qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
   createdFrom: string | undefined,
