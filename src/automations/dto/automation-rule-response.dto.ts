@@ -13,6 +13,13 @@ export interface AutomationRuleResponse {
    * selected — rule won't fire"). FE renders a checkbox group.
    */
   channelTypes: string[];
+  /**
+   * Specific channel UUIDs the rule is scoped to. Empty = no
+   * channel-id scoping; falls back to channelTypes alone (fire on
+   * any channel of a matched type). Non-empty = AND-ed with
+   * channelTypes.
+   */
+  channelIds: string[];
   cases: unknown[];
   else_actions: unknown[];
   createdAt: string;
@@ -35,6 +42,7 @@ export function toAutomationRuleResponse(
     enabled: rule.enabled,
     event: rule.event as AutomationEventName,
     channelTypes: Array.isArray(rule.channel_types) ? rule.channel_types : [],
+    channelIds: Array.isArray(rule.channel_ids) ? rule.channel_ids : [],
     cases: Array.isArray(rule.cases) ? rule.cases : [],
     else_actions: Array.isArray(rule.else_actions) ? rule.else_actions : [],
     createdAt: rule.createdAt.toISOString(),

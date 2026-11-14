@@ -77,6 +77,21 @@ export class RuleEvaluator {
         if (scope.length === 0 || !scope.includes(ctx.ticket.channelType)) {
           continue;
         }
+        // Narrower per-instance check: when `channel_ids` is non-empty,
+        // the ticket's channelId must be in the list. Empty = no
+        // id-level scoping (backward-compatible). Skips for channel-
+        // less events (sentinel channelId === '') by only applying
+        // when the ticket has a non-empty channelId.
+        const idScope = Array.isArray(rule.channel_ids)
+          ? rule.channel_ids
+          : [];
+        if (
+          idScope.length > 0 &&
+          ctx.ticket.channelId &&
+          !idScope.includes(ctx.ticket.channelId)
+        ) {
+          continue;
+        }
       }
       await this.evaluateRule(rule, ctx);
     }

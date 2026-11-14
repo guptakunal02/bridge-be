@@ -7,6 +7,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -69,6 +70,18 @@ export class CreateAutomationRuleDto {
   @ArrayUnique()
   channelTypes?: string[];
 
+  /**
+   * Specific channel UUIDs this rule is scoped to. Empty = no
+   * channel-id scoping (fall back to channelTypes alone). Narrower
+   * than channelTypes — lets admins target a specific WhatsApp
+   * number out of several.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  @ArrayUnique()
+  channelIds?: string[];
+
   // @Allow() whitelists the property for class-validator's forbidden-
   // non-whitelisted check WITHOUT applying any validation (deep
   // validation runs post-pipe in validateCasesAndActions). Without
@@ -112,6 +125,18 @@ export class UpdateAutomationRuleDto {
   @IsIn(CHANNEL_TYPES, { each: true })
   @ArrayUnique()
   channelTypes?: string[];
+
+  /**
+   * Specific channel UUIDs this rule is scoped to. Empty = no
+   * channel-id scoping (fall back to channelTypes alone). Narrower
+   * than channelTypes — lets admins target a specific WhatsApp
+   * number out of several.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  @ArrayUnique()
+  channelIds?: string[];
 
   @IsOptional()
   @Transform(({ value }) => value)

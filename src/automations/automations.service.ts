@@ -55,6 +55,7 @@ export class AutomationsService {
         enabled: dto.enabled ?? true,
         event: dto.event,
         channel_types: dto.channelTypes ?? [],
+        channel_ids: dto.channelIds ?? [],
         cases: dto.cases,
         else_actions: dto.else_actions ?? [],
       }),
@@ -83,6 +84,7 @@ export class AutomationsService {
     if (dto.enabled !== undefined) row.enabled = dto.enabled;
     if (dto.event !== undefined) row.event = dto.event;
     if (dto.channelTypes !== undefined) row.channel_types = dto.channelTypes;
+    if (dto.channelIds !== undefined) row.channel_ids = dto.channelIds;
     if (dto.cases !== undefined) row.cases = dto.cases;
     if (dto.else_actions !== undefined) row.else_actions = dto.else_actions;
 

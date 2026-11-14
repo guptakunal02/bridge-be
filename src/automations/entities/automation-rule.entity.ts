@@ -60,6 +60,28 @@ export class AutomationRule {
   channel_types!: string[];
 
   /**
+   * Specific channel UUIDs this rule is scoped to. Narrower than
+   * `channel_types` — lets an admin say "only the new WhatsApp
+   * number", not just "any WhatsApp".
+   *
+   *   - Empty = no channel-id scoping. `channel_types` alone decides
+   *     (backward-compatible default for every pre-existing rule).
+   *   - Non-empty = the ticket's channelId must be in this list AND
+   *     its channelType must still be in `channel_types`.
+   *
+   * Channel-less events (shopify.*, webhook.custom, rewind.*) carry
+   * a sentinel channelId and are unaffected by this check — same
+   * convention as channel_types.
+   */
+  @Column({
+    type: 'text',
+    array: true,
+    default: () => `'{}'::text[]`,
+    name: 'channel_ids',
+  })
+  channel_ids!: string[];
+
+  /**
    * Ordered list of `{ conditions: Predicate[], actions: Action[] }`.
    * All cases are evaluated independently; a case runs its actions
    * when every condition is TRUE (AND semantics within a case).
