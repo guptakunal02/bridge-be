@@ -290,10 +290,13 @@ export class CustomerOrdersService {
              o.cancelled_at,
              o.shopify_tags,
              o.raw_shopify_response,
-             o.ordered_at,
+             -- See note on the email-list CTE: cast naive ops clock
+             -- to IST-aware timestamptz so downstream Date->ISO is
+             -- the correct physical instant.
+             (o.ordered_at AT TIME ZONE 'Asia/Kolkata') AS ordered_at,
              o.shopify_order_id,
              e.new_shopify_order_id AS exchange_new_order_id,
-             e.request_created_at   AS exchange_request_created_at,
+             (e.request_created_at AT TIME ZONE 'Asia/Kolkata') AS exchange_request_created_at,
              ROW_NUMBER() OVER (
                PARTITION BY COALESCE(o.shopify_order_id, o.id::text)
                ORDER BY
