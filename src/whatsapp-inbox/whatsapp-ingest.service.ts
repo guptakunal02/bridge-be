@@ -289,11 +289,20 @@ export class WhatsappIngestService {
           // we prefer filename when both are present. For media
           // without a filename (image/video/audio with caption or
           // without), use the caption or null.
+          // Reactions: Meta sends `{ type: 'reaction', reaction: {
+          // emoji, message_id } }` — the emoji is the whole payload,
+          // there's no text body. Lift it into `content` so the FE's
+          // existing text-bubble renderer shows SOMETHING; without
+          // this, the bubble renders blank and the agent can't tell
+          // the customer even reacted.
           content:
             msg.text?.body ??
             msg.interactive?.button_reply?.title ??
             msg.interactive?.list_reply?.title ??
             msg.button?.text ??
+            (msg.type === 'reaction'
+              ? (msg as { reaction?: { emoji?: string } }).reaction?.emoji ?? null
+              : null) ??
             media?.content ??
             null,
           external_message_id: msg.id!,
