@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -31,4 +32,25 @@ export class SendTemplateDto {
   @IsString({ each: true })
   @MaxLength(300, { each: true })
   variables?: string[];
+
+  /**
+   * Per-NAME overrides for mapped (V4+) templates. Lets an agent
+   * manually type a value for a variable that the ticket context
+   * can't auto-resolve — e.g. the composer's "unable to add order_id
+   * in this template" case where the ticket wasn't linked to a
+   * Shopify order so {{order_id}} had nothing to auto-fill from.
+   *
+   * Resolution precedence at send time:
+   *   1. agent-typed override here (if non-empty)
+   *   2. auto-resolve from ticket context
+   *   3. template's declared fallback
+   *   4. BadRequestException if the variable is non-nullable and all
+   *      above returned empty
+   *
+   * Ignored for LEGACY (positional) templates — they continue to
+   * read from `variables` above.
+   */
+  @IsOptional()
+  @IsObject()
+  variableOverrides?: Record<string, string>;
 }

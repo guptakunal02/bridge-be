@@ -2081,14 +2081,29 @@ export class TicketsService {
         ticket.id,
         names,
       );
+      // Agent can override any mapped variable at send time (the
+      // composer surfaces a text input per variable name). An empty
+      // / whitespace-only override is treated as "not supplied" so
+      // the agent doesn't have to blank out every pre-filled slot
+      // they're happy with.
+      const overrides = dto.variableOverrides ?? {};
+      const pickOverride = (name: string): string | null => {
+        const raw = overrides[name];
+        if (typeof raw !== 'string') return null;
+        const trimmed = raw.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      };
       variables = template.variableMapping.map((m) => {
+        const override = pickOverride(m.name);
+        if (override !== null) return override;
         const v = resolved[m.name];
         if (v !== null && v !== undefined && v !== '') return String(v);
         if (m.fallback === null) {
-          // Non-nullable variable came back null → data integrity
-          // issue (shouldn't happen in practice). Surface clearly.
+          // Non-nullable variable came back null AND the agent didn't
+          // override → data integrity issue. Surface clearly so the
+          // composer can tell them which variable needs a value.
           throw new BadRequestException(
-            `Could not resolve required variable "${m.name}" on this ticket`,
+            `Could not resolve required variable "${m.name}" on this ticket. Type a value in the composer to override.`,
           );
         }
         return m.fallback;
