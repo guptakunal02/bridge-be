@@ -229,6 +229,7 @@ export class TicketsService {
       query.assigneeIds,
       (await loadBot(this.users))?.id ?? null,
     );
+    applyTagsFilter(qb, query.tags);
     applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     applyBotActiveFilter(
@@ -318,6 +319,7 @@ export class TicketsService {
       query.assigneeIds,
       (await loadBot(this.users))?.id ?? null,
     );
+    applyTagsFilter(qb, query.tags);
     applyCreatedDateRange(qb, query.createdFrom, query.createdTo);
     applyMessageSearch(qb, query.q);
     applyBotActiveFilter(
@@ -500,6 +502,7 @@ export class TicketsService {
       query.assigneeIds,
       (await loadBot(this.users))?.id ?? null,
     );
+    applyTagsFilter(qb, query.tags);
     // NOTE: status filters are intentionally NOT applied to the
     // counts endpoint — the count-by-status is the whole point of
     // this response, so applying a status filter would collapse
@@ -2857,6 +2860,21 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * includes everything up to IST midnight of the 14th, so the whole
  * 13th is in the window even though createdAt is a timestamptz.
  */
+/**
+ * Apply the multi-tag filter. OR semantics within the tag set — a
+ * ticket qualifies if its tags[] column shares ANY element with the
+ * requested list. Uses Postgres's `&&` (array overlap) operator; a
+ * GIN index on ticket.tags keeps this cheap even on large tables.
+ * Empty / missing input is a no-op (section = any value).
+ */
+function applyTagsFilter(
+  qb: import('typeorm').SelectQueryBuilder<import('./entities/ticket.entity').Ticket>,
+  tags: string[] | undefined,
+): void {
+  if (!tags || tags.length === 0) return;
+  qb.andWhere('t.tags && (:tags)::text[]', { tags });
+}
+
 /**
  * Apply the assigneeIds filter. If the BOT user id is in the set, the
  * filter also OR-matches NULL — because the FE labels the BOT row as

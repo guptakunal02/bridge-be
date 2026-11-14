@@ -146,6 +146,23 @@ export class ListTicketsQuery {
   botActive?: 'true' | 'false';
 
   /**
+   * Multi-tag filter used by the admin filter panel. Case-sensitive
+   * exact match on tag name (tags are normalised to lowercase at
+   * write time, so the FE lower-cases the input before sending here).
+   * Semantics are OR within the section: a ticket qualifies if it
+   * carries ANY of the listed tags. Combines AND with the other
+   * sections (status, channel, assignee, date) per the usual filter
+   * UI pattern.
+   */
+  @IsOptional()
+  @Transform(csvToArray)
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(100, { each: true })
+  tags?: string[];
+
+  /**
    * Inclusive calendar date in YYYY-MM-DD form, interpreted as midnight
    * IST that day. "Give me tickets created on or after this day in
    * IST." Omitted → no lower bound. Paired with `createdTo`; both can
